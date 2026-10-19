@@ -21,3 +21,6 @@ Thumbs.db
 
 # Tauri build output（能力 schema 由 tauri-build 每次生成）。
 shells/desktop/gen/
+
+# Vite 构建输出。
+/ui/dist
