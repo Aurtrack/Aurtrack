@@ -5,7 +5,12 @@
 
 [workspace]
 resolver = "3"
-members = []
+members = [
+    "crates/aurtrack-command",
+    "crates/aurtrack-session",
+    "crates/aurtrack-cli",
+    "crates/aurtrack-mcp",
+]
 
 [workspace.package]
 version = "0.0.0"

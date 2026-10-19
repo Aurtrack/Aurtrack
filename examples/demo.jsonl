@@ -1,0 +1,5 @@
+{"cmd":"project.create","args":{"name":"demo"}}
+{"cmd":"track.create","args":{"name":"bass","source":"sine","frequency":110}}
+{"cmd":"device.add","args":{"track_id":"track-1","kind":"gain"}}
+{"cmd":"param.set","args":{"path":"/tracks/track-1/devices/device-1/params/gain","value":0.5}}
+{"cmd":"render.segment","args":{"duration_seconds":5,"path":"demo.wav"}}
