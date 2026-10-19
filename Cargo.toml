@@ -8,6 +8,8 @@ resolver = "3"
 members = [
     "crates/aurtrack-command",
     "crates/aurtrack-session",
+    "crates/aurtrack-engine",
+    "crates/aurtrack-io",
     "crates/aurtrack-cli",
     "crates/aurtrack-mcp",
     "shells/desktop",

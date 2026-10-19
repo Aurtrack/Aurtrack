@@ -1,0 +1,14 @@
+[package]
+name = "aurtrack-io"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+aurtrack-engine = { path = "../aurtrack-engine" }
+cpal = "0.15"
+
+[lints]
+workspace = true

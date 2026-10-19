@@ -82,6 +82,11 @@ pub struct Session {
 }
 
 impl Session {
+    /// 只读访问当前工程，供渲染与实时播放编译计划。
+    pub fn project(&self) -> Option<&Project> {
+        self.project.as_ref()
+    }
+
     /// 执行一条命令。
     pub fn execute(&mut self, request: &CommandRequest) -> Result<CommandResponse, CommandError> {
         match request.cmd.as_str() {
