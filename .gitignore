@@ -18,3 +18,6 @@ Thumbs.db
 
 # OS audio scratch / peak caches produced at runtime.
 *.peakcache
+
+# Tauri build output（能力 schema 由 tauri-build 每次生成）。
+shells/desktop/gen/

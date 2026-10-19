@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Aurtrack</title>
+    <link rel="stylesheet" href="style.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header class="header">
+        <div>
+          <h1>Aurtrack</h1>
+          <p class="subtitle">第一条竖切：命令 → 会话 → 渲染</p>
+        </div>
+        <span class="badge">pre-alpha</span>
+      </header>
+
+      <section class="card">
+        <div class="row">
+          <span class="label">演示轨道</span>
+          <span id="track" class="value wide">未创建</span>
+        </div>
+        <div class="row">
+          <span class="label">增益</span>
+          <input id="gain" type="range" min="0" max="100" value="50" />
+          <span id="gain-value" class="value">50%</span>
+        </div>
+        <div class="actions">
+          <button id="render" class="primary">渲染并播放</button>
+          <button id="reset" class="ghost">重置演示工程</button>
+        </div>
+        <p id="status" class="status">正在初始化…</p>
+      </section>
+
+      <section class="card">
+        <h2>命令日志</h2>
+        <pre id="log" class="log"></pre>
+      </section>
+
+      <section class="card muted">
+        <h2>现在能做什么</h2>
+        <ul>
+          <li>建一条 110Hz 正弦轨</li>
+          <li>用增益推子改变音量</li>
+          <li>渲染 5 秒 WAV 并交给系统播放器</li>
+          <li>所有操作都走同一套命令 API，MCP 也能调</li>
+        </ul>
+      </section>
+    </main>
+    <script src="main.js"></script>
+  </body>
+</html>

@@ -1,0 +1,20 @@
+[package]
+name = "aurtrack-desktop"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Aurtrack 桌面外壳"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+aurtrack-command = { path = "../../crates/aurtrack-command" }
+aurtrack-session = { path = "../../crates/aurtrack-session" }
+serde = { version = "1", features = ["derive"] }
+tauri = { version = "2", features = [] }
+
+[lints]
+workspace = true
