@@ -1,5 +1,8 @@
 * text=auto eol=lf
 
+# Windows 批处理必须保持 CRLF。
+*.bat text eol=crlf
+
 *.wav binary
 *.flac binary
 *.mp3 binary
