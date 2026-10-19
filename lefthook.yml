@@ -14,7 +14,17 @@ commit-msg:
 
 pre-push:
   commands:
-    clippy:
-      run: cargo clippy --workspace --all-targets -- -D warnings
-    test:
-      run: cargo nextest run --workspace
+    rust:
+      run: |
+        # 仓库刚初始化、还没有任何 crate 时，cargo 会因为虚拟 manifest 直接失败。
+        if ! ls crates/*/Cargo.toml >/dev/null 2>&1; then
+          echo "还没有 crate，跳过 Rust 检查"
+          exit 0
+        fi
+        cargo clippy --workspace --all-targets -- -D warnings
+        if cargo nextest --version >/dev/null 2>&1; then
+          cargo nextest run --workspace
+        else
+          echo "未安装 cargo-nextest，改用 cargo test"
+          cargo test --workspace
+        fi
