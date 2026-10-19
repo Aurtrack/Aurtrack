@@ -1,0 +1,9 @@
+# type(scope): 简短中文标题（不超过 60 字符，结尾不加句号）
+#
+# 为什么需要这个改动？它做了什么？每行不超过 100 字符。
+#
+# type:  feat fix perf refactor docs test build ci chore revert
+# scope: doc cmd engine graph dsp io host session proto script ui cli sdk ci deps repo release
+# 破坏性变更：在正文之后加 BREAKING CHANGE: 页脚
+#
+# 完整规则以 commitlint.config.mjs 为准。

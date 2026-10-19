@@ -1,0 +1,39 @@
+name: 提交规范
+
+# 因为使用 squash 合并，PR 标题就是 main 上的提交信息。
+# 所以 CI 校验的是 PR 标题，而不是分支上的每一个提交。
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: commitlint-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  pr-title:
+    name: 校验 PR 标题
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: 安装依赖
+        run: pnpm install --frozen-lockfile
+
+      - name: 校验 PR 标题
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        run: printf '%s\n' "$PR_TITLE" | pnpm exec commitlint --stdin

@@ -1,0 +1,20 @@
+# Lefthook: fast local checks only. CI is the source of truth.
+
+pre-commit:
+  parallel: true
+  commands:
+    rustfmt:
+      glob: "*.rs"
+      run: cargo fmt --all -- --check
+
+commit-msg:
+  commands:
+    commitlint:
+      run: pnpm exec commitlint --edit {1}
+
+pre-push:
+  commands:
+    clippy:
+      run: cargo clippy --workspace --all-targets -- -D warnings
+    test:
+      run: cargo nextest run --workspace

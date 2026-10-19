@@ -1,0 +1,41 @@
+# Aurtrack workspace root.
+#
+# Crates are added to `members` as they appear. Keep this file free of
+# dependency declarations: everything belongs to a crate.
+
+[workspace]
+resolver = "3"
+members = []
+
+[workspace.package]
+version = "0.0.0"
+edition = "2024"
+rust-version = "1.88"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/Aurtrack/Aurtrack"
+authors = ["Aurtrack contributors"]
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "deny"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+
+[workspace.lints.clippy]
+all = { level = "deny", priority = -1 }
+pedantic = { level = "warn", priority = -1 }
+unwrap_used = "deny"
+expect_used = "warn"
+undocumented_unsafe_blocks = "deny"
+dbg_macro = "deny"
+todo = "warn"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.bench]
+lto = "thin"

@@ -1,0 +1,17 @@
+/target
+**/node_modules
+/dist
+/build
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+.idea/
+.vscode/
+*.log
+
+# Local scratch space, never committed.
+/tmp
+
+# OS audio scratch / peak caches produced at runtime.
+*.peakcache

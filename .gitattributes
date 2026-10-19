@@ -1,0 +1,21 @@
+* text=auto eol=lf
+
+*.wav binary
+*.flac binary
+*.mp3 binary
+*.ogg binary
+*.opus binary
+*.aiff binary
+*.aif binary
+*.m4a binary
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.ico binary
+*.icns binary
+*.zip binary
+*.aurtrack binary
+
+Cargo.lock linguist-generated=true
+pnpm-lock.yaml linguist-generated=true

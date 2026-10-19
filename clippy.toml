@@ -1,0 +1,9 @@
+# Clippy configuration.
+#
+# Keep this in sync with `workspace.package.rust-version` in Cargo.toml.
+
+msrv = "1.88"
+
+# Fail review suggestions that would change the public API. The workspace is
+# pre-1.0, so breaking changes are allowed; we just want clippy to name them.
+avoid-breaking-exported-api = false
