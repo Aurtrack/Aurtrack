@@ -75,11 +75,6 @@
     onPlay={() => void session.play()}
     onStop={() => void session.stop()}
     onGainChange={(value: number) => session.onGainChange(value)}
-    onRender={() => void session.render()}
-    onSave={() => void session.saveProject()}
-    onOpen={() => void session.openProject()}
-    onUndo={() => void session.undo()}
-    onRedo={() => void session.redo()}
   />
 {:else}
   <CommandLog lines={session.logLines} />

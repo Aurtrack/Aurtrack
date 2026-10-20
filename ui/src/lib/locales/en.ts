@@ -11,6 +11,29 @@ export const en: Record<MessageKey, Message> = {
   "header.preAlpha": "PRE-ALPHA",
   "header.switchLanguage": "Switch language",
 
+  "menu.label": "Main menu",
+  "menu.file": "FILE",
+  "menu.edit": "EDIT",
+  "menu.render": "RENDER",
+  "menu.view": "VIEW",
+  "menu.help": "HELP",
+  "menu.open": "Open project…",
+  "menu.save": "Save",
+  "menu.saveAs": "Save as…",
+  "menu.recent": "Recent projects",
+  "menu.noRecent": "No recent projects",
+  "menu.quit": "Quit",
+  "menu.undo": "Undo",
+  "menu.redo": "Redo",
+  "menu.renderWav": "Render WAV",
+  "menu.resetLayout": "Reset layout",
+  "menu.language": "Language",
+  "menu.chinese": "中文",
+  "menu.english": "English",
+  "menu.about": "About Aurtrack",
+  "menu.version": "Version 0.0.0",
+  "menu.license": "GPL-3.0-or-later",
+
   "timeline.title": "TIMELINE",
   "timeline.meta": (params) => {
     const count = Number(params.tracks);
@@ -75,6 +98,9 @@ export const en: Record<MessageKey, Message> = {
   "layout.splitRow": "Split side by side",
   "layout.splitColumn": "Split top/bottom",
   "layout.close": "Close pane",
+
+  "workspace.layout": "LAYOUT",
+  "workspace.edit": "EDIT",
 
   "tracks.title": "TRACKS",
   "tracks.total": (params) => `${params.count} TOTAL`,

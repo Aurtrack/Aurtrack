@@ -67,6 +67,7 @@ type TauriWindow = {
   onCloseRequested: (
     handler: (event: CloseRequestedEvent) => void | Promise<void>,
   ) => Promise<() => void>;
+  close: () => Promise<void>;
   destroy: () => Promise<void>;
 };
 
@@ -174,6 +175,14 @@ export async function onCloseRequested(
     throw new Error("Tauri 窗口 API 不可用");
   }
   return tauri.window.getCurrentWindow().onCloseRequested(handler);
+}
+
+export async function requestWindowClose(): Promise<void> {
+  const tauri = window.__TAURI__;
+  if (!tauri?.window) {
+    throw new Error("Tauri 窗口 API 不可用");
+  }
+  await tauri.window.getCurrentWindow().close();
 }
 
 export async function destroyWindow(): Promise<void> {

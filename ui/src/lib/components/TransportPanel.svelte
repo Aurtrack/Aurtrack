@@ -12,11 +12,6 @@
     onPlay: () => void;
     onStop: () => void;
     onGainChange: (value: number) => void;
-    onRender: () => void;
-    onSave: () => void;
-    onOpen: () => void;
-    onUndo: () => void;
-    onRedo: () => void;
   }
 
   let {
@@ -30,11 +25,6 @@
     onPlay,
     onStop,
     onGainChange,
-    onRender,
-    onSave,
-    onOpen,
-    onUndo,
-    onRedo,
   }: Props = $props();
 </script>
 
@@ -62,26 +52,11 @@
   </div>
 
   <div class="actions">
-    <button disabled={busy} onclick={onOpen}>
-      {t("transport.open")}
-    </button>
-    <button disabled={busy} onclick={onSave}>
-      {t("transport.save")}
-    </button>
     <button class="primary" disabled={busy || playing} onclick={onPlay}>
       {t("transport.play")}
     </button>
     <button disabled={busy || !playing} onclick={onStop}>
       {t("transport.stop")}
-    </button>
-    <button disabled={busy} onclick={onRender}>
-      {t("transport.render")}
-    </button>
-    <button disabled={busy} onclick={onUndo}>
-      {t("transport.undo")}
-    </button>
-    <button disabled={busy} onclick={onRedo}>
-      {t("transport.redo")}
     </button>
   </div>
 

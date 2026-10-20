@@ -11,6 +11,7 @@ import {
   recoveryPath,
   removeRecoveryFile,
   renderPath,
+  requestWindowClose,
   setMasterGain,
   transportPlay,
   transportSeek,
@@ -219,6 +220,14 @@ export class SessionStore {
 
   cancelClose() {
     this.closeRequested = false;
+  }
+
+  async quit() {
+    try {
+      await requestWindowClose();
+    } catch (error) {
+      this.fail("status.closeFailed", error);
+    }
   }
 
   async saveAndClose() {
@@ -571,17 +580,25 @@ export class SessionStore {
 
   async saveProject(): Promise<boolean> {
     if (this.busy) return false;
-    let path = this.projectPath;
-    if (!path) {
-      try {
-        path = (await pickProjectPath("save")) ?? "";
-      } catch (error) {
-        this.fail("status.saveFailed", error);
-        return false;
-      }
-      if (!path) return false;
-    }
+    if (this.projectPath) return this.writeProject(this.projectPath);
+    return this.saveProjectAs();
+  }
 
+  async saveProjectAs(): Promise<boolean> {
+    if (this.busy) return false;
+    let path: string | null;
+    try {
+      path = await pickProjectPath("save");
+    } catch (error) {
+      this.fail("status.saveFailed", error);
+      return false;
+    }
+    if (!path) return false;
+    return this.writeProject(path);
+  }
+
+  private async writeProject(path: string): Promise<boolean> {
+    if (this.busy) return false;
     this.busy = true;
     try {
       await this.run("project.save", { path });
