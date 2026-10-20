@@ -40,7 +40,7 @@ pub struct CommandRequest {
 }
 
 /// 成功响应。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandResponse {
     pub ok: bool,
     pub data: Value,
@@ -67,7 +67,7 @@ impl CommandResponse {
 }
 
 /// 错误响应，供 CLI 与 MCP 复用。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ErrorResponse {
     pub ok: bool,
     pub error: CommandError,
@@ -80,7 +80,7 @@ impl From<CommandError> for ErrorResponse {
 }
 
 /// 命令错误。`code` 是稳定标识，`message` 给人看。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CommandError {
     pub code: String,
     pub message: String,
@@ -108,6 +108,10 @@ impl CommandError {
 
     pub fn nothing_to_undo() -> Self {
         Self::new("nothing_to_undo", "没有可撤销的操作")
+    }
+
+    pub fn nothing_to_redo() -> Self {
+        Self::new("nothing_to_redo", "没有可重做的操作")
     }
 }
 
@@ -228,12 +232,69 @@ fn undo_schema() -> Value {
     )
 }
 
-static COMMANDS: [CommandSpec; 7] = [
+fn redo_schema() -> Value {
+    undo_schema()
+}
+
+fn project_state_schema() -> Value {
+    object_schema(json!({}), &[])
+}
+
+fn track_remove_schema() -> Value {
+    object_schema(json!({ "track_id": { "type": "string" } }), &["track_id"])
+}
+
+fn device_remove_schema() -> Value {
+    object_schema(
+        json!({
+            "path": { "type": "string", "description": "/tracks/{id}/devices/{id}" }
+        }),
+        &["path"],
+    )
+}
+
+fn transport_play_schema() -> Value {
+    object_schema(json!({}), &[])
+}
+
+fn transport_stop_schema() -> Value {
+    object_schema(json!({}), &[])
+}
+
+fn transport_seek_schema() -> Value {
+    object_schema(
+        json!({
+            "seconds": { "type": "number", "minimum": 0, "description": "目标位置，单位秒" }
+        }),
+        &["seconds"],
+    )
+}
+
+fn transport_state_schema() -> Value {
+    object_schema(json!({}), &[])
+}
+
+fn transport_gain_schema() -> Value {
+    object_schema(
+        json!({
+            "gain": { "type": "number", "minimum": 0, "maximum": 4, "description": "实时音量倍数" }
+        }),
+        &["gain"],
+    )
+}
+
+static COMMANDS: [CommandSpec; 16] = [
     CommandSpec {
         id: "project.create",
         summary: "创建或替换当前工程",
         undo: UndoKind::Snapshot,
         input_schema: project_create_schema,
+    },
+    CommandSpec {
+        id: "project.state",
+        summary: "返回完整工程状态",
+        undo: UndoKind::None,
+        input_schema: project_state_schema,
     },
     CommandSpec {
         id: "track.create",
@@ -242,10 +303,22 @@ static COMMANDS: [CommandSpec; 7] = [
         input_schema: track_create_schema,
     },
     CommandSpec {
+        id: "track.remove",
+        summary: "删除一条轨道",
+        undo: UndoKind::Snapshot,
+        input_schema: track_remove_schema,
+    },
+    CommandSpec {
         id: "device.add",
         summary: "向轨道添加一个设备",
         undo: UndoKind::Snapshot,
         input_schema: device_add_schema,
+    },
+    CommandSpec {
+        id: "device.remove",
+        summary: "从轨道删除一个设备",
+        undo: UndoKind::Snapshot,
+        input_schema: device_remove_schema,
     },
     CommandSpec {
         id: "param.set",
@@ -260,6 +333,36 @@ static COMMANDS: [CommandSpec; 7] = [
         input_schema: render_segment_schema,
     },
     CommandSpec {
+        id: "transport.play",
+        summary: "开始实时播放",
+        undo: UndoKind::None,
+        input_schema: transport_play_schema,
+    },
+    CommandSpec {
+        id: "transport.stop",
+        summary: "停止实时播放",
+        undo: UndoKind::None,
+        input_schema: transport_stop_schema,
+    },
+    CommandSpec {
+        id: "transport.seek",
+        summary: "定位播放头",
+        undo: UndoKind::None,
+        input_schema: transport_seek_schema,
+    },
+    CommandSpec {
+        id: "transport.state",
+        summary: "查询走带状态",
+        undo: UndoKind::None,
+        input_schema: transport_state_schema,
+    },
+    CommandSpec {
+        id: "transport.gain",
+        summary: "设置实时音量",
+        undo: UndoKind::None,
+        input_schema: transport_gain_schema,
+    },
+    CommandSpec {
         id: "describe",
         summary: "返回命令清单与工程摘要",
         undo: UndoKind::None,
@@ -270,6 +373,12 @@ static COMMANDS: [CommandSpec; 7] = [
         summary: "撤销最近的可撤销命令",
         undo: UndoKind::None,
         input_schema: undo_schema,
+    },
+    CommandSpec {
+        id: "redo",
+        summary: "重做最近撤销的命令",
+        undo: UndoKind::None,
+        input_schema: redo_schema,
     },
 ];
 

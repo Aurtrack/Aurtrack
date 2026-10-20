@@ -1,35 +1,36 @@
 <script lang="ts">
   import { onMount } from "svelte";
 
-  import { drawTimeline, secondsAtX, type Clip } from "../timeline";
+  import { drawTimeline, secondsAtX, type TimelineTrack } from "../timeline";
 
   interface Props {
-    trackName: string;
+    tracks: TimelineTrack[];
     duration: number;
     playhead: number;
-    clips: Clip[];
     onSeek?: (seconds: number) => void;
   }
 
-  let { trackName, duration, playhead, clips, onSeek }: Props = $props();
+  let { tracks, duration, playhead, onSeek }: Props = $props();
   let canvas = $state<HTMLCanvasElement>();
+  let dragging = $state(false);
+  let height = $derived(
+    Math.max(160, 54 + Math.max(1, tracks.length) * 56),
+  );
 
   $effect(() => {
     if (!canvas) return;
-    drawTimeline(canvas, { trackName, duration, playhead, clips });
+    drawTimeline(canvas, { tracks, duration, playhead });
   });
 
   onMount(() => {
     if (!canvas) return;
     const observer = new ResizeObserver(() => {
       if (!canvas) return;
-      drawTimeline(canvas, { trackName, duration, playhead, clips });
+      drawTimeline(canvas, { tracks, duration, playhead });
     });
     observer.observe(canvas);
     return () => observer.disconnect();
   });
-
-  let dragging = $state(false);
 
   function handlePointerDown(event: PointerEvent) {
     if (!canvas || !onSeek) return;
@@ -60,15 +61,12 @@
     <span class="index">01</span>
     <span class="title">TIMELINE</span>
     <span class="rule"></span>
-    <span class="meta">5.00 S / 48.0 KHZ</span>
+    <span class="meta">{tracks.length} TRACKS / 5.00 S</span>
   </div>
   <div class="timeline-body">
-    <div class="timeline-label">
-      <span>A-01</span>
-      <span>{trackName.toUpperCase()}</span>
-    </div>
     <canvas
       class="timeline-canvas"
+      style={`height: ${height}px`}
       bind:this={canvas}
       onpointerdown={handlePointerDown}
       onpointermove={handlePointerMove}

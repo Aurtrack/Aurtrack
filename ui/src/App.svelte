@@ -2,51 +2,63 @@
   import { onMount } from "svelte";
 
   import CommandLog from "./lib/components/CommandLog.svelte";
-  import DemoPanel from "./lib/components/DemoPanel.svelte";
   import Header from "./lib/components/Header.svelte";
   import Timeline from "./lib/components/Timeline.svelte";
+  import TrackInspector from "./lib/components/TrackInspector.svelte";
+  import TrackList from "./lib/components/TrackList.svelte";
+  import TransportPanel from "./lib/components/TransportPanel.svelte";
   import {
     audioInfo,
     call,
     errorMessage,
     openFile,
+    projectState,
     renderPath,
     setMasterGain,
     transportPlay,
     transportSeek,
     transportState,
     transportStop,
+    type Project,
+    type ProjectState,
   } from "./lib/api";
-  import type { Clip } from "./lib/timeline";
 
-  type TrackResult = { track_id: string; path: string };
-  type DeviceResult = { device_id: string; path: string };
+  type TrackResult = { track_id: string };
   type RenderResult = {
     path: string;
     frames: number;
-    duration_seconds: number;
     peak: number;
     rms: number;
   };
 
   const duration = 5;
 
-  let trackId = $state("");
-  let deviceId = $state("");
+  let project = $state<Project | null>(null);
+  let selectedTrackId = $state("");
   let gain = $state(50);
   let busy = $state(false);
   let playing = $state(false);
   let audioAvailable = $state(true);
   let audioLabel = $state("AUDIO --");
-  let status = $state("正在初始化…");
+  let status = $state("正在连接会话…");
   let logLines = $state<string[]>([]);
   let playhead = $state(0);
-  let clips = $state<Clip[]>([]);
+  let commandCount = $state(0);
   let lastSeekAt = 0;
   let polling = false;
+  let projectPolling = false;
 
-  let trackLabel = $derived(
-    trackId ? `TRACK ${trackId.toUpperCase()}` : "NO TRACK",
+  let tracks = $derived(project?.tracks ?? []);
+  let selectedTrack = $derived(
+    tracks.find((track) => track.id === selectedTrackId) ?? tracks[0] ?? null,
+  );
+  let timelineTracks = $derived(
+    tracks.map((track) => ({
+      id: track.id,
+      name: track.name,
+      frequency: track.source.kind === "sine" ? track.source.frequency : null,
+      deviceCount: track.devices.length,
+    })),
   );
 
   function log(line: string) {
@@ -62,10 +74,6 @@
     return call<T>(cmd, args);
   }
 
-  function gainPath() {
-    return `/tracks/${trackId}/devices/${deviceId}/params/gain`;
-  }
-
   async function refreshAudio() {
     try {
       const info = await audioInfo();
@@ -77,36 +85,164 @@
     }
   }
 
-  async function setupDemo() {
+  async function refreshProject() {
+    if (projectPolling) return;
+    projectPolling = true;
+    try {
+      const state = await projectState();
+      project = state.project;
+      const list = state.project?.tracks ?? [];
+      if (!list.some((track) => track.id === selectedTrackId)) {
+        selectedTrackId = list[0]?.id ?? "";
+      }
+    } catch {
+      // 轮询失败时保持现状，不打断交互。
+    } finally {
+      projectPolling = false;
+    }
+  }
+
+  async function bootstrap() {
+    await refreshAudio();
+    try {
+      const state = await projectState();
+      project = state.project;
+      if (!state.project) {
+        await call("project.create", { name: "Aurtrack Project" });
+        const created = await projectState();
+        project = created.project;
+      }
+      selectedTrackId = project?.tracks[0]?.id ?? "";
+      const description = await call<{ commands: { id: string }[] }>("describe");
+      commandCount = description.commands.length;
+      status = "会话就绪。添加轨道，或按 PLAY。";
+    } catch (error) {
+      status = `初始化失败：${errorMessage(error)}`;
+    }
+  }
+
+  async function addTrack(input: {
+    name: string;
+    source: "sine" | "silence";
+    frequency: number;
+  }) {
     if (busy) return;
     busy = true;
     try {
-      await transportStop();
-      playing = false;
-      await refreshAudio();
-      status = "正在创建演示工程…";
-      await run("project.create", { name: "Aurtrack Demo" });
-      const track = await run<TrackResult>("track.create", {
-        name: "Bass",
-        source: "sine",
-        frequency: 110,
+      const result = await run<TrackResult>("track.create", {
+        name: input.name,
+        source: input.source,
+        frequency: input.frequency,
       });
-      const device = await run<DeviceResult>("device.add", {
-        track_id: track.track_id,
-        kind: "gain",
-      });
-      trackId = track.track_id;
-      deviceId = device.device_id;
-      await run("param.set", { path: gainPath(), value: gain / 100 });
-      await setMasterGain(gain / 100);
-      await transportSeek(0);
-      clips = [{ id: "clip-1", name: "BASS / 110 HZ", start: 0, duration }];
-      playhead = 0;
-      status = audioAvailable
-        ? "工程就绪。按 PLAY 试听，或拖动播放头定位。"
-        : "工程就绪，但没有输出设备；播放头会走，听不到声音。";
+      await refreshProject();
+      selectedTrackId = result.track_id;
+      await reloadIfPlaying();
+      status = `已创建 ${result.track_id}`;
     } catch (error) {
-      status = `初始化失败：${errorMessage(error)}`;
+      status = `建轨失败：${errorMessage(error)}`;
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function deleteTrack(trackId: string) {
+    if (busy) return;
+    busy = true;
+    try {
+      await run("track.remove", { track_id: trackId });
+      await refreshProject();
+      await reloadIfPlaying();
+      status = `已删除 ${trackId}`;
+    } catch (error) {
+      status = `删除轨道失败：${errorMessage(error)}`;
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function addGain(trackId: string) {
+    if (busy) return;
+    busy = true;
+    try {
+      await run("device.add", { track_id: trackId, kind: "gain" });
+      await refreshProject();
+      await reloadIfPlaying();
+      status = "已添加 gain";
+    } catch (error) {
+      status = `添加设备失败：${errorMessage(error)}`;
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function deleteDevice(path: string) {
+    if (busy) return;
+    busy = true;
+    try {
+      await run("device.remove", { path });
+      await refreshProject();
+      await reloadIfPlaying();
+      status = "已删除设备";
+    } catch (error) {
+      status = `删除设备失败：${errorMessage(error)}`;
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function changeDeviceGain(
+    trackId: string,
+    deviceId: string,
+    value: number,
+  ) {
+    try {
+      await run("param.set", {
+        path: `/tracks/${trackId}/devices/${deviceId}/params/gain`,
+        value,
+      });
+      if (playing) {
+        await transportPlay();
+      }
+      await refreshProject();
+    } catch (error) {
+      status = `设置增益失败：${errorMessage(error)}`;
+    }
+  }
+
+  async function reloadIfPlaying() {
+    if (!playing) return;
+    try {
+      await transportPlay();
+    } catch {
+      // 重建失败时保留下一次 PLAY 的机会，不覆盖当前状态。
+    }
+  }
+
+  async function undo() {
+    if (busy) return;
+    busy = true;
+    try {
+      await run("undo", { steps: 1 });
+      await refreshProject();
+      await reloadIfPlaying();
+      status = "已撤销";
+    } catch (error) {
+      status = `撤销失败：${errorMessage(error)}`;
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function redo() {
+    if (busy) return;
+    busy = true;
+    try {
+      await run("redo", { steps: 1 });
+      await refreshProject();
+      await reloadIfPlaying();
+      status = "已重做";
+    } catch (error) {
+      status = `重做失败：${errorMessage(error)}`;
     } finally {
       busy = false;
     }
@@ -141,13 +277,12 @@
   }
 
   async function render() {
-    if (busy || !trackId || !deviceId) return;
+    if (busy) return;
     busy = true;
     try {
       await transportStop();
       playing = false;
       status = "正在渲染 WAV…";
-      await run("param.set", { path: gainPath(), value: gain / 100 });
       const path = await renderPath();
       const data = await run<RenderResult>("render.segment", {
         duration_seconds: duration,
@@ -185,36 +320,56 @@
   }
 
   onMount(() => {
-    void setupDemo();
-    const timer = window.setInterval(() => {
+    void bootstrap();
+    const transportTimer = window.setInterval(() => {
       void syncTransport();
     }, 33);
-    return () => window.clearInterval(timer);
+    const projectTimer = window.setInterval(() => {
+      void refreshProject();
+    }, 800);
+    return () => {
+      window.clearInterval(transportTimer);
+      window.clearInterval(projectTimer);
+    };
   });
 </script>
 
 <main class="sheet">
   <Header {audioLabel} />
-  <Timeline
-    trackName={trackLabel}
-    {duration}
-    {playhead}
-    {clips}
-    onSeek={seek}
-  />
+  <Timeline tracks={timelineTracks} {duration} {playhead} onSeek={seek} />
   <div class="split">
-    <DemoPanel
-      {gain}
-      {busy}
-      {playing}
-      {status}
-      {trackLabel}
-      onGainChange={onGainChange}
-      onPlay={play}
-      onStop={stop}
-      onRender={render}
-      onReset={setupDemo}
-    />
-    <CommandLog lines={logLines} />
+    <div class="column">
+      <TrackList
+        {tracks}
+        selectedId={selectedTrack?.id ?? ""}
+        {busy}
+        onSelect={(id: string) => (selectedTrackId = id)}
+        onAdd={addTrack}
+        onRemove={deleteTrack}
+      />
+    </div>
+    <div class="column">
+      <TrackInspector
+        track={selectedTrack}
+        {busy}
+        onAddGain={addGain}
+        onRemoveDevice={deleteDevice}
+        onGainChange={changeDeviceGain}
+      />
+      <TransportPanel
+        {playing}
+        {busy}
+        {gain}
+        {status}
+        {commandCount}
+        onPlay={play}
+        onStop={stop}
+        onGainChange={onGainChange}
+        onRender={render}
+        onUndo={undo}
+        onRedo={redo}
+      />
+    </div>
   </div>
+  <CommandLog lines={logLines} />
 </main>

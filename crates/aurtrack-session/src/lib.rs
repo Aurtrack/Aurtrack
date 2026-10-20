@@ -76,6 +76,7 @@ struct Snapshot {
 pub struct Session {
     project: Option<Project>,
     history: Vec<Snapshot>,
+    redo_stack: Vec<Snapshot>,
     next_track: u64,
     next_device: u64,
     next_undo: u64,
@@ -91,17 +92,22 @@ impl Session {
     pub fn execute(&mut self, request: &CommandRequest) -> Result<CommandResponse, CommandError> {
         match request.cmd.as_str() {
             "project.create" => self.cmd_project_create(&request.args),
+            "project.state" => Ok(self.cmd_project_state()),
             "track.create" => self.cmd_track_create(&request.args),
+            "track.remove" => self.cmd_track_remove(&request.args),
             "device.add" => self.cmd_device_add(&request.args),
+            "device.remove" => self.cmd_device_remove(&request.args),
             "param.set" => self.cmd_param_set(&request.args),
             "render.segment" => self.cmd_render_segment(&request.args),
             "describe" => Ok(self.cmd_describe()),
             "undo" => self.cmd_undo(&request.args),
+            "redo" => self.cmd_redo(&request.args),
             other => Err(CommandError::unknown_command(other)),
         }
     }
 
     fn snapshot(&mut self, command: &str) -> String {
+        self.redo_stack.clear();
         self.next_undo += 1;
         let number = self.next_undo;
         self.history.push(Snapshot {
@@ -330,10 +336,87 @@ impl Session {
             let Some(snapshot) = self.history.pop() else {
                 break;
             };
+            self.redo_stack.push(Snapshot {
+                project: self.project.clone(),
+                command: snapshot.command.clone(),
+            });
             self.project = snapshot.project;
             undone.push(snapshot.command);
         }
         Ok(CommandResponse::ok(json!({ "undone": undone })))
+    }
+
+    fn cmd_project_state(&self) -> CommandResponse {
+        CommandResponse::ok(json!({ "project": &self.project }))
+    }
+
+    fn cmd_track_remove(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        let args: TrackRemoveArgs = parse_args(args)?;
+        let track_id = args.track_id;
+        let exists = self
+            .project
+            .as_ref()
+            .is_some_and(|project| project.tracks.iter().any(|track| track.id == track_id));
+        if !exists {
+            return Err(CommandError::not_found(format!("找不到轨道：{track_id}")));
+        }
+        let token = self.snapshot("track.remove");
+        let project = self
+            .project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        project.tracks.retain(|track| track.id != track_id);
+        Ok(CommandResponse::ok(json!({ "track_id": track_id })).with_undo(token))
+    }
+
+    fn cmd_device_remove(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        let args: DeviceRemoveArgs = parse_args(args)?;
+        let path = args.path;
+        let (track_id, device_id) = parse_device_path(&path)?;
+        let exists = self.project.as_ref().is_some_and(|project| {
+            project.tracks.iter().any(|track| {
+                track.id == track_id && track.devices.iter().any(|device| device.id == device_id)
+            })
+        });
+        if !exists {
+            return Err(CommandError::not_found(format!("找不到设备：{path}")));
+        }
+        let token = self.snapshot("device.remove");
+        let project = self
+            .project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let track = project
+            .tracks
+            .iter_mut()
+            .find(|track| track.id == track_id)
+            .ok_or_else(|| CommandError::not_found(format!("找不到设备：{path}")))?;
+        track.devices.retain(|device| device.id != device_id);
+        Ok(CommandResponse::ok(json!({ "path": path })).with_undo(token))
+    }
+
+    fn cmd_redo(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        let args: UndoArgs = parse_args(args)?;
+        let steps = args.steps.unwrap_or(1);
+        if !(1..=100).contains(&steps) {
+            return Err(CommandError::invalid_args("steps 必须在 1 到 100 之间"));
+        }
+        if self.redo_stack.is_empty() {
+            return Err(CommandError::nothing_to_redo());
+        }
+        let mut redone = Vec::new();
+        for _ in 0..steps {
+            let Some(snapshot) = self.redo_stack.pop() else {
+                break;
+            };
+            self.history.push(Snapshot {
+                project: self.project.clone(),
+                command: snapshot.command.clone(),
+            });
+            self.project = snapshot.project;
+            redone.push(snapshot.command);
+        }
+        Ok(CommandResponse::ok(json!({ "redone": redone })))
     }
 
     fn project_summary(&self) -> Value {
@@ -386,6 +469,22 @@ fn parse_param_path(path: &str) -> Result<(&str, &str, &str), CommandError> {
         ) => Ok((track, device, name)),
         _ => Err(CommandError::invalid_args(format!(
             "参数路径不合法：{path}"
+        ))),
+    }
+}
+
+fn parse_device_path(path: &str) -> Result<(&str, &str), CommandError> {
+    let mut parts = path.split('/').filter(|part| !part.is_empty());
+    match (
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+    ) {
+        (Some("tracks"), Some(track), Some("devices"), Some(device), None) => Ok((track, device)),
+        _ => Err(CommandError::invalid_args(format!(
+            "设备路径不合法：{path}"
         ))),
     }
 }
@@ -536,4 +635,16 @@ struct RenderArgs {
 struct UndoArgs {
     #[serde(default)]
     steps: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TrackRemoveArgs {
+    track_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DeviceRemoveArgs {
+    path: String,
 }

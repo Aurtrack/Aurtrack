@@ -1,44 +1,43 @@
 <script lang="ts">
   interface Props {
-    gain: number;
-    busy: boolean;
     playing: boolean;
+    busy: boolean;
+    gain: number;
     status: string;
-    trackLabel: string;
-    onGainChange: (value: number) => void;
+    commandCount: number;
     onPlay: () => void;
     onStop: () => void;
+    onGainChange: (value: number) => void;
     onRender: () => void;
-    onReset: () => void;
+    onUndo: () => void;
+    onRedo: () => void;
   }
 
   let {
-    gain,
-    busy,
     playing,
+    busy,
+    gain,
     status,
-    trackLabel,
-    onGainChange,
+    commandCount,
     onPlay,
     onStop,
+    onGainChange,
     onRender,
-    onReset,
+    onUndo,
+    onRedo,
   }: Props = $props();
 </script>
 
-<section class="section control-section">
+<section class="section">
   <div class="section-head">
-    <span class="index">02</span>
-    <span class="title">CONTROL</span>
+    <span class="index">04</span>
+    <span class="title">TRANSPORT</span>
     <span class="rule"></span>
-    <span class="meta">GAIN</span>
+    <span class="meta">{commandCount} COMMANDS</span>
   </div>
+
   <div class="control-row">
-    <span class="label">TRACK</span>
-    <span class="readout wide">{trackLabel}</span>
-  </div>
-  <div class="control-row">
-    <span class="label">GAIN</span>
+    <span class="label">MASTER</span>
     <input
       type="range"
       min="0"
@@ -49,13 +48,16 @@
     />
     <span class="readout">{Math.round(gain).toString().padStart(3, "0")}%</span>
   </div>
+
   <div class="actions">
     <button class="primary" disabled={busy || playing} onclick={onPlay}>
       PLAY
     </button>
     <button disabled={busy || !playing} onclick={onStop}>STOP</button>
     <button disabled={busy} onclick={onRender}>RENDER WAV</button>
-    <button disabled={busy} onclick={onReset}>RESET</button>
+    <button disabled={busy} onclick={onUndo}>UNDO</button>
+    <button disabled={busy} onclick={onRedo}>REDO</button>
   </div>
+
   <p class="status">STATUS: {status}</p>
 </section>

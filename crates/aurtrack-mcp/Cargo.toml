@@ -12,7 +12,7 @@ path = "src/main.rs"
 
 [dependencies]
 aurtrack-command = { path = "../aurtrack-command" }
-aurtrack-session = { path = "../aurtrack-session" }
+aurtrack-ipc = { path = "../aurtrack-ipc" }
 serde_json = "1"
 
 [lints]

@@ -1,0 +1,18 @@
+[package]
+name = "aurtrack-runtime"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+aurtrack-command = { path = "../aurtrack-command" }
+aurtrack-engine = { path = "../aurtrack-engine" }
+aurtrack-io = { path = "../aurtrack-io" }
+aurtrack-session = { path = "../aurtrack-session" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+[lints]
+workspace = true

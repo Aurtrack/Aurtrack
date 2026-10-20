@@ -83,11 +83,34 @@ fn full_slice_produces_audio_and_undo_restores_it() {
 }
 
 #[test]
-fn describe_lists_seven_commands() {
+fn describe_lists_sixteen_commands() {
     let mut session = Session::default();
     let out = run(&mut session, "describe", json!({}));
-    assert_eq!(out["commands"].as_array().unwrap().len(), 7);
+    assert_eq!(out["commands"].as_array().unwrap().len(), 16);
     assert!(out["project"].is_null());
+}
+
+#[test]
+fn remove_track_supports_undo_and_redo() {
+    let mut session = Session::default();
+    run(&mut session, "project.create", json!({}));
+    run(&mut session, "track.create", json!({ "name": "t" }));
+    run(
+        &mut session,
+        "track.remove",
+        json!({ "track_id": "track-1" }),
+    );
+
+    let state = run(&mut session, "project.state", json!({}));
+    assert_eq!(state["project"]["tracks"].as_array().unwrap().len(), 0);
+
+    run(&mut session, "undo", json!({}));
+    let state = run(&mut session, "project.state", json!({}));
+    assert_eq!(state["project"]["tracks"].as_array().unwrap().len(), 1);
+
+    run(&mut session, "redo", json!({}));
+    let state = run(&mut session, "project.state", json!({}));
+    assert_eq!(state["project"]["tracks"].as_array().unwrap().len(), 0);
 }
 
 #[test]

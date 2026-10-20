@@ -1,6 +1,6 @@
-# 命令规范 v0.1
+# 命令规范 v0.3
 
-这份文档定义 Aurtrack 的第一条可运行竖切：7 条命令、统一的返回结构、寻址规则，以及 MCP 的映射方式。代码必须与本文一致。
+这份文档定义 Aurtrack 的可运行命令面：16 条命令、统一的返回结构、寻址规则，以及 MCP 的映射方式。代码必须与本文一致。
 
 ## 信封
 
@@ -160,6 +160,127 @@
 
 只撤销可撤销命令。`render.segment`、`describe`、`undo` 不产生快照。
 
+## 走带命令
+
+走带命令由 `aurtrack-runtime` 执行：它组合会话、实时引擎与音频输出。音频设备在第一次 `transport.play` 时惰性打开。
+
+### 8. `transport.play`
+
+无参数。要求已有工程。返回：
+
+```json
+{ "playing": true, "sample_rate": 48000 }
+```
+
+### 9. `transport.stop`
+
+无参数。返回：
+
+```json
+{ "playing": false }
+```
+
+### 10. `transport.seek`
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `seconds` | number | 是 | 目标位置，按 5 秒循环取模 |
+
+返回：
+
+```json
+{ "position": 2.5 }
+```
+
+### 11. `transport.state`
+
+无参数。返回：
+
+```json
+{ "playing": false, "position": 0.0, "sample_rate": 48000 }
+```
+
+### 12. `transport.gain`
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `gain` | number | 是 | 0 到 4 的实时音量倍数 |
+
+返回：
+
+```json
+{ "gain": 0.5 }
+```
+
+走带命令都不产生撤销快照。工程修改不会自动重建正在播放的计划；改完工程后重新 `transport.play`。
+
+## 会话视图命令
+
+### 13. `redo`
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+| --- | --- | --- | --- | --- |
+| `steps` | integer | 否 | `1` | 1 到 100 |
+
+返回：
+
+```json
+{ "redone": ["track.remove"] }
+```
+
+`undo` 与 `redo` 共享一条历史栈；新的可撤销命令会清空 redo 栈。
+
+### 14. `project.state`
+
+无参数。返回完整工程，包括每条轨道的设备与参数：
+
+```json
+{
+  "project": {
+    "name": "demo",
+    "sample_rate": 48000,
+    "tracks": [
+      {
+        "id": "track-1",
+        "name": "bass",
+        "source": { "kind": "sine", "frequency": 110.0 },
+        "devices": [
+          { "id": "device-1", "kind": "gain", "params": { "gain": 0.5 } }
+        ]
+      }
+    ]
+  }
+}
+```
+
+没有工程时 `project` 为 `null`。这是 UI 轮询同步与会话视图的主要读取命令。
+
+### 15. `track.remove`
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `track_id` | string | 是 | 要删除的轨道 ID |
+
+返回：
+
+```json
+{ "track_id": "track-1" }
+```
+
+### 16. `device.remove`
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `path` | string | 是 | `/tracks/{id}/devices/{id}` |
+
+返回：
+
+```json
+{ "path": "/tracks/track-1/devices/device-1" }
+```
+
+`track.remove` 与 `device.remove` 都可撤销。
+
 ## MCP 映射
 
 工具名是命令 ID 把 `.` 换成 `_`：
@@ -171,13 +292,33 @@
 | `device.add` | `device_add` |
 | `param.set` | `param_set` |
 | `render.segment` | `render_segment` |
+| `transport.play` | `transport_play` |
+| `transport.stop` | `transport_stop` |
+| `transport.seek` | `transport_seek` |
+| `transport.state` | `transport_state` |
+| `transport.gain` | `transport_gain` |
 | `describe` | `describe` |
 | `undo` | `undo` |
+| `redo` | `redo` |
+| `project.state` | `project_state` |
+| `track.remove` | `track_remove` |
+| `device.remove` | `device_remove` |
 
 - `tools/list` 的 `inputSchema` 直接来自命令注册表；
 - `tools/call` 的 `arguments` 原样作为 `args`；
 - 执行失败时返回 `content` + `isError: true`，不使用 JSON-RPC 错误；
 - 协议版本：`2024-11-05`。
+
+## 会话共享
+
+桌面宿主启动时会绑定 `127.0.0.1` 的随机端口，并把端口写到系统临时目录的 `aurtrack-session.json`。
+
+- CLI 与 MCP 默认先连接这个服务；连接成功就共享桌面的文档与走带；
+- 连接失败时退回本进程运行时；
+- `--local` 强制使用本进程运行时，适合无桌面环境与测试；
+- 服务只监听回环地址，暂未做鉴权。
+
+因此桌面运行时，`aurtrack transport.play` 控制的是桌面那个 Runtime，而不是再起一个。
 
 ## 示例
 
@@ -197,4 +338,14 @@ printf '%s\n' \
 
 ```sh
 aurtrack --json '{"cmd":"describe","args":{}}'
+```
+
+实时播放需要进程保持存活，`--hold` 会在读完 stdin 后继续运行，按 Ctrl+C 退出：
+
+```sh
+printf '%s\n' \
+  '{"cmd":"project.create","args":{"name":"demo"}}' \
+  '{"cmd":"track.create","args":{"name":"bass","source":"sine","frequency":110}}' \
+  '{"cmd":"transport.play","args":{}}' \
+  | aurtrack --stdin --hold
 ```

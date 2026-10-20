@@ -1,19 +1,19 @@
-export type Clip = {
+export type TimelineTrack = {
   id: string;
   name: string;
-  start: number;
-  duration: number;
+  frequency: number | null;
+  deviceCount: number;
 };
 
 export type TimelineView = {
-  trackName: string;
+  tracks: TimelineTrack[];
   duration: number;
   playhead: number;
-  clips: Clip[];
 };
 
 const PADDING = 14;
 const RULER_HEIGHT = 26;
+const LANE_GAP = 4;
 
 const COLORS = {
   paper: "#ecece8",
@@ -47,11 +47,9 @@ export function drawTimeline(
 
   context.setTransform(dpr, 0, 0, dpr, 0, 0);
   context.clearRect(0, 0, width, height);
-
   context.fillStyle = COLORS.paper;
   context.fillRect(0, 0, width, height);
 
-  // 点阵底
   context.fillStyle = COLORS.dot;
   for (let x = 10; x < width; x += 24) {
     for (let y = 10; y < height; y += 24) {
@@ -60,11 +58,10 @@ export function drawTimeline(
   }
 
   const laneTop = PADDING + RULER_HEIGHT + 6;
-  const laneHeight = height - laneTop - PADDING;
+  const laneArea = height - laneTop - PADDING;
   const usableWidth = width - PADDING * 2;
   const pixelsPerSecond = usableWidth / view.duration;
 
-  // 标尺基线
   context.strokeStyle = COLORS.line;
   context.lineWidth = 1;
   context.beginPath();
@@ -72,12 +69,11 @@ export function drawTimeline(
   context.lineTo(PADDING + usableWidth, PADDING + RULER_HEIGHT);
   context.stroke();
 
-  // 刻度
   context.font = "10px Consolas, monospace";
-  for (let i = 0; i <= view.duration * 2; i += 1) {
-    const second = i / 2;
+  for (let index = 0; index <= view.duration * 2; index += 1) {
+    const second = index / 2;
     const x = PADDING + second * pixelsPerSecond;
-    const major = i % 2 === 0;
+    const major = index % 2 === 0;
     context.strokeStyle = major ? COLORS.line : COLORS.grid;
     context.beginPath();
     context.moveTo(x, PADDING + (major ? 14 : 20));
@@ -89,69 +85,90 @@ export function drawTimeline(
     }
   }
 
-  // 轨道框
-  context.strokeStyle = COLORS.line;
-  context.strokeRect(
-    PADDING + 0.5,
-    laneTop + 0.5,
-    usableWidth - 1,
-    laneHeight - 1,
-  );
+  if (view.tracks.length === 0) {
+    context.fillStyle = COLORS.muted;
+    context.font = "10px Consolas, monospace";
+    context.fillText("NO TRACKS", PADDING + 4, laneTop + 18);
+  } else {
+    const laneHeight = laneArea / view.tracks.length;
+    for (let index = 0; index < view.tracks.length; index += 1) {
+      const track = view.tracks[index];
+      if (!track) continue;
 
-  // 纵向虚线
-  context.setLineDash([2, 4]);
-  context.strokeStyle = COLORS.grid;
-  for (let second = 0; second <= view.duration; second += 1) {
-    const x = PADDING + second * pixelsPerSecond;
-    context.beginPath();
-    context.moveTo(x, laneTop);
-    context.lineTo(x, laneTop + laneHeight);
-    context.stroke();
+      const y = laneTop + index * laneHeight;
+      const laneY = y + LANE_GAP / 2;
+      const laneH = laneHeight - LANE_GAP;
+      context.strokeStyle = COLORS.line;
+      context.strokeRect(PADDING + 0.5, laneY + 0.5, usableWidth - 1, laneH - 1);
+
+      const blockY = laneY + 5;
+      const blockH = Math.max(22, laneH - 10);
+
+      if (track.frequency === null) {
+        context.strokeStyle = COLORS.line;
+        context.strokeRect(
+          PADDING + 0.5,
+          blockY + 0.5,
+          usableWidth - 1,
+          blockH - 1,
+        );
+        context.fillStyle = COLORS.muted;
+        context.font = "11px 'Bahnschrift', 'Segoe UI', sans-serif";
+        context.fillText(track.name, PADDING + 10, blockY + 18);
+        context.font = "9px Consolas, monospace";
+        context.fillText(
+          `SILENCE / ${track.deviceCount} DEV`,
+          PADDING + 10,
+          blockY + 32,
+        );
+      } else {
+        context.fillStyle = COLORS.blue;
+        context.fillRect(PADDING, blockY, usableWidth, blockH);
+        context.strokeStyle = COLORS.blueDark;
+        context.strokeRect(
+          PADDING + 0.5,
+          blockY + 0.5,
+          usableWidth - 1,
+          blockH - 1,
+        );
+
+        context.fillStyle = COLORS.white;
+        context.fillRect(PADDING + 8, blockY + 7, 24, 14);
+        context.fillStyle = COLORS.blue;
+        context.font = "bold 9px Consolas, monospace";
+        context.fillText(
+          String(index + 1).padStart(2, "0"),
+          PADDING + 12,
+          blockY + 17,
+        );
+
+        context.fillStyle = COLORS.white;
+        context.font = "11px 'Bahnschrift', 'Segoe UI', sans-serif";
+        context.fillText(track.name, PADDING + 40, blockY + 19);
+        context.globalAlpha = 0.75;
+        context.font = "9px Consolas, monospace";
+        context.fillText(
+          `${track.frequency.toFixed(2)} HZ / ${track.deviceCount} DEV`,
+          PADDING + 40,
+          blockY + 33,
+        );
+        context.globalAlpha = 1;
+      }
+    }
   }
-  context.setLineDash([]);
 
-  // 片段
-  for (const clip of view.clips) {
-    const x = PADDING + clip.start * pixelsPerSecond;
-    const clipWidth = Math.max(2, clip.duration * pixelsPerSecond);
-    const y = laneTop + 12;
-    const clipHeight = Math.min(84, laneHeight - 24);
-
-    context.fillStyle = COLORS.blue;
-    context.fillRect(x, y, clipWidth, clipHeight);
-    context.strokeStyle = COLORS.blueDark;
-    context.strokeRect(x + 0.5, y + 0.5, clipWidth - 1, clipHeight - 1);
-
-    context.fillStyle = COLORS.white;
-    context.fillRect(x + 8, y + 8, 22, 14);
-    context.fillStyle = COLORS.blue;
-    context.font = "bold 9px Consolas, monospace";
-    context.fillText("01", x + 13, y + 18);
-
-    context.fillStyle = COLORS.white;
-    context.font = "11px 'Bahnschrift', 'Segoe UI', sans-serif";
-    context.fillText(clip.name, x + 8, y + 40);
-
-    context.globalAlpha = 0.75;
-    context.font = "9px Consolas, monospace";
-    context.fillText(`${clip.duration.toFixed(2)} S`, x + 8, y + 55);
-    context.globalAlpha = 1;
-  }
-
-  // 四角十字标记
   drawCrosshair(context, PADDING, laneTop);
   drawCrosshair(context, PADDING + usableWidth, laneTop);
-  drawCrosshair(context, PADDING, laneTop + laneHeight);
-  drawCrosshair(context, PADDING + usableWidth, laneTop + laneHeight);
+  drawCrosshair(context, PADDING, laneTop + laneArea);
+  drawCrosshair(context, PADDING + usableWidth, laneTop + laneArea);
 
-  // 播放头
   const playhead = Math.min(Math.max(view.playhead, 0), view.duration);
   const playheadX = PADDING + playhead * pixelsPerSecond;
   context.strokeStyle = COLORS.blue;
   context.lineWidth = 1;
   context.beginPath();
   context.moveTo(playheadX, PADDING);
-  context.lineTo(playheadX, laneTop + laneHeight);
+  context.lineTo(playheadX, laneTop + laneArea);
   context.stroke();
 
   context.fillStyle = COLORS.blue;
@@ -161,18 +178,6 @@ export function drawTimeline(
   context.lineTo(playheadX, PADDING + 7);
   context.closePath();
   context.fill();
-
-  // 底部标注
-  context.fillStyle = COLORS.muted;
-  context.font = "9px Consolas, monospace";
-  context.fillText(view.trackName.toUpperCase(), PADDING, height - 3);
-  context.textAlign = "right";
-  context.fillText(
-    `T+${view.playhead.toFixed(2)} S`,
-    PADDING + usableWidth,
-    height - 3,
-  );
-  context.textAlign = "left";
 }
 
 function drawCrosshair(

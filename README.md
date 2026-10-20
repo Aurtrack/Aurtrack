@@ -29,6 +29,8 @@
   cat examples/demo.jsonl | cargo run -p aurtrack-cli -- --stdin
   ```
 
+  CLI 与 MCP 默认连接运行中的桌面会话；加 `--local` 使用本进程运行时。
+
 - **MCP**（给 AI 客户端）：
 
   ```sh
@@ -41,14 +43,14 @@
   bash scripts/smoke.sh
   ```
 
-当前能力：7 条命令、撤销、16 位 WAV 渲染、CLI、MCP、最小桌面窗口。
+当前能力：16 条命令（含实时走带与工程状态）、撤销/重做、16 位 WAV 渲染、实时播放、CLI、MCP、Svelte 桌面窗口（轨道视图）。
 
 ## 仓库结构
 
 ```text
-crates/     Rust workspace 成员（命令、会话、CLI、MCP）
+crates/     Rust workspace 成员（命令、会话、引擎、音频、运行时、CLI、MCP）
 shells/     桌面与移动外壳
-ui/         桌面前端（当前是静态页面）
+ui/         桌面前端（Svelte 5 + Vite）
 specs/      命令规范、协议与图 IR 语义
 scripts/    冒烟测试与工具脚本
 docs/       架构决策记录与设计笔记
@@ -56,4 +58,4 @@ docs/       架构决策记录与设计笔记
 
 ## 下一步
 
-节点图、真实音频设备、CLAP 插件宿主与采样级自动化。
+时间线片段与工程保存、节点图、CLAP 插件宿主、采样级自动化。

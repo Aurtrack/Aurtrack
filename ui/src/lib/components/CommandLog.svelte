@@ -8,7 +8,7 @@
 
 <section class="section log-section">
   <div class="section-head">
-    <span class="index">03</span>
+    <span class="index">05</span>
     <span class="title">COMMAND LOG</span>
     <span class="rule"></span>
     <span class="meta">{lines.length} ENTRIES</span>

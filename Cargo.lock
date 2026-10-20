@@ -112,7 +112,7 @@ name = "aurtrack-cli"
 version = "0.0.0"
 dependencies = [
  "aurtrack-command",
- "aurtrack-session",
+ "aurtrack-ipc",
  "serde_json",
 ]
 
@@ -129,9 +129,8 @@ name = "aurtrack-desktop"
 version = "0.0.0"
 dependencies = [
  "aurtrack-command",
- "aurtrack-engine",
- "aurtrack-io",
- "aurtrack-session",
+ "aurtrack-ipc",
+ "aurtrack-runtime",
  "serde",
  "tauri",
  "tauri-build",
@@ -153,11 +152,33 @@ dependencies = [
 ]
 
 [[package]]
+name = "aurtrack-ipc"
+version = "0.0.0"
+dependencies = [
+ "aurtrack-command",
+ "aurtrack-runtime",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "aurtrack-mcp"
 version = "0.0.0"
 dependencies = [
  "aurtrack-command",
+ "aurtrack-ipc",
+ "serde_json",
+]
+
+[[package]]
+name = "aurtrack-runtime"
+version = "0.0.0"
+dependencies = [
+ "aurtrack-command",
+ "aurtrack-engine",
+ "aurtrack-io",
  "aurtrack-session",
+ "serde",
  "serde_json",
 ]
 

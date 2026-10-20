@@ -10,6 +10,33 @@ export type CommandError = {
   message: string;
 };
 
+export type Device = {
+  id: string;
+  kind: string;
+  params: Record<string, number>;
+};
+
+export type Source =
+  | { kind: "silence" }
+  | { kind: "sine"; frequency: number };
+
+export type Track = {
+  id: string;
+  name: string;
+  source: Source;
+  devices: Device[];
+};
+
+export type Project = {
+  name: string;
+  sample_rate: number;
+  tracks: Track[];
+};
+
+export type ProjectState = {
+  project: Project | null;
+};
+
 type Invoke = <T>(
   command: string,
   args?: Record<string, unknown>,
@@ -57,6 +84,7 @@ export async function openFile(path: string): Promise<void> {
 export type TransportState = {
   playing: boolean;
   position: number;
+  sample_rate: number;
 };
 
 export type AudioInfo = {
@@ -66,27 +94,47 @@ export type AudioInfo = {
 };
 
 export async function transportPlay(): Promise<void> {
-  await getInvoke()<void>("transport_play");
+  await call("transport.play");
 }
 
 export async function transportStop(): Promise<void> {
-  await getInvoke()<void>("transport_stop");
+  await call("transport.stop");
 }
 
 export async function transportSeek(seconds: number): Promise<void> {
-  await getInvoke()<void>("transport_seek", { seconds });
+  await call("transport.seek", { seconds });
 }
 
 export async function transportState(): Promise<TransportState> {
-  return getInvoke()<TransportState>("transport_state");
+  return call<TransportState>("transport.state");
 }
 
 export async function setMasterGain(gain: number): Promise<void> {
-  await getInvoke()<void>("set_master_gain", { gain });
+  await call("transport.gain", { gain });
 }
 
 export async function audioInfo(): Promise<AudioInfo> {
   return getInvoke()<AudioInfo>("audio_info");
+}
+
+export async function projectState(): Promise<ProjectState> {
+  return call<ProjectState>("project.state");
+}
+
+export async function undoCommand(steps = 1): Promise<void> {
+  await call("undo", { steps });
+}
+
+export async function redoCommand(steps = 1): Promise<void> {
+  await call("redo", { steps });
+}
+
+export async function removeTrack(trackId: string): Promise<void> {
+  await call("track.remove", { track_id: trackId });
+}
+
+export async function removeDevice(path: string): Promise<void> {
+  await call("device.remove", { path });
 }
 
 export function errorMessage(error: unknown): string {

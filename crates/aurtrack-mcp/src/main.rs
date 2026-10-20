@@ -1,10 +1,11 @@
 //! 职责：
 //! - 把命令注册表暴露成 MCP tools
+//! - 默认连接运行中的桌面会话，`--local` 时使用本进程运行时
 //! - 通过 stdio 处理 JSON-RPC
 //!
 //! 禁止：
 //! - 在 MCP 层写业务逻辑
-//! - 绕过 `aurtrack-session`
+//! - 绕过命令注册表
 
 #![allow(
     clippy::missing_errors_doc,
@@ -21,13 +22,24 @@
 use std::io::{self, BufRead, Write};
 
 use aurtrack_command::{CommandRequest, command_id, find, registry, tool_name};
-use aurtrack_session::Session;
+use aurtrack_ipc::Backend;
 use serde_json::{Value, json};
 
 const PROTOCOL_VERSION: &str = "2024-11-05";
 
 fn main() {
-    let mut session = Session::default();
+    let force_local = std::env::args().any(|arg| arg == "--local");
+    let mut backend = if force_local {
+        eprintln!("aurtrack-mcp 使用本地运行时");
+        Backend::local()
+    } else if let Ok(backend) = Backend::remote() {
+        eprintln!("aurtrack-mcp 已连接运行中的 Aurtrack");
+        backend
+    } else {
+        eprintln!("aurtrack-mcp 使用本地运行时");
+        Backend::local()
+    };
+
     let stdin = io::stdin();
     let mut stdout = io::stdout();
     for line in stdin.lock().lines() {
@@ -37,7 +49,7 @@ fn main() {
         if line.trim().is_empty() {
             continue;
         }
-        if let Some(response) = handle_line(&mut session, &line) {
+        if let Some(response) = handle_line(&mut backend, &line) {
             if writeln!(stdout, "{response}").is_err() {
                 break;
             }
@@ -52,7 +64,7 @@ fn empty_object() -> Value {
     Value::Object(serde_json::Map::new())
 }
 
-fn handle_line(session: &mut Session, line: &str) -> Option<String> {
+fn handle_line(backend: &mut Backend, line: &str) -> Option<String> {
     let request: Value = match serde_json::from_str(line) {
         Ok(value) => value,
         Err(error) => {
@@ -83,7 +95,7 @@ fn handle_line(session: &mut Session, line: &str) -> Option<String> {
         "resources/list" => Ok(json!({ "resources": [] })),
         "prompts/list" => Ok(json!({ "prompts": [] })),
         "tools/call" => call_tool(
-            session,
+            backend,
             request.get("params").cloned().unwrap_or_else(empty_object),
         ),
         other => Err((-32601, format!("未知方法：{other}"))),
@@ -113,7 +125,7 @@ fn tool_list() -> Vec<Value> {
         .collect()
 }
 
-fn call_tool(session: &mut Session, params: Value) -> Result<Value, (i64, String)> {
+fn call_tool(backend: &mut Backend, params: Value) -> Result<Value, (i64, String)> {
     let name = params
         .get("name")
         .and_then(Value::as_str)
@@ -127,7 +139,7 @@ fn call_tool(session: &mut Session, params: Value) -> Result<Value, (i64, String
         .cloned()
         .unwrap_or_else(empty_object);
 
-    match session.execute(&CommandRequest { cmd, args }) {
+    match backend.execute(&CommandRequest { cmd, args }) {
         Ok(response) => {
             let text =
                 serde_json::to_string(&response).map_err(|error| (-32603, error.to_string()))?;
@@ -164,29 +176,29 @@ mod tests {
     use super::*;
 
     #[test]
-    fn initialize_and_list_seven_tools() {
-        let mut session = Session::default();
+    fn initialize_and_list_sixteen_tools() {
+        let mut backend = Backend::local();
         let init = handle_line(
-            &mut session,
+            &mut backend,
             r#"{"jsonrpc":"2.0","id":1,"method":"initialize","params":{}}"#,
         )
         .unwrap();
         assert!(init.contains("protocolVersion"));
 
         let list = handle_line(
-            &mut session,
+            &mut backend,
             r#"{"jsonrpc":"2.0","id":2,"method":"tools/list"}"#,
         )
         .unwrap();
         let value: Value = serde_json::from_str(&list).unwrap();
-        assert_eq!(value["result"]["tools"].as_array().unwrap().len(), 7);
+        assert_eq!(value["result"]["tools"].as_array().unwrap().len(), 16);
     }
 
     #[test]
     fn call_tool_creates_project() {
-        let mut session = Session::default();
+        let mut backend = Backend::local();
         let call = handle_line(
-            &mut session,
+            &mut backend,
             r#"{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"project_create","arguments":{"name":"mcp-demo"}}}"#,
         )
         .unwrap();
@@ -198,8 +210,8 @@ mod tests {
 
     #[test]
     fn unknown_method_returns_error() {
-        let mut session = Session::default();
-        let out = handle_line(&mut session, r#"{"jsonrpc":"2.0","id":4,"method":"nope"}"#).unwrap();
+        let mut backend = Backend::local();
+        let out = handle_line(&mut backend, r#"{"jsonrpc":"2.0","id":4,"method":"nope"}"#).unwrap();
         let value: Value = serde_json::from_str(&out).unwrap();
         assert_eq!(value["error"]["code"], -32601);
     }
