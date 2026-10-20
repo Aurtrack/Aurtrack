@@ -53,7 +53,12 @@ export const en: Record<MessageKey, Message> = {
   "piano.title": "PIANO ROLL",
   "piano.empty": "SELECT A CLIP",
   "piano.meta": (params) => `${params.clip} · ${params.notes} NOTES`,
-  "piano.hint": "CLICK TO ADD · DRAG TO MOVE · EDGE TO RESIZE · RIGHT-CLICK TO DELETE",
+  "piano.zoomPitch": "PITCH",
+  "piano.zoomTime": "TIME",
+  "piano.zoomIn": "Zoom in",
+  "piano.zoomOut": "Zoom out",
+  "piano.scroll": "Horizontal scroll",
+  "piano.hint": "CLICK TO ADD · DRAG TO MOVE · EDGE TO RESIZE · RIGHT-CLICK TO DELETE · ZOOM ABOVE",
 
   "tracks.title": "TRACKS",
   "tracks.total": (params) => `${params.count} TOTAL`,

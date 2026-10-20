@@ -59,6 +59,7 @@
 
   let canvas = $state<HTMLCanvasElement>();
   let dragging = $state(false);
+  let cursor = $state("crosshair");
   let preview = $state<Preview | null>(null);
   let drag: DragState | null = null;
   let height = $derived(
@@ -147,6 +148,7 @@
       const track = tracks.find((item) => item.id === hit.trackId);
       const clip = track?.clips.find((item) => item.id === hit.clipId);
       if (!clip) return;
+      cursor = hit.mode === "move" ? "grab" : "ew-resize";
       const note =
         hit.kind === "note"
           ? clip.notes.find((item) => item.id === hit.noteId)
@@ -190,6 +192,7 @@
     }
 
     dragging = true;
+    cursor = "crosshair";
     preview = null;
     canvas.setPointerCapture(event.pointerId);
     onSeek?.(secondsAtX(canvas, event.clientX, duration));
@@ -261,13 +264,28 @@
         };
       }
 
+      cursor = hit.mode === "move" ? "grabbing" : "ew-resize";
       event.preventDefault();
       return;
     }
 
     if (dragging) {
+      cursor = "crosshair";
       onSeek?.(secondsAtX(canvas, event.clientX, duration));
+      return;
     }
+
+    const hover = hitTestTimeline(
+      canvas,
+      { tracks, duration, playhead, empty: t("timeline.empty") },
+      event.clientX,
+      event.clientY,
+    );
+    cursor = hover
+      ? hover.mode === "move"
+        ? "grab"
+        : "ew-resize"
+      : "crosshair";
   }
 
   function handlePointerUp(event: PointerEvent) {
@@ -302,12 +320,18 @@
     drag = null;
     preview = null;
     dragging = false;
+    cursor = "crosshair";
   }
 
   function handlePointerCancel() {
     drag = null;
     preview = null;
     dragging = false;
+    cursor = "crosshair";
+  }
+
+  function handlePointerLeave() {
+    if (!drag) cursor = "crosshair";
   }
 </script>
 
@@ -326,12 +350,13 @@
   <div class="timeline-body">
     <canvas
       class="timeline-canvas"
-      style={`height: ${height}px`}
+      style={`height: ${height}px; cursor: ${cursor};`}
       bind:this={canvas}
       onpointerdown={handlePointerDown}
       onpointermove={handlePointerMove}
       onpointerup={handlePointerUp}
       onpointercancel={handlePointerCancel}
+      onpointerleave={handlePointerLeave}
     ></canvas>
   </div>
   <div class="section-foot">

@@ -159,6 +159,42 @@ body {
   padding: 14px 22px 0;
 }
 
+.piano-toolbar {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 8px 22px;
+  border-bottom: 1px solid var(--line);
+}
+
+.piano-toolbar .label {
+  width: auto;
+  margin-left: 8px;
+}
+
+.piano-toolbar .label:first-child {
+  margin-left: 0;
+}
+
+.piano-toolbar .readout {
+  min-width: 42px;
+  text-align: center;
+}
+
+.tool-button {
+  min-width: 24px;
+  padding: 3px 7px;
+  font-size: 11px;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.piano-scroll {
+  flex: 1 1 160px;
+  min-width: 120px;
+}
+
 .piano-canvas {
   display: block;
   width: 100%;

@@ -49,7 +49,12 @@ export const zhCN = {
   "piano.title": "钢琴卷帘",
   "piano.empty": "先选择一个片段",
   "piano.meta": (params) => `${params.clip} · ${params.notes} 音符`,
-  "piano.hint": "点击空白加音符 · 拖动移动 · 拖右缘缩放 · 右键删除",
+  "piano.zoomPitch": "音高",
+  "piano.zoomTime": "时间",
+  "piano.zoomIn": "放大",
+  "piano.zoomOut": "缩小",
+  "piano.scroll": "横向滚动",
+  "piano.hint": "点击空白加音符 · 拖动移动 · 边缘缩放 · 右键删除 · 上方控件缩放",
 
   "tracks.title": "轨道",
   "tracks.total": (params) => `共 ${params.count} 条`,
