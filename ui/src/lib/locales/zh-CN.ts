@@ -40,7 +40,7 @@ export const zhCN = {
   "timeline.playhead": (params) => `T+${params.seconds} 秒`,
   "timeline.trackMeta": (params) =>
     `正弦 ${params.frequency} Hz / ${params.devices} 设备`,
-  "timeline.silenceMeta": (params) => `静音 / ${params.devices} 设备`,
+  "timeline.silenceMeta": (params) => `音符轨 / ${params.devices} 设备`,
   "timeline.clipMeta": (params) =>
     `${params.clips} 个片段 / ${params.notes} 音符`,
 
@@ -59,7 +59,7 @@ export const zhCN = {
 
   "notes.title": "音符",
   "notes.total": (params) => `共 ${params.count} 个`,
-  "notes.empty": "还没有音符",
+  "notes.empty": "片段还没有音符。在下方添加，或用钢琴卷帘点击空白。",
   "notes.add": "添加音符",
   "notes.pitch": "音高",
   "notes.start": "起点",
@@ -101,15 +101,17 @@ export const zhCN = {
   "tracks.title": "轨道",
   "tracks.total": (params) => `共 ${params.count} 条`,
   "tracks.namePlaceholder": "轨道名称",
-  "tracks.source.sine": "正弦",
-  "tracks.source.silence": "静音",
+  "tracks.source.sine": "正弦持续音",
+  "tracks.source.silence": "音符轨",
   "tracks.add": "添加",
   "tracks.empty": "还没有轨道",
   "tracks.removeTitle": "删除轨道",
   "tracks.defaultName": (params) => `轨道 ${params.index}`,
+  "tracks.sourceHint":
+    "音符轨：片段里的音符发声；正弦持续音：整轨持续发声。",
   "tracks.meta.sine": (params) =>
-    `正弦 ${params.frequency} Hz · ${params.devices} 设备`,
-  "tracks.meta.silence": (params) => `静音 · ${params.devices} 设备`,
+    `正弦持续音 ${params.frequency} Hz · ${params.devices} 设备`,
+  "tracks.meta.silence": (params) => `音符轨 · ${params.devices} 设备`,
 
   "inspector.title": "检查器",
   "inspector.none": "无",
@@ -117,8 +119,8 @@ export const zhCN = {
   "inspector.addGain": "+ 增益",
   "inspector.removeDeviceTitle": "删除设备",
   "inspector.source.sine": (params) =>
-    `正弦 ${params.frequency} Hz`,
-  "inspector.source.silence": "静音",
+    `正弦持续音 ${params.frequency} Hz`,
+  "inspector.source.silence": "音符轨",
 
   "device.kind.gain": "增益",
 

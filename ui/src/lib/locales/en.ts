@@ -44,7 +44,7 @@ export const en: Record<MessageKey, Message> = {
   "timeline.playhead": (params) => `T+${params.seconds} S`,
   "timeline.trackMeta": (params) =>
     `SINE ${params.frequency} HZ / ${params.devices} DEV`,
-  "timeline.silenceMeta": (params) => `SILENCE / ${params.devices} DEV`,
+  "timeline.silenceMeta": (params) => `NOTE TRACK / ${params.devices} DEV`,
   "timeline.clipMeta": (params) =>
     `${params.clips} CLIPS / ${params.notes} NOTES`,
 
@@ -63,7 +63,8 @@ export const en: Record<MessageKey, Message> = {
 
   "notes.title": "NOTES",
   "notes.total": (params) => `${params.count} TOTAL`,
-  "notes.empty": "NO NOTES",
+  "notes.empty":
+    "NO NOTES YET · ADD BELOW OR CLICK THE PIANO ROLL",
   "notes.add": "ADD NOTE",
   "notes.pitch": "PITCH",
   "notes.start": "START",
@@ -105,23 +106,26 @@ export const en: Record<MessageKey, Message> = {
   "tracks.title": "TRACKS",
   "tracks.total": (params) => `${params.count} TOTAL`,
   "tracks.namePlaceholder": "TRACK NAME",
-  "tracks.source.sine": "SINE",
-  "tracks.source.silence": "SILENCE",
+  "tracks.source.sine": "SINE DRONE",
+  "tracks.source.silence": "NOTE TRACK",
   "tracks.add": "ADD",
   "tracks.empty": "NO TRACKS",
   "tracks.removeTitle": "Remove track",
   "tracks.defaultName": (params) => `Track ${params.index}`,
+  "tracks.sourceHint":
+    "NOTE TRACK PLAYS CLIP NOTES · SINE DRONE SOUNDS CONTINUOUSLY.",
   "tracks.meta.sine": (params) =>
-    `SINE ${params.frequency} HZ · ${params.devices} DEV`,
-  "tracks.meta.silence": (params) => `SILENCE · ${params.devices} DEV`,
+    `SINE DRONE ${params.frequency} HZ · ${params.devices} DEV`,
+  "tracks.meta.silence": (params) => `NOTE TRACK · ${params.devices} DEV`,
 
   "inspector.title": "INSPECTOR",
   "inspector.none": "NONE",
   "inspector.empty": "NO TRACK SELECTED",
   "inspector.addGain": "+ GAIN",
   "inspector.removeDeviceTitle": "Remove device",
-  "inspector.source.sine": (params) => `SINE ${params.frequency} HZ`,
-  "inspector.source.silence": "SILENCE",
+  "inspector.source.sine": (params) =>
+    `SINE DRONE ${params.frequency} HZ`,
+  "inspector.source.silence": "NOTE TRACK",
 
   "device.kind.gain": "GAIN",
 

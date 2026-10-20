@@ -567,6 +567,16 @@ body {
   border-bottom: 1px solid var(--line);
 }
 
+.form-hint {
+  margin: 0;
+  padding: 7px 22px 9px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 9px;
+  line-height: 1.6;
+}
+
 .text-input {
   min-width: 0;
   border: 1px solid var(--line);

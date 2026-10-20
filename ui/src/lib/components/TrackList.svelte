@@ -18,7 +18,7 @@
   let { tracks, selectedId, busy, onSelect, onRemove, onAdd }: Props = $props();
 
   let name = $state("");
-  let source = $state<"sine" | "silence">("sine");
+  let source = $state<"sine" | "silence">("silence");
   let frequency = $state(220);
 
   function submit() {
@@ -65,8 +65,8 @@
       bind:value={name}
     />
     <select class="text-input" value={source} onchange={handleSource}>
-      <option value="sine">{t("tracks.source.sine")}</option>
       <option value="silence">{t("tracks.source.silence")}</option>
+      <option value="sine">{t("tracks.source.sine")}</option>
     </select>
     <input
       class="text-input number"
@@ -80,6 +80,7 @@
       {t("tracks.add")}
     </button>
   </div>
+  <p class="form-hint">{t("tracks.sourceHint")}</p>
 
   <div class="track-list">
     {#if tracks.length === 0}
