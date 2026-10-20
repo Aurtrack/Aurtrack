@@ -1,6 +1,7 @@
 <script lang="ts">
   import { onMount } from "svelte";
 
+  import { formatNumber, t } from "../i18n.svelte";
   import { drawTimeline, secondsAtX, type TimelineTrack } from "../timeline";
 
   interface Props {
@@ -19,14 +20,24 @@
 
   $effect(() => {
     if (!canvas) return;
-    drawTimeline(canvas, { tracks, duration, playhead });
+    drawTimeline(canvas, {
+      tracks,
+      duration,
+      playhead,
+      empty: t("timeline.empty"),
+    });
   });
 
   onMount(() => {
     if (!canvas) return;
     const observer = new ResizeObserver(() => {
       if (!canvas) return;
-      drawTimeline(canvas, { tracks, duration, playhead });
+      drawTimeline(canvas, {
+        tracks,
+        duration,
+        playhead,
+        empty: t("timeline.empty"),
+      });
     });
     observer.observe(canvas);
     return () => observer.disconnect();
@@ -59,9 +70,14 @@
 <section class="section">
   <div class="section-head">
     <span class="index">01</span>
-    <span class="title">TIMELINE</span>
+    <span class="title">{t("timeline.title")}</span>
     <span class="rule"></span>
-    <span class="meta">{tracks.length} TRACKS / 5.00 S</span>
+    <span class="meta">
+      {t("timeline.meta", {
+        tracks: tracks.length,
+        duration: formatNumber(duration, 2),
+      })}
+    </span>
   </div>
   <div class="timeline-body">
     <canvas
@@ -75,7 +91,7 @@
     ></canvas>
   </div>
   <div class="section-foot">
-    <span>CLICK TO SEEK</span>
-    <span>T+{playhead.toFixed(2)} S</span>
+    <span>{t("timeline.hint")}</span>
+    <span>{t("timeline.playhead", { seconds: formatNumber(playhead, 2) })}</span>
   </div>
 </section>

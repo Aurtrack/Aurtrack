@@ -22,6 +22,13 @@
     type Project,
     type ProjectState,
   } from "./lib/api";
+  import {
+    errorText,
+    formatClock,
+    formatNumber,
+    t,
+    type MessageKey,
+  } from "./lib/i18n.svelte";
 
   type TrackResult = { track_id: string };
   type RenderResult = {
@@ -29,6 +36,10 @@
     frames: number;
     peak: number;
     rms: number;
+  };
+  type Status = {
+    key: MessageKey;
+    params?: Record<string, string | number>;
   };
 
   const duration = 5;
@@ -38,9 +49,10 @@
   let gain = $state(50);
   let busy = $state(false);
   let playing = $state(false);
-  let audioAvailable = $state(true);
-  let audioLabel = $state("AUDIO --");
-  let status = $state("正在连接会话…");
+  let audioState = $state<"ok" | "none" | "unknown">("unknown");
+  let sampleRate = $state(48_000);
+  let status = $state<Status>({ key: "status.connecting" });
+  let statusText = $derived(t(status.key, status.params ?? {}));
   let logLines = $state<string[]>([]);
   let playhead = $state(0);
   let commandCount = $state(0);
@@ -57,12 +69,44 @@
       id: track.id,
       name: track.name,
       frequency: track.source.kind === "sine" ? track.source.frequency : null,
-      deviceCount: track.devices.length,
+      meta:
+        track.source.kind === "sine"
+          ? t("timeline.trackMeta", {
+              frequency: formatNumber(track.source.frequency, 2),
+              devices: track.devices.length,
+            })
+          : t("timeline.silenceMeta", {
+              devices: track.devices.length,
+            }),
     })),
   );
 
+  function setStatus(
+    key: MessageKey,
+    params?: Record<string, string | number>,
+  ) {
+    status = { key, params };
+  }
+
+  function errorMessageFor(error: unknown): string {
+    if (
+      typeof error === "object" &&
+      error !== null &&
+      "code" in error &&
+      "message" in error
+    ) {
+      const detail = error as { code: string; message: string };
+      return errorText(detail.code, detail.message);
+    }
+    return errorMessage(error);
+  }
+
+  function fail(key: MessageKey, error: unknown) {
+    setStatus(key, { message: errorMessageFor(error) });
+  }
+
   function log(line: string) {
-    const stamp = new Date().toLocaleTimeString();
+    const stamp = formatClock(new Date());
     logLines = [`[${stamp}] ${line}`, ...logLines].slice(0, 80);
   }
 
@@ -77,11 +121,10 @@
   async function refreshAudio() {
     try {
       const info = await audioInfo();
-      audioAvailable = info.available;
-      audioLabel = info.available ? `AUDIO ${info.sample_rate} HZ` : "NO AUDIO";
+      audioState = info.available ? "ok" : "none";
+      sampleRate = info.sample_rate;
     } catch {
-      audioAvailable = false;
-      audioLabel = "AUDIO ?";
+      audioState = "unknown";
     }
   }
 
@@ -108,16 +151,16 @@
       const state = await projectState();
       project = state.project;
       if (!state.project) {
-        await call("project.create", { name: "Aurtrack Project" });
+        await call("project.create", { name: t("project.defaultName") });
         const created = await projectState();
         project = created.project;
       }
       selectedTrackId = project?.tracks[0]?.id ?? "";
       const description = await call<{ commands: { id: string }[] }>("describe");
       commandCount = description.commands.length;
-      status = "会话就绪。添加轨道，或按 PLAY。";
+      setStatus("status.ready");
     } catch (error) {
-      status = `初始化失败：${errorMessage(error)}`;
+      fail("status.initFailed", error);
     }
   }
 
@@ -137,9 +180,9 @@
       await refreshProject();
       selectedTrackId = result.track_id;
       await reloadIfPlaying();
-      status = `已创建 ${result.track_id}`;
+      setStatus("status.trackCreated", { id: result.track_id });
     } catch (error) {
-      status = `建轨失败：${errorMessage(error)}`;
+      fail("status.trackCreateFailed", error);
     } finally {
       busy = false;
     }
@@ -152,9 +195,9 @@
       await run("track.remove", { track_id: trackId });
       await refreshProject();
       await reloadIfPlaying();
-      status = `已删除 ${trackId}`;
+      setStatus("status.trackRemoved", { id: trackId });
     } catch (error) {
-      status = `删除轨道失败：${errorMessage(error)}`;
+      fail("status.trackRemoveFailed", error);
     } finally {
       busy = false;
     }
@@ -167,9 +210,9 @@
       await run("device.add", { track_id: trackId, kind: "gain" });
       await refreshProject();
       await reloadIfPlaying();
-      status = "已添加 gain";
+      setStatus("status.gainAdded");
     } catch (error) {
-      status = `添加设备失败：${errorMessage(error)}`;
+      fail("status.gainAddFailed", error);
     } finally {
       busy = false;
     }
@@ -182,9 +225,9 @@
       await run("device.remove", { path });
       await refreshProject();
       await reloadIfPlaying();
-      status = "已删除设备";
+      setStatus("status.deviceRemoved");
     } catch (error) {
-      status = `删除设备失败：${errorMessage(error)}`;
+      fail("status.deviceRemoveFailed", error);
     } finally {
       busy = false;
     }
@@ -205,7 +248,7 @@
       }
       await refreshProject();
     } catch (error) {
-      status = `设置增益失败：${errorMessage(error)}`;
+      fail("status.gainSetFailed", error);
     }
   }
 
@@ -225,9 +268,9 @@
       await run("undo", { steps: 1 });
       await refreshProject();
       await reloadIfPlaying();
-      status = "已撤销";
+      setStatus("status.undone");
     } catch (error) {
-      status = `撤销失败：${errorMessage(error)}`;
+      fail("status.undoFailed", error);
     } finally {
       busy = false;
     }
@@ -240,9 +283,9 @@
       await run("redo", { steps: 1 });
       await refreshProject();
       await reloadIfPlaying();
-      status = "已重做";
+      setStatus("status.redone");
     } catch (error) {
-      status = `重做失败：${errorMessage(error)}`;
+      fail("status.redoFailed", error);
     } finally {
       busy = false;
     }
@@ -254,9 +297,9 @@
       await setMasterGain(gain / 100);
       await transportPlay();
       playing = true;
-      status = "PLAYING";
+      setStatus("status.playing");
     } catch (error) {
-      status = `播放失败：${errorMessage(error)}`;
+      fail("status.playFailed", error);
     }
   }
 
@@ -264,9 +307,9 @@
     try {
       await transportStop();
       playing = false;
-      status = "STOPPED";
+      setStatus("status.stopped");
     } catch (error) {
-      status = `停止失败：${errorMessage(error)}`;
+      fail("status.stopFailed", error);
     }
   }
 
@@ -282,7 +325,7 @@
     try {
       await transportStop();
       playing = false;
-      status = "正在渲染 WAV…";
+      setStatus("status.rendering");
       const path = await renderPath();
       const data = await run<RenderResult>("render.segment", {
         duration_seconds: duration,
@@ -290,9 +333,13 @@
       });
       await openFile(data.path);
       playhead = duration;
-      status = `已渲染：peak ${data.peak.toFixed(3)} · rms ${data.rms.toFixed(3)} · ${data.frames} 帧`;
+      setStatus("status.rendered", {
+        peak: formatNumber(data.peak, 3),
+        rms: formatNumber(data.rms, 3),
+        frames: formatNumber(data.frames),
+      });
     } catch (error) {
-      status = `渲染失败：${errorMessage(error)}`;
+      fail("status.renderFailed", error);
     } finally {
       busy = false;
     }
@@ -335,7 +382,7 @@
 </script>
 
 <main class="sheet">
-  <Header {audioLabel} />
+  <Header {audioState} {sampleRate} />
   <Timeline tracks={timelineTracks} {duration} {playhead} onSeek={seek} />
   <div class="split">
     <div class="column">
@@ -360,7 +407,7 @@
         {playing}
         {busy}
         {gain}
-        {status}
+        status={statusText}
         {commandCount}
         onPlay={play}
         onStop={stop}

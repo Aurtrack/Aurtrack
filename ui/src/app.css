@@ -8,6 +8,8 @@
   --line-strong: #8d98a8;
   --blue: #2f5fd0;
   --blue-dark: #1e3f8f;
+  --mono: "Cascadia Mono", Consolas, "Microsoft YaHei", "PingFang SC",
+    monospace;
 }
 
 * {
@@ -72,6 +74,40 @@ body {
   border: 1px solid var(--blue);
   color: var(--blue);
   padding: 2px 7px;
+}
+
+.lang-toggle {
+  padding: 2px 7px;
+  font-size: 8px;
+  line-height: 1.4;
+  letter-spacing: 0.08em;
+}
+
+:lang(zh-CN) .title {
+  letter-spacing: 0.1em;
+}
+
+:lang(zh-CN) .brand-sub {
+  letter-spacing: 0.08em;
+}
+
+:lang(zh-CN) button,
+:lang(zh-CN) .title,
+:lang(zh-CN) .meta,
+:lang(zh-CN) .label,
+:lang(zh-CN) .status,
+:lang(zh-CN) .log,
+:lang(zh-CN) .empty,
+:lang(zh-CN) .track-meta,
+:lang(zh-CN) .device-kind,
+:lang(zh-CN) .brand-sub,
+:lang(zh-CN) .head-meta,
+:lang(zh-CN) .section-foot,
+:lang(zh-CN) .text-input,
+:lang(zh-CN) .track-id,
+:lang(zh-CN) .device-id,
+:lang(zh-CN) .readout {
+  font-family: var(--mono);
 }
 
 .section {
@@ -267,7 +303,7 @@ body {
 }
 
 .track-name {
-  font-family: "Bahnschrift", "Segoe UI", sans-serif;
+  font-family: "Bahnschrift", "Microsoft YaHei", "Segoe UI", sans-serif;
   font-size: 11px;
   letter-spacing: 0.04em;
   white-space: nowrap;

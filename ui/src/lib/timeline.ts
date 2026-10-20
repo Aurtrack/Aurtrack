@@ -2,13 +2,14 @@ export type TimelineTrack = {
   id: string;
   name: string;
   frequency: number | null;
-  deviceCount: number;
+  meta: string;
 };
 
 export type TimelineView = {
   tracks: TimelineTrack[];
   duration: number;
   playhead: number;
+  empty: string;
 };
 
 const PADDING = 14;
@@ -25,6 +26,11 @@ const COLORS = {
   muted: "#5f6878",
   white: "#ffffff",
 };
+
+const SANS_FONT =
+  "'Bahnschrift', 'Microsoft YaHei', 'PingFang SC', 'Segoe UI', sans-serif";
+const MONO_FONT =
+  "'Cascadia Mono', Consolas, 'Microsoft YaHei', 'PingFang SC', monospace";
 
 export function drawTimeline(
   canvas: HTMLCanvasElement,
@@ -69,7 +75,7 @@ export function drawTimeline(
   context.lineTo(PADDING + usableWidth, PADDING + RULER_HEIGHT);
   context.stroke();
 
-  context.font = "10px Consolas, monospace";
+  context.font = `10px ${MONO_FONT}`;
   for (let index = 0; index <= view.duration * 2; index += 1) {
     const second = index / 2;
     const x = PADDING + second * pixelsPerSecond;
@@ -87,8 +93,8 @@ export function drawTimeline(
 
   if (view.tracks.length === 0) {
     context.fillStyle = COLORS.muted;
-    context.font = "10px Consolas, monospace";
-    context.fillText("NO TRACKS", PADDING + 4, laneTop + 18);
+    context.font = `10px ${MONO_FONT}`;
+    context.fillText(view.empty, PADDING + 4, laneTop + 18);
   } else {
     const laneHeight = laneArea / view.tracks.length;
     for (let index = 0; index < view.tracks.length; index += 1) {
@@ -113,14 +119,10 @@ export function drawTimeline(
           blockH - 1,
         );
         context.fillStyle = COLORS.muted;
-        context.font = "11px 'Bahnschrift', 'Segoe UI', sans-serif";
+        context.font = `11px ${SANS_FONT}`;
         context.fillText(track.name, PADDING + 10, blockY + 18);
-        context.font = "9px Consolas, monospace";
-        context.fillText(
-          `SILENCE / ${track.deviceCount} DEV`,
-          PADDING + 10,
-          blockY + 32,
-        );
+        context.font = `9px ${MONO_FONT}`;
+        context.fillText(track.meta, PADDING + 10, blockY + 32);
       } else {
         context.fillStyle = COLORS.blue;
         context.fillRect(PADDING, blockY, usableWidth, blockH);
@@ -135,7 +137,7 @@ export function drawTimeline(
         context.fillStyle = COLORS.white;
         context.fillRect(PADDING + 8, blockY + 7, 24, 14);
         context.fillStyle = COLORS.blue;
-        context.font = "bold 9px Consolas, monospace";
+        context.font = `bold 9px ${MONO_FONT}`;
         context.fillText(
           String(index + 1).padStart(2, "0"),
           PADDING + 12,
@@ -143,15 +145,11 @@ export function drawTimeline(
         );
 
         context.fillStyle = COLORS.white;
-        context.font = "11px 'Bahnschrift', 'Segoe UI', sans-serif";
+        context.font = `11px ${SANS_FONT}`;
         context.fillText(track.name, PADDING + 40, blockY + 19);
         context.globalAlpha = 0.75;
-        context.font = "9px Consolas, monospace";
-        context.fillText(
-          `${track.frequency.toFixed(2)} HZ / ${track.deviceCount} DEV`,
-          PADDING + 40,
-          blockY + 33,
-        );
+        context.font = `9px ${MONO_FONT}`;
+        context.fillText(track.meta, PADDING + 40, blockY + 33);
         context.globalAlpha = 1;
       }
     }

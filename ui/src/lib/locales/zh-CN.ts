@@ -1,0 +1,97 @@
+import type { Message } from "./types";
+
+export const zhCN = {
+  "app.tagline": "平面蓝图 / 音频工作站",
+
+  "header.audio": (params) => `音频 ${params.rate} Hz`,
+  "header.noAudio": "无音频设备",
+  "header.audioUnknown": "音频未知",
+  "header.build": (params) => `构建 ${params.version}`,
+  "header.preAlpha": "预览版",
+  "header.switchLanguage": "切换语言",
+
+  "timeline.title": "时间线",
+  "timeline.meta": (params) => `${params.tracks} 轨 / ${params.duration} 秒`,
+  "timeline.empty": "还没有轨道",
+  "timeline.hint": "点击定位",
+  "timeline.playhead": (params) => `T+${params.seconds} 秒`,
+  "timeline.trackMeta": (params) =>
+    `正弦 ${params.frequency} Hz / ${params.devices} 设备`,
+  "timeline.silenceMeta": (params) => `静音 / ${params.devices} 设备`,
+
+  "tracks.title": "轨道",
+  "tracks.total": (params) => `共 ${params.count} 条`,
+  "tracks.namePlaceholder": "轨道名称",
+  "tracks.source.sine": "正弦",
+  "tracks.source.silence": "静音",
+  "tracks.add": "添加",
+  "tracks.empty": "还没有轨道",
+  "tracks.removeTitle": "删除轨道",
+  "tracks.defaultName": (params) => `轨道 ${params.index}`,
+  "tracks.meta.sine": (params) =>
+    `正弦 ${params.frequency} Hz · ${params.devices} 设备`,
+  "tracks.meta.silence": (params) => `静音 · ${params.devices} 设备`,
+
+  "inspector.title": "检查器",
+  "inspector.none": "无",
+  "inspector.empty": "未选择轨道",
+  "inspector.addGain": "+ 增益",
+  "inspector.removeDeviceTitle": "删除设备",
+  "inspector.source.sine": (params) =>
+    `正弦 ${params.frequency} Hz`,
+  "inspector.source.silence": "静音",
+
+  "device.kind.gain": "增益",
+
+  "transport.title": "走带",
+  "transport.commands": (params) => `${params.count} 条命令`,
+  "transport.master": "主音量",
+  "transport.play": "播放",
+  "transport.stop": "停止",
+  "transport.render": "渲染 WAV",
+  "transport.undo": "撤销",
+  "transport.redo": "重做",
+  "transport.status": (params) => `状态：${params.status}`,
+
+  "log.title": "命令日志",
+  "log.entries": (params) => `${params.count} 条记录`,
+
+  "project.defaultName": "Aurtrack 工程",
+
+  "status.connecting": "正在连接会话…",
+  "status.ready": "会话就绪。添加轨道，或按播放。",
+  "status.initFailed": (params) => `初始化失败：${params.message}`,
+  "status.trackCreated": (params) => `已创建 ${params.id}`,
+  "status.trackCreateFailed": (params) => `建轨失败：${params.message}`,
+  "status.trackRemoved": (params) => `已删除 ${params.id}`,
+  "status.trackRemoveFailed": (params) => `删除轨道失败：${params.message}`,
+  "status.gainAdded": "已添加增益",
+  "status.gainAddFailed": (params) => `添加设备失败：${params.message}`,
+  "status.deviceRemoved": "已删除设备",
+  "status.deviceRemoveFailed": (params) => `删除设备失败：${params.message}`,
+  "status.gainSetFailed": (params) => `设置增益失败：${params.message}`,
+  "status.undone": "已撤销",
+  "status.undoFailed": (params) => `撤销失败：${params.message}`,
+  "status.redone": "已重做",
+  "status.redoFailed": (params) => `重做失败：${params.message}`,
+  "status.playing": "播放中",
+  "status.playFailed": (params) => `播放失败：${params.message}`,
+  "status.stopped": "已停止",
+  "status.stopFailed": (params) => `停止失败：${params.message}`,
+  "status.rendering": "正在渲染 WAV…",
+  "status.rendered": (params) =>
+    `已渲染：峰值 ${params.peak} · 均方根 ${params.rms} · ${params.frames} 帧`,
+  "status.renderFailed": (params) => `渲染失败：${params.message}`,
+
+  "error.not_found": "找不到目标对象",
+  "error.invalid_args": "参数不合法",
+  "error.ipc_error": "会话连接出错",
+  "error.nothing_to_undo": "没有可撤销的操作",
+  "error.nothing_to_redo": "没有可重做的操作",
+  "error.audio_unavailable": "没有可用的音频设备",
+  "error.unknown_command": "未知命令",
+  "error.internal_error": "内部错误",
+  "error.io_error": "读写文件失败",
+} satisfies Record<string, Message>;
+
+export type MessageKey = keyof typeof zhCN;

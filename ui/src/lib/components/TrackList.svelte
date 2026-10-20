@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { Track } from "../api";
+  import { formatNumber, t } from "../i18n.svelte";
 
   interface Props {
     tracks: Track[];
@@ -23,7 +24,10 @@
   function submit() {
     const trimmed = name.trim();
     onAdd({
-      name: trimmed.length > 0 ? trimmed : `Track ${tracks.length + 1}`,
+      name:
+        trimmed.length > 0
+          ? trimmed
+          : t("tracks.defaultName", { index: tracks.length + 1 }),
       source,
       frequency: Number(frequency),
     });
@@ -36,25 +40,33 @@
   }
 
   function sourceLabel(track: Track): string {
-    return track.source.kind === "sine"
-      ? `SINE ${track.source.frequency.toFixed(1)} HZ`
-      : "SILENCE";
+    if (track.source.kind === "sine") {
+      return t("tracks.meta.sine", {
+        frequency: formatNumber(track.source.frequency, 1),
+        devices: track.devices.length,
+      });
+    }
+    return t("tracks.meta.silence", { devices: track.devices.length });
   }
 </script>
 
 <section class="section">
   <div class="section-head">
     <span class="index">02</span>
-    <span class="title">TRACKS</span>
+    <span class="title">{t("tracks.title")}</span>
     <span class="rule"></span>
-    <span class="meta">{tracks.length} TOTAL</span>
+    <span class="meta">{t("tracks.total", { count: tracks.length })}</span>
   </div>
 
   <div class="track-form">
-    <input class="text-input" placeholder="TRACK NAME" bind:value={name} />
+    <input
+      class="text-input"
+      placeholder={t("tracks.namePlaceholder")}
+      bind:value={name}
+    />
     <select class="text-input" value={source} onchange={handleSource}>
-      <option value="sine">SINE</option>
-      <option value="silence">SILENCE</option>
+      <option value="sine">{t("tracks.source.sine")}</option>
+      <option value="silence">{t("tracks.source.silence")}</option>
     </select>
     <input
       class="text-input number"
@@ -64,25 +76,25 @@
       bind:value={frequency}
       disabled={source === "silence"}
     />
-    <button class="primary" disabled={busy} onclick={submit}>ADD</button>
+    <button class="primary" disabled={busy} onclick={submit}>
+      {t("tracks.add")}
+    </button>
   </div>
 
   <div class="track-list">
     {#if tracks.length === 0}
-      <p class="empty">NO TRACKS</p>
+      <p class="empty">{t("tracks.empty")}</p>
     {/if}
     {#each tracks as track (track.id)}
       <div class="track-row" class:selected={track.id === selectedId}>
         <button class="track-select" onclick={() => onSelect(track.id)}>
           <span class="track-id">{track.id}</span>
           <span class="track-name">{track.name}</span>
-          <span class="track-meta">
-            {sourceLabel(track)} · {track.devices.length} DEV
-          </span>
+          <span class="track-meta">{sourceLabel(track)}</span>
         </button>
         <button
           class="track-remove"
-          title="删除轨道"
+          title={t("tracks.removeTitle")}
           disabled={busy}
           onclick={() => onRemove(track.id)}
         >
