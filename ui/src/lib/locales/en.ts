@@ -60,6 +60,22 @@ export const en: Record<MessageKey, Message> = {
   "piano.scroll": "Horizontal scroll",
   "piano.hint": "CLICK TO ADD · DRAG TO MOVE · EDGE TO RESIZE · RIGHT-CLICK TO DELETE · ZOOM ABOVE",
 
+  "panel.timeline": "TIMELINE",
+  "panel.piano": "PIANO ROLL",
+  "panel.tracks": "TRACKS",
+  "panel.clips": "CLIPS",
+  "panel.inspector": "INSPECTOR",
+  "panel.transport": "TRANSPORT",
+  "panel.log": "COMMAND LOG",
+
+  "layout.workspace": "WORKSPACE",
+  "layout.hint": "DRAG DIVIDERS · SPLIT OR CLOSE FROM PANE HEADER",
+  "layout.reset": "RESET LAYOUT",
+  "layout.panel": "Change panel",
+  "layout.splitRow": "Split side by side",
+  "layout.splitColumn": "Split top/bottom",
+  "layout.close": "Close pane",
+
   "tracks.title": "TRACKS",
   "tracks.total": (params) => `${params.count} TOTAL`,
   "tracks.namePlaceholder": "TRACK NAME",

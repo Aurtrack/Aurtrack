@@ -16,9 +16,15 @@
   box-sizing: border-box;
 }
 
+html {
+  height: 100%;
+}
+
 body {
   margin: 0;
-  min-height: 100vh;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
   color: var(--ink);
   font-family: "Bahnschrift", "DIN Alternate", "Segoe UI", "Microsoft YaHei",
     sans-serif;
@@ -28,11 +34,16 @@ body {
 }
 
 .sheet {
-  width: calc(100% - 32px);
-  max-width: 1080px;
-  margin: 24px auto;
-  border: 1px solid var(--line-strong);
+  width: 100%;
+  max-width: none;
+  height: 100vh;
+  min-height: 0;
+  margin: 0;
+  border: 0;
   background: var(--sheet);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .sheet-head {
@@ -42,6 +53,7 @@ body {
   gap: 16px;
   padding: 18px 22px 14px;
   border-bottom: 1px solid var(--line-strong);
+  flex: 0 0 auto;
 }
 
 .brand-name {
@@ -160,12 +172,16 @@ body {
 }
 
 .piano-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 6px;
   padding: 8px 22px;
   border-bottom: 1px solid var(--line);
+  background: var(--sheet);
 }
 
 .piano-toolbar .label {
@@ -230,6 +246,155 @@ body {
   font-size: 9px;
   letter-spacing: 0.08em;
   color: var(--muted);
+}
+
+.layout-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 5px 12px;
+  border-bottom: 1px solid var(--line-strong);
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.08em;
+  color: var(--muted);
+  flex: 0 0 auto;
+}
+
+.layout-title {
+  color: var(--ink);
+}
+
+.layout-hint {
+  flex: 1;
+  text-align: right;
+}
+
+.layout-root {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+}
+
+.layout-split {
+  display: flex;
+  flex: 1;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.layout-split.row {
+  flex-direction: row;
+}
+
+.layout-split.column {
+  flex-direction: column;
+}
+
+.layout-slot {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.layout-splitter {
+  flex: 0 0 5px;
+  background: var(--line);
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.layout-splitter.vertical {
+  cursor: row-resize;
+}
+
+.layout-splitter:hover,
+.layout-splitter:active {
+  background: var(--blue);
+}
+
+.pane {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--sheet);
+  border: 1px solid var(--line-strong);
+  border-top: 0;
+  border-left: 0;
+}
+
+.pane-head {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 24px;
+  padding: 0 6px;
+  border-bottom: 1px solid var(--line);
+  background: #eef0f1;
+}
+
+.pane-select {
+  height: 18px;
+  max-width: 128px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  padding: 0 3px;
+}
+
+.pane-spacer {
+  flex: 1;
+}
+
+.pane-button {
+  width: 20px;
+  height: 18px;
+  padding: 0;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 12px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.pane-button:hover:not(:disabled) {
+  border-color: var(--blue);
+  color: var(--blue);
+}
+
+.pane-button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.pane-body {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+}
+
+.pane-body .section {
+  border-bottom: 0;
+}
+
+.pane-body .section-head {
+  padding-left: 14px;
+  padding-right: 14px;
+}
+
+.pane-body .section-foot {
+  padding-left: 14px;
+  padding-right: 14px;
 }
 
 .split {

@@ -56,6 +56,22 @@ export const zhCN = {
   "piano.scroll": "横向滚动",
   "piano.hint": "点击空白加音符 · 拖动移动 · 边缘缩放 · 右键删除 · 上方控件缩放",
 
+  "panel.timeline": "时间线",
+  "panel.piano": "钢琴卷帘",
+  "panel.tracks": "轨道",
+  "panel.clips": "片段",
+  "panel.inspector": "检查器",
+  "panel.transport": "走带",
+  "panel.log": "命令日志",
+
+  "layout.workspace": "工作区",
+  "layout.hint": "拖动分隔条调整大小；用窗格头部拆分或关闭",
+  "layout.reset": "重置布局",
+  "layout.panel": "切换面板",
+  "layout.splitRow": "左右拆分",
+  "layout.splitColumn": "上下拆分",
+  "layout.close": "关闭窗格",
+
   "tracks.title": "轨道",
   "tracks.total": (params) => `共 ${params.count} 条`,
   "tracks.namePlaceholder": "轨道名称",
