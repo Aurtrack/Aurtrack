@@ -1,6 +1,6 @@
 //! 第一条竖切的端到端测试：建工程、建轨、加设备、调参、渲染、撤销。
 
-#![allow(clippy::unwrap_used, clippy::expect_used)]
+#![allow(clippy::unwrap_used, clippy::expect_used, clippy::too_many_lines)]
 
 use aurtrack_command::CommandRequest;
 use aurtrack_session::Session;
@@ -93,10 +93,10 @@ fn full_slice_produces_audio_and_undo_restores_it() {
 }
 
 #[test]
-fn describe_lists_eighteen_commands() {
+fn describe_lists_twenty_four_commands() {
     let mut session = Session::default();
     let out = run(&mut session, "describe", json!({}));
-    assert_eq!(out["commands"].as_array().unwrap().len(), 18);
+    assert_eq!(out["commands"].as_array().unwrap().len(), 24);
     assert!(out["project"].is_null());
 }
 
@@ -145,6 +145,27 @@ fn project_save_and_open_round_trip() {
             "value": 0.5
         }),
     );
+    run(
+        &mut session,
+        "clip.create",
+        json!({
+            "track_id": "track-1",
+            "name": "verse",
+            "start": 0.0,
+            "duration": 2.0
+        }),
+    );
+    run(
+        &mut session,
+        "note.add",
+        json!({
+            "path": "/tracks/track-1/clips/clip-1",
+            "pitch": 69,
+            "start": 0.25,
+            "duration": 0.5,
+            "velocity": 0.8
+        }),
+    );
 
     let path = project_temp_path("round-trip");
     let saved = run(&mut session, "project.save", json!({ "path": path }));
@@ -160,11 +181,40 @@ fn project_save_and_open_round_trip() {
         state["project"]["tracks"][0]["devices"][0]["params"]["gain"],
         0.5
     );
+    assert_eq!(state["project"]["tracks"][0]["clips"][0]["id"], "clip-1");
+    assert_eq!(
+        state["project"]["tracks"][0]["clips"][0]["notes"][0]["pitch"],
+        69
+    );
 
     let next = run(&mut opened, "track.create", json!({ "name": "next" }));
     assert_eq!(next["track_id"], "track-2");
 
-    run(&mut opened, "undo", json!({ "steps": 2 }));
+    let clip = run(
+        &mut opened,
+        "clip.create",
+        json!({
+            "track_id": "track-1",
+            "name": "next",
+            "start": 2.0,
+            "duration": 1.0
+        }),
+    );
+    assert_eq!(clip["clip_id"], "clip-2");
+
+    let note = run(
+        &mut opened,
+        "note.add",
+        json!({
+            "path": "/tracks/track-1/clips/clip-2",
+            "pitch": 72,
+            "start": 0.0,
+            "duration": 0.25
+        }),
+    );
+    assert_eq!(note["note_id"], "note-2");
+
+    run(&mut opened, "undo", json!({ "steps": 4 }));
     let state = run(&mut opened, "project.state", json!({}));
     assert!(state["project"].is_null());
 
@@ -172,11 +222,128 @@ fn project_save_and_open_round_trip() {
 }
 
 #[test]
-fn project_open_rejects_unknown_format_version() {
+fn clip_and_note_commands_validate_and_undo() {
+    let mut session = Session::default();
+    run(&mut session, "project.create", json!({ "name": "notes" }));
+    run(
+        &mut session,
+        "track.create",
+        json!({ "name": "lead", "source": "silence" }),
+    );
+
+    let clip = run(
+        &mut session,
+        "clip.create",
+        json!({
+            "track_id": "track-1",
+            "name": "verse",
+            "start": 0.0,
+            "duration": 2.0
+        }),
+    );
+    assert_eq!(clip["clip_id"], "clip-1");
+
+    let note = run(
+        &mut session,
+        "note.add",
+        json!({
+            "path": "/tracks/track-1/clips/clip-1",
+            "pitch": 69,
+            "start": 0.25,
+            "duration": 0.5
+        }),
+    );
+    assert_eq!(note["note_id"], "note-1");
+
+    let error = session
+        .execute(&CommandRequest {
+            cmd: "clip.update".to_string(),
+            args: json!({
+                "path": "/tracks/track-1/clips/clip-1",
+                "duration": 0.25
+            }),
+        })
+        .unwrap_err();
+    assert_eq!(error.code, "invalid_args");
+
+    let updated_clip = run(
+        &mut session,
+        "clip.update",
+        json!({
+            "path": "/tracks/track-1/clips/clip-1",
+            "name": "chorus",
+            "start": 0.5,
+            "duration": 2.0
+        }),
+    );
+    assert_eq!(updated_clip["clip"]["name"], "chorus");
+
+    let updated_note = run(
+        &mut session,
+        "note.update",
+        json!({
+            "path": "/tracks/track-1/clips/clip-1/notes/note-1",
+            "pitch": 72,
+            "start": 0.5,
+            "duration": 0.5,
+            "velocity": 0.5
+        }),
+    );
+    assert_eq!(updated_note["note"]["pitch"], 72);
+
+    let error = session
+        .execute(&CommandRequest {
+            cmd: "note.add".to_string(),
+            args: json!({
+                "path": "/tracks/track-1/clips/clip-1",
+                "pitch": 72,
+                "start": 1.8,
+                "duration": 0.5
+            }),
+        })
+        .unwrap_err();
+    assert_eq!(error.code, "invalid_args");
+
+    run(
+        &mut session,
+        "note.remove",
+        json!({ "path": "/tracks/track-1/clips/clip-1/notes/note-1" }),
+    );
+    let state = run(&mut session, "project.state", json!({}));
+    assert_eq!(
+        state["project"]["tracks"][0]["clips"][0]["notes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+
+    run(&mut session, "undo", json!({}));
+    let state = run(&mut session, "project.state", json!({}));
+    assert_eq!(
+        state["project"]["tracks"][0]["clips"][0]["notes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    let wav = temp_path("note-render");
+    let rendered = run(
+        &mut session,
+        "render.segment",
+        json!({ "duration_seconds": 2, "path": wav }),
+    );
+    assert!(rendered["peak"].as_f64().unwrap() > 0.0);
+    std::fs::remove_file(wav).unwrap();
+}
+
+#[test]
+fn project_open_rejects_old_format_version() {
     let path = project_temp_path("bad-version");
     std::fs::write(
         &path,
-        r#"{"format_version":99,"project":{"name":"x","sample_rate":48000,"tracks":[]}}"#,
+        r#"{"format_version":1,"project":{"name":"x","sample_rate":48000,"tracks":[]}}"#,
     )
     .unwrap();
 

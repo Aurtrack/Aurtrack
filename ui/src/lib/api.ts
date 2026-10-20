@@ -16,6 +16,22 @@ export type Device = {
   params: Record<string, number>;
 };
 
+export type Note = {
+  id: string;
+  pitch: number;
+  start: number;
+  duration: number;
+  velocity: number;
+};
+
+export type Clip = {
+  id: string;
+  name: string;
+  start: number;
+  duration: number;
+  notes: Note[];
+};
+
 export type Source =
   | { kind: "silence" }
   | { kind: "sine"; frequency: number };
@@ -25,6 +41,7 @@ export type Track = {
   name: string;
   source: Source;
   devices: Device[];
+  clips: Clip[];
 };
 
 export type Project = {

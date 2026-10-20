@@ -47,14 +47,20 @@ fn run() -> Result<ExitCode, String> {
     };
 
     let mut backend = if force_local {
-        eprintln!("使用本地运行时");
+        eprintln!("使用本地一次性运行时");
         Backend::local()
-    } else if let Ok(backend) = Backend::remote() {
-        eprintln!("已连接运行中的 Aurtrack");
-        backend
     } else {
-        eprintln!("没有运行中的 Aurtrack，使用本地运行时");
-        Backend::local()
+        match Backend::remote() {
+            Ok(backend) => {
+                eprintln!("已连接运行中的 Aurtrack");
+                backend
+            },
+            Err(error) => {
+                eprintln!("警告：{error}");
+                eprintln!("使用本地一次性运行时，修改不会进入桌面工程；加 --local 可显式选择。");
+                Backend::local()
+            },
+        }
     };
 
     match first.as_str() {
@@ -167,4 +173,5 @@ fn print_help() {
     println!("  aurtrack --stdin");
     println!("  aurtrack --stdin --hold   # 本地运行时读完后保持进程");
     println!("  aurtrack --local describe # 不连接桌面，使用本进程运行时");
+    println!("  默认连接桌面；连不上时警告并使用本地一次性运行时。");
 }

@@ -16,6 +16,7 @@
 )]
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
+use std::ffi::OsString;
 use std::fmt;
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::net::{TcpListener, TcpStream};
@@ -29,7 +30,24 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 const SESSION_FILE: &str = "aurtrack-session.json";
+const SESSION_FILE_ENV: &str = "AURTRACK_SESSION_FILE";
+const SESSION_DIR: &str = "Aurtrack";
 const IO_TIMEOUT: Duration = Duration::from_secs(15);
+
+fn session_dir() -> PathBuf {
+    dirs::cache_dir()
+        .or_else(|| std::env::var_os("LOCALAPPDATA").map(PathBuf::from))
+        .unwrap_or_else(std::env::temp_dir)
+        .join(SESSION_DIR)
+}
+
+fn resolve_session_file(
+    override_path: Option<OsString>,
+    directory: PathBuf,
+    file_name: &str,
+) -> PathBuf {
+    override_path.map_or_else(|| directory.join(file_name), PathBuf::from)
+}
 
 fn session_file() -> PathBuf {
     let name = if cfg!(test) {
@@ -37,7 +55,10 @@ fn session_file() -> PathBuf {
     } else {
         SESSION_FILE
     };
-    std::env::temp_dir().join(name)
+    if cfg!(test) {
+        return session_dir().join(name);
+    }
+    resolve_session_file(std::env::var_os(SESSION_FILE_ENV), session_dir(), name)
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -79,7 +100,11 @@ where
     };
     let encoded =
         serde_json::to_vec(&info).map_err(|error| std::io::Error::other(error.to_string()))?;
-    std::fs::write(session_file(), encoded)?;
+    let path = session_file();
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    std::fs::write(path, encoded)?;
 
     let handler = Arc::new(handler);
     std::thread::Builder::new()
@@ -145,7 +170,11 @@ pub enum ClientError {
 impl fmt::Display for ClientError {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Self::NoSession => write!(formatter, "没有找到运行中的 Aurtrack 会话"),
+            Self::NoSession => write!(
+                formatter,
+                "没有找到运行中的 Aurtrack 会话（会话文件：{}）",
+                session_file().display()
+            ),
             Self::Io(error) => write!(formatter, "连接会话失败：{error}"),
             Self::Protocol(message) => write!(formatter, "会话协议错误：{message}"),
         }
@@ -176,10 +205,16 @@ impl fmt::Debug for SessionClient {
 
 impl SessionClient {
     pub fn connect() -> Result<Self, ClientError> {
-        let content =
-            std::fs::read_to_string(session_file()).map_err(|_| ClientError::NoSession)?;
+        let path = session_file();
+        let content = std::fs::read_to_string(&path).map_err(|_| ClientError::NoSession)?;
         let info: SessionFile = serde_json::from_str(&content)
             .map_err(|error| ClientError::Protocol(error.to_string()))?;
+        if info.port == 0 {
+            return Err(ClientError::Protocol(format!(
+                "会话文件端口为 0（{}）",
+                path.display()
+            )));
+        }
         let stream = TcpStream::connect(("127.0.0.1", info.port))?;
         stream.set_nodelay(true)?;
         stream.set_read_timeout(Some(IO_TIMEOUT))?;
@@ -273,5 +308,21 @@ mod tests {
             .unwrap();
         assert_eq!(response.data["echo"], "demo");
         drop(server);
+    }
+
+    #[test]
+    fn session_file_override_wins() {
+        let path = resolve_session_file(
+            Some(OsString::from("custom-session.json")),
+            PathBuf::from("cache"),
+            SESSION_FILE,
+        );
+        assert_eq!(path, PathBuf::from("custom-session.json"));
+    }
+
+    #[test]
+    fn session_file_defaults_to_cache_dir() {
+        let path = resolve_session_file(None, PathBuf::from("cache"), SESSION_FILE);
+        assert_eq!(path, PathBuf::from("cache").join(SESSION_FILE));
     }
 }

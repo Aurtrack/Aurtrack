@@ -28,6 +28,21 @@ pub struct TrackPlan {
     /// `None` 表示静音轨道。
     pub frequency: Option<f64>,
     pub gain: f64,
+    pub notes: Vec<NotePlan>,
+}
+
+/// 一个已排入时间线的音符。
+#[derive(Debug, Clone)]
+pub struct NotePlan {
+    pub start: f64,
+    pub duration: f64,
+    pub frequency: f64,
+    pub velocity: f64,
+}
+
+/// MIDI 音高转频率，A4 = 69 = 440 Hz。
+pub fn midi_to_hz(pitch: u8) -> f64 {
+    440.0 * 2_f64.powf((f64::from(pitch) - 69.0) / 12.0)
 }
 
 /// 一次播放使用的不可变计划。
@@ -123,9 +138,19 @@ impl Playback {
             let time = position as f64 / sample_rate;
             let mut sample = 0.0;
             for track in &plan.tracks {
+                let mut voice = 0.0;
                 if let Some(frequency) = track.frequency {
-                    sample += (std::f64::consts::TAU * frequency * time).sin() * 0.25 * track.gain;
+                    voice += (std::f64::consts::TAU * frequency * time).sin() * 0.25;
                 }
+                for note in &track.notes {
+                    if time >= note.start && time < note.start + note.duration {
+                        let local = time - note.start;
+                        voice += (std::f64::consts::TAU * note.frequency * local).sin()
+                            * note.velocity
+                            * 0.25;
+                    }
+                }
+                sample += voice * track.gain;
             }
             *slot = (sample * master_gain) as f32;
             position += 1;
@@ -149,6 +174,7 @@ mod tests {
             tracks: vec![TrackPlan {
                 frequency: Some(440.0),
                 gain: 1.0,
+                notes: Vec::new(),
             }],
         }
     }
@@ -194,5 +220,51 @@ mod tests {
         assert!((playback.position_seconds() - 2.5).abs() < 0.001);
         playback.seek(6.0);
         assert!((playback.position_seconds() - 1.0).abs() < 0.001);
+    }
+
+    #[test]
+    fn note_plan_produces_signal() {
+        let playback = Playback::new(48_000);
+        playback.set_plan(PlaybackPlan {
+            sample_rate: 48_000,
+            loop_seconds: 5.0,
+            tracks: vec![TrackPlan {
+                frequency: None,
+                gain: 1.0,
+                notes: vec![NotePlan {
+                    start: 0.0,
+                    duration: 1.0,
+                    frequency: midi_to_hz(69),
+                    velocity: 1.0,
+                }],
+            }],
+        });
+        playback.play();
+        let mut buffer = [0.0_f32; 480];
+        playback.render(&mut buffer);
+        assert!(buffer.iter().any(|sample| sample.abs() > 0.0));
+    }
+
+    #[test]
+    fn note_outside_window_is_silent() {
+        let playback = Playback::new(48_000);
+        playback.set_plan(PlaybackPlan {
+            sample_rate: 48_000,
+            loop_seconds: 5.0,
+            tracks: vec![TrackPlan {
+                frequency: None,
+                gain: 1.0,
+                notes: vec![NotePlan {
+                    start: 2.0,
+                    duration: 1.0,
+                    frequency: midi_to_hz(69),
+                    velocity: 1.0,
+                }],
+            }],
+        });
+        playback.play();
+        let mut buffer = [0.0_f32; 480];
+        playback.render(&mut buffer);
+        assert!(buffer.iter().all(|sample| *sample == 0.0));
     }
 }

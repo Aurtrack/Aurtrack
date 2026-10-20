@@ -17,11 +17,43 @@ export const en: Record<MessageKey, Message> = {
     return `${count} TRACK${count === 1 ? "" : "S"} / ${params.duration} S`;
   },
   "timeline.empty": "NO TRACKS",
-  "timeline.hint": "CLICK TO SEEK",
+  "timeline.hint": "CLICK TO SEEK / DRAG TO EDIT",
   "timeline.playhead": (params) => `T+${params.seconds} S`,
   "timeline.trackMeta": (params) =>
     `SINE ${params.frequency} HZ / ${params.devices} DEV`,
   "timeline.silenceMeta": (params) => `SILENCE / ${params.devices} DEV`,
+  "timeline.clipMeta": (params) =>
+    `${params.clips} CLIPS / ${params.notes} NOTES`,
+
+  "clips.title": "CLIPS",
+  "clips.total": (params) => `${params.count} TOTAL`,
+  "clips.noTrack": "NO TRACK SELECTED",
+  "clips.namePlaceholder": "CLIP NAME",
+  "clips.start": "START",
+  "clips.duration": "DURATION",
+  "clips.add": "ADD CLIP",
+  "clips.empty": "NO CLIPS",
+  "clips.removeTitle": "Remove clip",
+  "clips.defaultName": (params) => `Clip ${params.index}`,
+  "clips.range": (params) =>
+    `${params.start}–${params.end} s · ${params.notes} NOTES`,
+
+  "notes.title": "NOTES",
+  "notes.total": (params) => `${params.count} TOTAL`,
+  "notes.empty": "NO NOTES",
+  "notes.add": "ADD NOTE",
+  "notes.pitch": "PITCH",
+  "notes.start": "START",
+  "notes.duration": "DURATION",
+  "notes.velocity": "VEL",
+  "notes.removeTitle": "Remove note",
+  "notes.meta": (params) =>
+    `${params.start}+${params.duration} s · ${params.velocity}%`,
+
+  "piano.title": "PIANO ROLL",
+  "piano.empty": "SELECT A CLIP",
+  "piano.meta": (params) => `${params.clip} · ${params.notes} NOTES`,
+  "piano.hint": "CLICK TO ADD · DRAG TO MOVE · EDGE TO RESIZE · RIGHT-CLICK TO DELETE",
 
   "tracks.title": "TRACKS",
   "tracks.total": (params) => `${params.count} TOTAL`,
@@ -96,6 +128,23 @@ export const en: Record<MessageKey, Message> = {
   "status.saveFailed": (params) => `Save failed: ${params.message}`,
   "status.opened": (params) => `Opened: ${params.file}`,
   "status.openFailed": (params) => `Open failed: ${params.message}`,
+  "status.clipCreated": (params) => `Created clip ${params.id}`,
+  "status.clipCreateFailed": (params) =>
+    `Create clip failed: ${params.message}`,
+  "status.clipRemoved": (params) => `Removed clip ${params.id}`,
+  "status.clipRemoveFailed": (params) =>
+    `Remove clip failed: ${params.message}`,
+  "status.clipUpdated": (params) => `Updated clip ${params.id}`,
+  "status.clipUpdateFailed": (params) =>
+    `Update clip failed: ${params.message}`,
+  "status.noteAdded": (params) => `Added note ${params.id}`,
+  "status.noteAddFailed": (params) => `Add note failed: ${params.message}`,
+  "status.noteRemoved": (params) => `Removed note ${params.id}`,
+  "status.noteRemoveFailed": (params) =>
+    `Remove note failed: ${params.message}`,
+  "status.noteUpdated": (params) => `Updated note ${params.id}`,
+  "status.noteUpdateFailed": (params) =>
+    `Update note failed: ${params.message}`,
 
   "error.not_found": "Not found",
   "error.invalid_args": "Invalid arguments",

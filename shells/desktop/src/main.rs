@@ -20,7 +20,7 @@ use tauri::State;
 
 struct AppState {
     runtime: Arc<Mutex<Runtime>>,
-    _server: Option<ServerHandle>,
+    _server: ServerHandle,
 }
 
 #[tauri::command]
@@ -115,10 +115,10 @@ fn main() {
         })
     };
     let server = match server {
-        Ok(server) => Some(server),
+        Ok(server) => server,
         Err(error) => {
             eprintln!("本地会话服务启动失败：{error}");
-            None
+            std::process::exit(1);
         },
     };
 

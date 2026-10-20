@@ -264,6 +264,80 @@ fn track_remove_schema() -> Value {
     object_schema(json!({ "track_id": { "type": "string" } }), &["track_id"])
 }
 
+fn clip_create_schema() -> Value {
+    object_schema(
+        json!({
+            "track_id": { "type": "string" },
+            "name": { "type": "string", "description": "片段名，省略时自动生成" },
+            "start": { "type": "number", "minimum": 0, "maximum": 5 },
+            "duration": { "type": "number", "exclusiveMinimum": 0, "maximum": 5 }
+        }),
+        &["track_id", "start", "duration"],
+    )
+}
+
+fn clip_remove_schema() -> Value {
+    object_schema(
+        json!({
+            "path": { "type": "string", "description": "/tracks/{id}/clips/{id}" }
+        }),
+        &["path"],
+    )
+}
+
+fn clip_update_schema() -> Value {
+    object_schema(
+        json!({
+            "path": { "type": "string", "description": "/tracks/{id}/clips/{id}" },
+            "name": { "type": "string" },
+            "start": { "type": "number", "minimum": 0, "maximum": 5 },
+            "duration": { "type": "number", "exclusiveMinimum": 0, "maximum": 5 }
+        }),
+        &["path"],
+    )
+}
+
+fn note_add_schema() -> Value {
+    object_schema(
+        json!({
+            "path": { "type": "string", "description": "/tracks/{id}/clips/{id}" },
+            "pitch": { "type": "integer", "minimum": 0, "maximum": 127 },
+            "start": { "type": "number", "minimum": 0 },
+            "duration": { "type": "number", "exclusiveMinimum": 0 },
+            "velocity": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.8 }
+        }),
+        &["path", "pitch", "start", "duration"],
+    )
+}
+
+fn note_remove_schema() -> Value {
+    object_schema(
+        json!({
+            "path": {
+                "type": "string",
+                "description": "/tracks/{id}/clips/{id}/notes/{id}"
+            }
+        }),
+        &["path"],
+    )
+}
+
+fn note_update_schema() -> Value {
+    object_schema(
+        json!({
+            "path": {
+                "type": "string",
+                "description": "/tracks/{id}/clips/{id}/notes/{id}"
+            },
+            "pitch": { "type": "integer", "minimum": 0, "maximum": 127 },
+            "start": { "type": "number", "minimum": 0 },
+            "duration": { "type": "number", "exclusiveMinimum": 0 },
+            "velocity": { "type": "number", "minimum": 0, "maximum": 1 }
+        }),
+        &["path"],
+    )
+}
+
 fn device_remove_schema() -> Value {
     object_schema(
         json!({
@@ -303,7 +377,7 @@ fn transport_gain_schema() -> Value {
     )
 }
 
-static COMMANDS: [CommandSpec; 18] = [
+static COMMANDS: [CommandSpec; 24] = [
     CommandSpec {
         id: "project.create",
         summary: "创建或替换当前工程",
@@ -339,6 +413,42 @@ static COMMANDS: [CommandSpec; 18] = [
         summary: "删除一条轨道",
         undo: UndoKind::Snapshot,
         input_schema: track_remove_schema,
+    },
+    CommandSpec {
+        id: "clip.create",
+        summary: "在轨道上新建片段",
+        undo: UndoKind::Snapshot,
+        input_schema: clip_create_schema,
+    },
+    CommandSpec {
+        id: "clip.update",
+        summary: "修改片段名称、起点或长度",
+        undo: UndoKind::Snapshot,
+        input_schema: clip_update_schema,
+    },
+    CommandSpec {
+        id: "clip.remove",
+        summary: "删除一个片段",
+        undo: UndoKind::Snapshot,
+        input_schema: clip_remove_schema,
+    },
+    CommandSpec {
+        id: "note.add",
+        summary: "在片段里添加音符",
+        undo: UndoKind::Snapshot,
+        input_schema: note_add_schema,
+    },
+    CommandSpec {
+        id: "note.update",
+        summary: "修改音符音高、位置、时值或力度",
+        undo: UndoKind::Snapshot,
+        input_schema: note_update_schema,
+    },
+    CommandSpec {
+        id: "note.remove",
+        summary: "删除一个音符",
+        undo: UndoKind::Snapshot,
+        input_schema: note_remove_schema,
     },
     CommandSpec {
         id: "device.add",

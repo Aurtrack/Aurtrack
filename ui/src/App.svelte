@@ -2,7 +2,9 @@
   import { onMount } from "svelte";
 
   import CommandLog from "./lib/components/CommandLog.svelte";
+  import ClipEditor from "./lib/components/ClipEditor.svelte";
   import Header from "./lib/components/Header.svelte";
+  import PianoRoll from "./lib/components/PianoRoll.svelte";
   import Timeline from "./lib/components/Timeline.svelte";
   import TrackInspector from "./lib/components/TrackInspector.svelte";
   import TrackList from "./lib/components/TrackList.svelte";
@@ -47,6 +49,7 @@
 
   let project = $state<Project | null>(null);
   let selectedTrackId = $state("");
+  let selectedClipId = $state("");
   let projectPath = $state("");
   let gain = $state(50);
   let busy = $state(false);
@@ -67,21 +70,59 @@
   let selectedTrack = $derived(
     tracks.find((track) => track.id === selectedTrackId) ?? tracks[0] ?? null,
   );
+  let selectedClip = $derived(
+    selectedTrack?.clips.find((clip) => clip.id === selectedClipId) ??
+      selectedTrack?.clips[0] ??
+      null,
+  );
+
+  $effect(() => {
+    const clips = selectedTrack?.clips ?? [];
+    if (clips.length === 0) {
+      if (selectedClipId !== "") selectedClipId = "";
+    } else if (!clips.some((clip) => clip.id === selectedClipId)) {
+      selectedClipId = clips[0]?.id ?? "";
+    }
+  });
   let timelineTracks = $derived(
-    tracks.map((track) => ({
-      id: track.id,
-      name: track.name,
-      frequency: track.source.kind === "sine" ? track.source.frequency : null,
-      meta:
-        track.source.kind === "sine"
-          ? t("timeline.trackMeta", {
-              frequency: formatNumber(track.source.frequency, 2),
-              devices: track.devices.length,
-            })
-          : t("timeline.silenceMeta", {
-              devices: track.devices.length,
-            }),
-    })),
+    tracks.map((track) => {
+      const noteCount = track.clips.reduce(
+        (sum, clip) => sum + clip.notes.length,
+        0,
+      );
+      return {
+        id: track.id,
+        name: track.name,
+        frequency:
+          track.source.kind === "sine" ? track.source.frequency : null,
+        meta:
+          track.clips.length > 0
+            ? t("timeline.clipMeta", {
+                clips: track.clips.length,
+                notes: noteCount,
+              })
+            : track.source.kind === "sine"
+              ? t("timeline.trackMeta", {
+                  frequency: formatNumber(track.source.frequency, 2),
+                  devices: track.devices.length,
+                })
+              : t("timeline.silenceMeta", {
+                  devices: track.devices.length,
+                }),
+        clips: track.clips.map((clip) => ({
+          id: clip.id,
+          name: clip.name,
+          start: clip.start,
+          duration: clip.duration,
+          notes: clip.notes.map((note) => ({
+            id: note.id,
+            pitch: note.pitch,
+            start: note.start,
+            duration: note.duration,
+          })),
+        })),
+      };
+    }),
   );
 
   function setStatus(
@@ -236,6 +277,136 @@
       setStatus("status.deviceRemoved");
     } catch (error) {
       fail("status.deviceRemoveFailed", error);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function addClip(
+    trackId: string,
+    input: { name: string; start: number; duration: number },
+  ) {
+    if (busy) return;
+    busy = true;
+    try {
+      const result = await run<{ clip_id: string }>("clip.create", {
+        track_id: trackId,
+        ...input,
+      });
+      await refreshProject();
+      await reloadIfPlaying();
+      selectedClipId = result.clip_id;
+      setStatus("status.clipCreated", { id: result.clip_id });
+    } catch (error) {
+      fail("status.clipCreateFailed", error);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function deleteClip(path: string) {
+    if (busy) return;
+    busy = true;
+    try {
+      await run("clip.remove", { path });
+      await refreshProject();
+      await reloadIfPlaying();
+      const id = path.split("/").pop() ?? path;
+      setStatus("status.clipRemoved", { id });
+    } catch (error) {
+      fail("status.clipRemoveFailed", error);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function addNote(
+    path: string,
+    input: {
+      pitch: number;
+      start: number;
+      duration: number;
+      velocity: number;
+    },
+  ) {
+    if (busy) return;
+    busy = true;
+    try {
+      const result = await run<{ note_id: string }>("note.add", {
+        path,
+        ...input,
+      });
+      await refreshProject();
+      await reloadIfPlaying();
+      setStatus("status.noteAdded", { id: result.note_id });
+    } catch (error) {
+      fail("status.noteAddFailed", error);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function deleteNote(path: string) {
+    if (busy) return;
+    busy = true;
+    try {
+      await run("note.remove", { path });
+      await refreshProject();
+      await reloadIfPlaying();
+      const id = path.split("/").pop() ?? path;
+      setStatus("status.noteRemoved", { id });
+    } catch (error) {
+      fail("status.noteRemoveFailed", error);
+    } finally {
+      busy = false;
+    }
+  }
+
+  function selectClip(trackId: string, clipId: string) {
+    selectedTrackId = trackId;
+    selectedClipId = clipId;
+  }
+
+  async function updateClip(
+    path: string,
+    patch: { start?: number; duration?: number },
+  ) {
+    if (busy) return;
+    busy = true;
+    try {
+      await run("clip.update", { path, ...patch });
+      await refreshProject();
+      await reloadIfPlaying();
+      setStatus("status.clipUpdated", {
+        id: path.split("/").pop() ?? path,
+      });
+    } catch (error) {
+      fail("status.clipUpdateFailed", error);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function updateNote(
+    path: string,
+    patch: {
+      pitch?: number;
+      start?: number;
+      duration?: number;
+      velocity?: number;
+    },
+  ) {
+    if (busy) return;
+    busy = true;
+    try {
+      await run("note.update", { path, ...patch });
+      await refreshProject();
+      await reloadIfPlaying();
+      setStatus("status.noteUpdated", {
+        id: path.split("/").pop() ?? path,
+      });
+    } catch (error) {
+      fail("status.noteUpdateFailed", error);
     } finally {
       busy = false;
     }
@@ -439,7 +610,15 @@
 
 <main class="sheet">
   <Header {audioState} {sampleRate} />
-  <Timeline tracks={timelineTracks} {duration} {playhead} onSeek={seek} />
+  <Timeline
+    tracks={timelineTracks}
+    {duration}
+    {playhead}
+    onSeek={seek}
+    onSelectClip={selectClip}
+    onUpdateClip={updateClip}
+    onUpdateNote={updateNote}
+  />
   <div class="split">
     <div class="column">
       <TrackList
@@ -449,6 +628,16 @@
         onSelect={(id: string) => (selectedTrackId = id)}
         onAdd={addTrack}
         onRemove={deleteTrack}
+      />
+      <ClipEditor
+        track={selectedTrack}
+        {busy}
+        {selectedClipId}
+        onSelectClip={(id: string) => (selectedClipId = id)}
+        onAddClip={addClip}
+        onRemoveClip={deleteClip}
+        onAddNote={addNote}
+        onRemoveNote={deleteNote}
       />
     </div>
     <div class="column">
@@ -477,5 +666,13 @@
       />
     </div>
   </div>
+  <PianoRoll
+    trackId={selectedTrack?.id ?? null}
+    clip={selectedClip}
+    {busy}
+    onAddNote={addNote}
+    onUpdateNote={updateNote}
+    onRemoveNote={deleteNote}
+  />
   <CommandLog lines={logLines} />
 </main>

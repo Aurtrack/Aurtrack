@@ -15,7 +15,8 @@
     clippy::print_stdout,
     clippy::print_stderr,
     clippy::unnecessary_wraps,
-    clippy::needless_pass_by_value
+    clippy::needless_pass_by_value,
+    clippy::single_match_else
 )]
 #![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
 
@@ -30,14 +31,20 @@ const PROTOCOL_VERSION: &str = "2024-11-05";
 fn main() {
     let force_local = std::env::args().any(|arg| arg == "--local");
     let mut backend = if force_local {
-        eprintln!("aurtrack-mcp 使用本地运行时");
+        eprintln!("aurtrack-mcp 使用本地一次性运行时");
         Backend::local()
-    } else if let Ok(backend) = Backend::remote() {
-        eprintln!("aurtrack-mcp 已连接运行中的 Aurtrack");
-        backend
     } else {
-        eprintln!("aurtrack-mcp 使用本地运行时");
-        Backend::local()
+        match Backend::remote() {
+            Ok(backend) => {
+                eprintln!("aurtrack-mcp 已连接运行中的 Aurtrack");
+                backend
+            },
+            Err(error) => {
+                eprintln!("aurtrack-mcp 无法连接桌面会话：{error}");
+                eprintln!("使用 --local 显式启用本地一次性运行时。");
+                std::process::exit(1);
+            },
+        }
     };
 
     let stdin = io::stdin();
@@ -176,7 +183,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn initialize_and_list_eighteen_tools() {
+    fn initialize_and_list_twenty_four_tools() {
         let mut backend = Backend::local();
         let init = handle_line(
             &mut backend,
@@ -191,7 +198,7 @@ mod tests {
         )
         .unwrap();
         let value: Value = serde_json::from_str(&list).unwrap();
-        assert_eq!(value["result"]["tools"].as_array().unwrap().len(), 18);
+        assert_eq!(value["result"]["tools"].as_array().unwrap().len(), 24);
     }
 
     #[test]

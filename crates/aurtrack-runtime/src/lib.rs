@@ -20,7 +20,7 @@
 use std::sync::Arc;
 
 use aurtrack_command::{CommandError, CommandRequest, CommandResponse};
-use aurtrack_engine::{Playback, PlaybackPlan, TrackPlan};
+use aurtrack_engine::{NotePlan, Playback, PlaybackPlan, TrackPlan, midi_to_hz};
 use aurtrack_io::AudioHandle;
 use aurtrack_session::{Project, Session, Source};
 use serde::de::DeserializeOwned;
@@ -164,7 +164,23 @@ fn build_plan(project: &Project, sample_rate: u32) -> PlaybackPlan {
                 Source::Sine { frequency } => Some(*frequency),
                 Source::Silence => None,
             };
-            TrackPlan { frequency, gain }
+            let notes = track
+                .clips
+                .iter()
+                .flat_map(|clip| {
+                    clip.notes.iter().map(move |note| NotePlan {
+                        start: clip.start + note.start,
+                        duration: note.duration,
+                        frequency: midi_to_hz(note.pitch),
+                        velocity: note.velocity,
+                    })
+                })
+                .collect();
+            TrackPlan {
+                frequency,
+                gain,
+                notes,
+            }
         })
         .collect();
     PlaybackPlan {
@@ -199,6 +215,7 @@ struct GainArgs {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use aurtrack_session::{Clip, Note, Track};
 
     fn run(runtime: &mut Runtime, cmd: &str, args: Value) -> Result<CommandResponse, CommandError> {
         runtime.execute(&CommandRequest {
@@ -230,11 +247,43 @@ mod tests {
     }
 
     #[test]
-    fn describe_lists_eighteen_commands() {
+    fn build_plan_schedules_clip_notes() {
+        let project = Project {
+            name: "notes".to_string(),
+            sample_rate: 48_000,
+            tracks: vec![Track {
+                id: "track-1".to_string(),
+                name: "lead".to_string(),
+                source: Source::Silence,
+                devices: Vec::new(),
+                clips: vec![Clip {
+                    id: "clip-1".to_string(),
+                    name: "verse".to_string(),
+                    start: 0.5,
+                    duration: 1.0,
+                    notes: vec![Note {
+                        id: "note-1".to_string(),
+                        pitch: 69,
+                        start: 0.25,
+                        duration: 0.5,
+                        velocity: 0.8,
+                    }],
+                }],
+            }],
+        };
+
+        let plan = build_plan(&project, 48_000);
+        assert_eq!(plan.tracks[0].notes.len(), 1);
+        assert!((plan.tracks[0].notes[0].start - 0.75).abs() < 1e-9);
+        assert!((plan.tracks[0].notes[0].frequency - 440.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn describe_lists_twenty_four_commands() {
         let mut runtime = Runtime::new();
         let response = run(&mut runtime, "describe", json!({})).unwrap();
         let commands = response.data["commands"].as_array().unwrap();
-        assert_eq!(commands.len(), 18);
+        assert_eq!(commands.len(), 24);
         assert!(
             commands
                 .iter()

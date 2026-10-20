@@ -32,7 +32,7 @@
 
 <section class="section">
   <div class="section-head">
-    <span class="index">03</span>
+    <span class="index">04</span>
     <span class="title">{t("inspector.title")}</span>
     <span class="rule"></span>
     <span class="meta">{track ? track.id : t("inspector.none")}</span>

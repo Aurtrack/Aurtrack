@@ -47,6 +47,27 @@ pub struct Track {
     pub name: String,
     pub source: Source,
     pub devices: Vec<Device>,
+    pub clips: Vec<Clip>,
+}
+
+/// 轨道上的一个片段。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Clip {
+    pub id: String,
+    pub name: String,
+    pub start: f64,
+    pub duration: f64,
+    pub notes: Vec<Note>,
+}
+
+/// 片段里的一个音符。
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Note {
+    pub id: String,
+    pub pitch: u8,
+    pub start: f64,
+    pub duration: f64,
+    pub velocity: f64,
 }
 
 /// 轨道信号源。
@@ -65,7 +86,8 @@ pub struct Device {
     pub params: BTreeMap<String, f64>,
 }
 
-const PROJECT_FORMAT_VERSION: u32 = 1;
+const PROJECT_FORMAT_VERSION: u32 = 2;
+const TIMELINE_SECONDS: f64 = 5.0;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -88,6 +110,8 @@ pub struct Session {
     redo_stack: Vec<Snapshot>,
     next_track: u64,
     next_device: u64,
+    next_clip: u64,
+    next_note: u64,
     next_undo: u64,
 }
 
@@ -106,6 +130,12 @@ impl Session {
             "project.open" => self.cmd_project_open(&request.args),
             "track.create" => self.cmd_track_create(&request.args),
             "track.remove" => self.cmd_track_remove(&request.args),
+            "clip.create" => self.cmd_clip_create(&request.args),
+            "clip.update" => self.cmd_clip_update(&request.args),
+            "clip.remove" => self.cmd_clip_remove(&request.args),
+            "note.add" => self.cmd_note_add(&request.args),
+            "note.update" => self.cmd_note_update(&request.args),
+            "note.remove" => self.cmd_note_remove(&request.args),
             "device.add" => self.cmd_device_add(&request.args),
             "device.remove" => self.cmd_device_remove(&request.args),
             "param.set" => self.cmd_param_set(&request.args),
@@ -193,6 +223,7 @@ impl Session {
             name: args.name,
             source,
             devices: Vec::new(),
+            clips: Vec::new(),
         });
         Ok(CommandResponse::ok(json!({ "track_id": track_id, "path": path })).with_undo(token))
     }
@@ -410,11 +441,13 @@ impl Session {
                 file.format_version
             )));
         }
-        let (next_track, next_device) = validate_project(&file.project)?;
+        let (next_track, next_device, next_clip, next_note) = validate_project(&file.project)?;
         let token = self.snapshot("project.open");
         self.project = Some(file.project);
         self.next_track = next_track;
         self.next_device = next_device;
+        self.next_clip = next_clip;
+        self.next_note = next_note;
         Ok(CommandResponse::ok(json!({
             "path": path,
             "project": self.project_summary(),
@@ -439,6 +472,284 @@ impl Session {
             .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
         project.tracks.retain(|track| track.id != track_id);
         Ok(CommandResponse::ok(json!({ "track_id": track_id })).with_undo(token))
+    }
+
+    fn cmd_clip_create(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        let args: ClipCreateArgs = parse_args(args)?;
+        validate_clip_range(args.start, args.duration)?;
+        let track_id = args.track_id;
+        let exists = self
+            .project
+            .as_ref()
+            .is_some_and(|project| project.tracks.iter().any(|track| track.id == track_id));
+        if !exists {
+            return Err(CommandError::not_found(format!("找不到轨道：{track_id}")));
+        }
+        let name = args
+            .name
+            .unwrap_or_else(|| format!("片段 {}", self.next_clip + 1));
+        if name.trim().is_empty() {
+            return Err(CommandError::invalid_args("name 不能为空"));
+        }
+
+        let token = self.snapshot("clip.create");
+        self.next_clip += 1;
+        let clip_id = format!("clip-{}", self.next_clip);
+        let clip = Clip {
+            id: clip_id.clone(),
+            name,
+            start: args.start,
+            duration: args.duration,
+            notes: Vec::new(),
+        };
+        let project = self
+            .project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let track = project
+            .tracks
+            .iter_mut()
+            .find(|track| track.id == track_id)
+            .ok_or_else(|| CommandError::not_found(format!("找不到轨道：{track_id}")))?;
+        track.clips.push(clip.clone());
+
+        Ok(CommandResponse::ok(json!({
+            "track_id": track_id,
+            "clip_id": clip_id,
+            "path": format!("/tracks/{track_id}/clips/{clip_id}"),
+            "clip": clip,
+        }))
+        .with_undo(token))
+    }
+
+    fn cmd_clip_update(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        let args: ClipUpdateArgs = parse_args(args)?;
+        if args.name.is_none() && args.start.is_none() && args.duration.is_none() {
+            return Err(CommandError::invalid_args("至少提供一个字段"));
+        }
+        let path = args.path;
+        let (track_id, clip_id) = parse_clip_path(&path)?;
+        let existing = self
+            .project
+            .as_ref()
+            .and_then(|project| project.tracks.iter().find(|track| track.id == track_id))
+            .and_then(|track| track.clips.iter().find(|clip| clip.id == clip_id))
+            .cloned()
+            .ok_or_else(|| CommandError::not_found(format!("找不到片段：{path}")))?;
+
+        let start = args.start.unwrap_or(existing.start);
+        let duration = args.duration.unwrap_or(existing.duration);
+        let name = args.name.unwrap_or(existing.name);
+        validate_clip_range(start, duration)?;
+        if name.trim().is_empty() {
+            return Err(CommandError::invalid_args("name 不能为空"));
+        }
+        for note in &existing.notes {
+            validate_note_values(
+                note.pitch,
+                note.start,
+                note.duration,
+                note.velocity,
+                duration,
+            )?;
+        }
+
+        let token = self.snapshot("clip.update");
+        let project = self
+            .project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let track = project
+            .tracks
+            .iter_mut()
+            .find(|track| track.id == track_id)
+            .ok_or_else(|| CommandError::not_found(format!("找不到片段：{path}")))?;
+        let clip = track
+            .clips
+            .iter_mut()
+            .find(|clip| clip.id == clip_id)
+            .ok_or_else(|| CommandError::not_found(format!("找不到片段：{path}")))?;
+        clip.start = start;
+        clip.duration = duration;
+        clip.name = name;
+        let updated = clip.clone();
+
+        Ok(CommandResponse::ok(json!({ "path": path, "clip": updated })).with_undo(token))
+    }
+
+    fn cmd_clip_remove(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        let args: ClipPathArgs = parse_args(args)?;
+        let path = args.path;
+        let (track_id, clip_id) = parse_clip_path(&path)?;
+        let exists = self.project.as_ref().is_some_and(|project| {
+            project.tracks.iter().any(|track| {
+                track.id == track_id && track.clips.iter().any(|clip| clip.id == clip_id)
+            })
+        });
+        if !exists {
+            return Err(CommandError::not_found(format!("找不到片段：{path}")));
+        }
+
+        let token = self.snapshot("clip.remove");
+        let project = self
+            .project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let track = project
+            .tracks
+            .iter_mut()
+            .find(|track| track.id == track_id)
+            .ok_or_else(|| CommandError::not_found(format!("找不到片段：{path}")))?;
+        track.clips.retain(|clip| clip.id != clip_id);
+        Ok(CommandResponse::ok(json!({ "path": path })).with_undo(token))
+    }
+
+    fn cmd_note_add(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        let args: NoteAddArgs = parse_args(args)?;
+        let path = args.path;
+        let (track_id, clip_id) = parse_clip_path(&path)?;
+        let velocity = args.velocity.unwrap_or(0.8);
+        let clip_duration = self
+            .project
+            .as_ref()
+            .and_then(|project| project.tracks.iter().find(|track| track.id == track_id))
+            .and_then(|track| track.clips.iter().find(|clip| clip.id == clip_id))
+            .map(|clip| clip.duration)
+            .ok_or_else(|| CommandError::not_found(format!("找不到片段：{path}")))?;
+        validate_note_values(
+            args.pitch,
+            args.start,
+            args.duration,
+            velocity,
+            clip_duration,
+        )?;
+
+        let token = self.snapshot("note.add");
+        self.next_note += 1;
+        let note_id = format!("note-{}", self.next_note);
+        let note = Note {
+            id: note_id.clone(),
+            pitch: args.pitch,
+            start: args.start,
+            duration: args.duration,
+            velocity,
+        };
+        let project = self
+            .project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let track = project
+            .tracks
+            .iter_mut()
+            .find(|track| track.id == track_id)
+            .ok_or_else(|| CommandError::not_found(format!("找不到片段：{path}")))?;
+        let clip = track
+            .clips
+            .iter_mut()
+            .find(|clip| clip.id == clip_id)
+            .ok_or_else(|| CommandError::not_found(format!("找不到片段：{path}")))?;
+        clip.notes.push(note.clone());
+
+        Ok(CommandResponse::ok(json!({
+            "path": format!("{path}/notes/{note_id}"),
+            "note_id": note_id,
+            "note": note,
+        }))
+        .with_undo(token))
+    }
+
+    fn cmd_note_update(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        let args: NoteUpdateArgs = parse_args(args)?;
+        if args.pitch.is_none()
+            && args.start.is_none()
+            && args.duration.is_none()
+            && args.velocity.is_none()
+        {
+            return Err(CommandError::invalid_args("至少提供一个字段"));
+        }
+        let path = args.path;
+        let (track_id, clip_id, note_id) = parse_note_path(&path)?;
+        let (clip_duration, existing) = self
+            .project
+            .as_ref()
+            .and_then(|project| project.tracks.iter().find(|track| track.id == track_id))
+            .and_then(|track| track.clips.iter().find(|clip| clip.id == clip_id))
+            .and_then(|clip| {
+                clip.notes
+                    .iter()
+                    .find(|note| note.id == note_id)
+                    .map(|note| (clip.duration, note.clone()))
+            })
+            .ok_or_else(|| CommandError::not_found(format!("找不到音符：{path}")))?;
+
+        let pitch = args.pitch.unwrap_or(existing.pitch);
+        let start = args.start.unwrap_or(existing.start);
+        let duration = args.duration.unwrap_or(existing.duration);
+        let velocity = args.velocity.unwrap_or(existing.velocity);
+        validate_note_values(pitch, start, duration, velocity, clip_duration)?;
+
+        let token = self.snapshot("note.update");
+        let project = self
+            .project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let track = project
+            .tracks
+            .iter_mut()
+            .find(|track| track.id == track_id)
+            .ok_or_else(|| CommandError::not_found(format!("找不到音符：{path}")))?;
+        let clip = track
+            .clips
+            .iter_mut()
+            .find(|clip| clip.id == clip_id)
+            .ok_or_else(|| CommandError::not_found(format!("找不到音符：{path}")))?;
+        let note = clip
+            .notes
+            .iter_mut()
+            .find(|note| note.id == note_id)
+            .ok_or_else(|| CommandError::not_found(format!("找不到音符：{path}")))?;
+        note.pitch = pitch;
+        note.start = start;
+        note.duration = duration;
+        note.velocity = velocity;
+        let updated = note.clone();
+
+        Ok(CommandResponse::ok(json!({ "path": path, "note": updated })).with_undo(token))
+    }
+
+    fn cmd_note_remove(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        let args: NotePathArgs = parse_args(args)?;
+        let path = args.path;
+        let (track_id, clip_id, note_id) = parse_note_path(&path)?;
+        let exists = self.project.as_ref().is_some_and(|project| {
+            project.tracks.iter().any(|track| {
+                track.id == track_id
+                    && track.clips.iter().any(|clip| {
+                        clip.id == clip_id && clip.notes.iter().any(|note| note.id == note_id)
+                    })
+            })
+        });
+        if !exists {
+            return Err(CommandError::not_found(format!("找不到音符：{path}")));
+        }
+
+        let token = self.snapshot("note.remove");
+        let project = self
+            .project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let track = project
+            .tracks
+            .iter_mut()
+            .find(|track| track.id == track_id)
+            .ok_or_else(|| CommandError::not_found(format!("找不到音符：{path}")))?;
+        let clip = track
+            .clips
+            .iter_mut()
+            .find(|clip| clip.id == clip_id)
+            .ok_or_else(|| CommandError::not_found(format!("找不到音符：{path}")))?;
+        clip.notes.retain(|note| note.id != note_id);
+        Ok(CommandResponse::ok(json!({ "path": path })).with_undo(token))
     }
 
     fn cmd_device_remove(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
@@ -561,12 +872,92 @@ fn parse_device_path(path: &str) -> Result<(&str, &str), CommandError> {
     }
 }
 
+fn parse_clip_path(path: &str) -> Result<(&str, &str), CommandError> {
+    let mut parts = path.split('/').filter(|part| !part.is_empty());
+    match (
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+    ) {
+        (Some("tracks"), Some(track), Some("clips"), Some(clip), None) => Ok((track, clip)),
+        _ => Err(CommandError::invalid_args(format!(
+            "片段路径不合法：{path}"
+        ))),
+    }
+}
+
+fn parse_note_path(path: &str) -> Result<(&str, &str, &str), CommandError> {
+    let mut parts = path.split('/').filter(|part| !part.is_empty());
+    match (
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+        parts.next(),
+    ) {
+        (
+            Some("tracks"),
+            Some(track),
+            Some("clips"),
+            Some(clip),
+            Some("notes"),
+            Some(note),
+            None,
+        ) => Ok((track, clip, note)),
+        _ => Err(CommandError::invalid_args(format!(
+            "音符路径不合法：{path}"
+        ))),
+    }
+}
+
+fn validate_clip_range(start: f64, duration: f64) -> Result<(), CommandError> {
+    if !start.is_finite() || start < 0.0 {
+        return Err(CommandError::invalid_args("片段起点必须是非负有限数"));
+    }
+    if !duration.is_finite() || duration <= 0.0 {
+        return Err(CommandError::invalid_args("片段长度必须是正的有限数"));
+    }
+    if start + duration > TIMELINE_SECONDS + 1e-9 {
+        return Err(CommandError::invalid_args("片段必须落在 0 到 5 秒之间"));
+    }
+    Ok(())
+}
+
+fn validate_note_values(
+    pitch: u8,
+    start: f64,
+    duration: f64,
+    velocity: f64,
+    clip_duration: f64,
+) -> Result<(), CommandError> {
+    if pitch > 127 {
+        return Err(CommandError::invalid_args("pitch 必须在 0 到 127 之间"));
+    }
+    if !start.is_finite() || start < 0.0 {
+        return Err(CommandError::invalid_args("音符起点必须是非负有限数"));
+    }
+    if !duration.is_finite() || duration <= 0.0 {
+        return Err(CommandError::invalid_args("音符长度必须是正的有限数"));
+    }
+    if start + duration > clip_duration + 1e-9 {
+        return Err(CommandError::invalid_args("音符超出片段长度"));
+    }
+    if !velocity.is_finite() || !(0.0..=1.0).contains(&velocity) {
+        return Err(CommandError::invalid_args("velocity 必须在 0 到 1 之间"));
+    }
+    Ok(())
+}
+
 fn parse_id(id: &str, prefix: &str) -> Option<u64> {
     let number = id.strip_prefix(prefix)?.parse::<u64>().ok()?;
     (number > 0).then_some(number)
 }
 
-fn validate_project(project: &Project) -> Result<(u64, u64), CommandError> {
+fn validate_project(project: &Project) -> Result<(u64, u64, u64, u64), CommandError> {
     if project.name.trim().is_empty() {
         return Err(CommandError::invalid_args("工程名不能为空"));
     }
@@ -578,8 +969,12 @@ fn validate_project(project: &Project) -> Result<(u64, u64), CommandError> {
 
     let mut track_ids = BTreeSet::new();
     let mut device_ids = BTreeSet::new();
+    let mut clip_ids = BTreeSet::new();
+    let mut note_ids = BTreeSet::new();
     let mut max_track = 0;
     let mut max_device = 0;
+    let mut max_clip = 0;
+    let mut max_note = 0;
 
     for track in &project.tracks {
         let Some(number) = parse_id(&track.id, "track-") else {
@@ -646,9 +1041,57 @@ fn validate_project(project: &Project) -> Result<(u64, u64), CommandError> {
                 }
             }
         }
+
+        for clip in &track.clips {
+            let Some(number) = parse_id(&clip.id, "clip-") else {
+                return Err(CommandError::invalid_args(format!(
+                    "片段 ID 不合法：{}",
+                    clip.id
+                )));
+            };
+            max_clip = max_clip.max(number);
+
+            if !clip_ids.insert(clip.id.as_str()) {
+                return Err(CommandError::invalid_args(format!(
+                    "片段 ID 重复：{}",
+                    clip.id
+                )));
+            }
+            if clip.name.trim().is_empty() {
+                return Err(CommandError::invalid_args(format!(
+                    "片段名不能为空：{}",
+                    clip.id
+                )));
+            }
+            validate_clip_range(clip.start, clip.duration)?;
+
+            for note in &clip.notes {
+                let Some(number) = parse_id(&note.id, "note-") else {
+                    return Err(CommandError::invalid_args(format!(
+                        "音符 ID 不合法：{}",
+                        note.id
+                    )));
+                };
+                max_note = max_note.max(number);
+
+                if !note_ids.insert(note.id.as_str()) {
+                    return Err(CommandError::invalid_args(format!(
+                        "音符 ID 重复：{}",
+                        note.id
+                    )));
+                }
+                validate_note_values(
+                    note.pitch,
+                    note.start,
+                    note.duration,
+                    note.velocity,
+                    clip.duration,
+                )?;
+            }
+        }
     }
 
-    Ok((max_track, max_device))
+    Ok((max_track, max_device, max_clip, max_note))
 }
 
 fn validate_gain(value: f64) -> Result<(), CommandError> {
@@ -669,6 +1112,10 @@ fn track_gain(track: &Track) -> f64 {
         .product::<f64>()
 }
 
+fn midi_to_hz(pitch: u8) -> f64 {
+    440.0 * 2_f64.powf((f64::from(pitch) - 69.0) / 12.0)
+}
+
 fn render_project(
     project: &Project,
     start_seconds: f64,
@@ -683,12 +1130,25 @@ fn render_project(
         let gain = track_gain(track);
         for (index, slot) in mix.iter_mut().enumerate() {
             let time = start_seconds + index as f64 / sample_rate_f64;
-            let sample = match &track.source {
+            let mut sample = match &track.source {
                 Source::Silence => 0.0,
                 Source::Sine { frequency } => {
                     (std::f64::consts::TAU * *frequency * time).sin() * 0.25
                 },
             };
+            for clip in &track.clips {
+                for note in &clip.notes {
+                    let note_start = clip.start + note.start;
+                    let note_end = note_start + note.duration;
+                    if time >= note_start && time < note_end {
+                        sample +=
+                            (std::f64::consts::TAU * midi_to_hz(note.pitch) * (time - note_start))
+                                .sin()
+                                * note.velocity
+                                * 0.25;
+                    }
+                }
+            }
             *slot += (sample * gain) as f32;
         }
     }
@@ -814,5 +1274,64 @@ struct DeviceRemoveArgs {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ProjectPathArgs {
+    path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClipCreateArgs {
+    track_id: String,
+    #[serde(default)]
+    name: Option<String>,
+    start: f64,
+    duration: f64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClipPathArgs {
+    path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClipUpdateArgs {
+    path: String,
+    #[serde(default)]
+    name: Option<String>,
+    #[serde(default)]
+    start: Option<f64>,
+    #[serde(default)]
+    duration: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NoteAddArgs {
+    path: String,
+    pitch: u8,
+    start: f64,
+    duration: f64,
+    #[serde(default)]
+    velocity: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NoteUpdateArgs {
+    path: String,
+    #[serde(default)]
+    pitch: Option<u8>,
+    #[serde(default)]
+    start: Option<f64>,
+    #[serde(default)]
+    duration: Option<f64>,
+    #[serde(default)]
+    velocity: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NotePathArgs {
     path: String,
 }

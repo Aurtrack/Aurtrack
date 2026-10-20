@@ -1,6 +1,6 @@
-# 命令规范 v0.4
+# 命令规范 v0.6
 
-这份文档定义 Aurtrack 的可运行命令面：18 条命令、统一的返回结构、寻址规则，以及 MCP 的映射方式。代码必须与本文一致。
+这份文档定义 Aurtrack 的可运行命令面：24 条命令、统一的返回结构、寻址规则，以及 MCP 的映射方式。代码必须与本文一致。
 
 ## 信封
 
@@ -246,7 +246,8 @@
         "source": { "kind": "sine", "frequency": 110.0 },
         "devices": [
           { "id": "device-1", "kind": "gain", "params": { "gain": 0.5 } }
-        ]
+        ],
+        "clips": []
       }
     ]
   }
@@ -283,7 +284,7 @@
 
 ## 工程文件
 
-工程文件格式见 `docs/adr/0002-project-file.md`：UTF-8 JSON，顶层是 `{ "format_version": 1, "project": { ... } }`。
+工程文件格式见 `docs/adr/0002-project-file.md` 与 `docs/adr/0003-clip-note.md`：UTF-8 JSON，当前 `format_version: 2`；只接受当前版本，旧文件直接拒绝，不做兼容迁移。
 
 ### 17. `project.save`
 
@@ -297,7 +298,7 @@
 { "path": "...", "bytes": 1234 }
 ```
 
-保存不产生撤销快照；父目录不存在时会创建。
+保存不产生撤销快照；父目录不存在时会创建。保存统一写入 `format_version: 2`。
 
 ### 18. `project.open`
 
@@ -312,6 +313,102 @@
 ```
 
 打开会校验 `format_version`、采样率、ID 命名与唯一性；成功后才替换当前工程，可撤销。版本不匹配直接拒绝。
+
+## 片段与音符
+
+时间线固定 5 秒；片段和音符都以秒为单位，音符 `start` 相对片段起点。
+
+### 19. `clip.create`
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `track_id` | string | 是 | 目标轨道 |
+| `name` | string | 否 | 省略时自动生成 |
+| `start` | number | 是 | 片段起点，0 到 5 |
+| `duration` | number | 是 | 片段长度，必须让终点不超过 5 |
+
+返回：
+
+```json
+{ "track_id": "track-1", "clip_id": "clip-1", "path": "/tracks/track-1/clips/clip-1", "clip": { } }
+```
+
+### 20. `clip.remove`
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `path` | string | 是 | `/tracks/{id}/clips/{id}` |
+
+返回：
+
+```json
+{ "path": "/tracks/track-1/clips/clip-1" }
+```
+
+### 21. `note.add`
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `path` | string | 是 | 片段路径 |
+| `pitch` | integer | 是 | MIDI 音高，0 到 127 |
+| `start` | number | 是 | 相对片段起点，0 到片段长度 |
+| `duration` | number | 是 | 音符长度，必须落在片段内 |
+| `velocity` | number | 否 | 0 到 1，默认 `0.8` |
+
+返回：
+
+```json
+{ "path": "/tracks/track-1/clips/clip-1/notes/note-1", "note_id": "note-1", "note": { } }
+```
+
+### 22. `note.remove`
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `path` | string | 是 | `/tracks/{id}/clips/{id}/notes/{id}` |
+
+返回：
+
+```json
+{ "path": "/tracks/track-1/clips/clip-1/notes/note-1" }
+```
+
+四条片段/音符命令都可撤销。工程文件版本 2 起包含 `clips` 与 `notes`；当前不做旧版本兼容，旧文件直接拒绝。
+
+### 23. `clip.update`
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `path` | string | 是 | 片段路径 |
+| `name` | string | 否 | 新名称 |
+| `start` | number | 否 | 新起点 |
+| `duration` | number | 否 | 新长度 |
+
+至少提供一个字段。缩片段时如果有音符超出新长度，命令直接拒绝。
+
+返回：
+
+```json
+{ "path": "/tracks/track-1/clips/clip-1", "clip": { } }
+```
+
+### 24. `note.update`
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `path` | string | 是 | 音符路径 |
+| `pitch` | integer | 否 | 新 MIDI 音高 |
+| `start` | number | 否 | 新相对起点 |
+| `duration` | number | 否 | 新长度 |
+| `velocity` | number | 否 | 新力度 |
+
+至少提供一个字段；更新后必须仍落在片段内。
+
+返回：
+
+```json
+{ "path": "/tracks/track-1/clips/clip-1/notes/note-1", "note": { } }
+```
 
 ## MCP 映射
 
@@ -336,6 +433,12 @@
 | `project.save` | `project_save` |
 | `project.open` | `project_open` |
 | `track.remove` | `track_remove` |
+| `clip.create` | `clip_create` |
+| `clip.update` | `clip_update` |
+| `clip.remove` | `clip_remove` |
+| `note.add` | `note_add` |
+| `note.update` | `note_update` |
+| `note.remove` | `note_remove` |
 | `device.remove` | `device_remove` |
 
 - `tools/list` 的 `inputSchema` 直接来自命令注册表；
@@ -345,11 +448,12 @@
 
 ## 会话共享
 
-桌面宿主启动时会绑定 `127.0.0.1` 的随机端口，并把端口写到系统临时目录的 `aurtrack-session.json`。
+桌面宿主启动时会绑定 `127.0.0.1` 的随机端口，并把端口写到系统缓存目录下的 `Aurtrack/aurtrack-session.json`。该路径使用系统 known folder，不读取 shell 的 `TEMP`，因此在 Git Bash / WSL 等 POSIX 风格环境下也能稳定定位。
 
 - CLI 与 MCP 默认先连接这个服务；连接成功就共享桌面的文档与走带；
-- 连接失败时退回本进程运行时；
-- `--local` 强制使用本进程运行时，适合无桌面环境与测试；
+- CLI 连接失败会打印警告和会话文件路径，然后退回本地一次性运行时；
+- MCP 连接失败会直接退出，不再静默退回本地；必须显式加 `--local` 才使用本地运行时；
+- `AURTRACK_SESSION_FILE` 可显式指定会话文件路径（建议绝对路径）；
 - 服务只监听回环地址，暂未做鉴权。
 
 因此桌面运行时，`aurtrack transport.play` 控制的是桌面那个 Runtime，而不是再起一个。
