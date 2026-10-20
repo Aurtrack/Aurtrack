@@ -23,6 +23,16 @@ fn temp_path(tag: &str) -> String {
         .into_owned()
 }
 
+fn project_temp_path(tag: &str) -> String {
+    std::env::temp_dir()
+        .join(format!(
+            "aurtrack-{tag}-{}.aurtrack.json",
+            std::process::id()
+        ))
+        .to_string_lossy()
+        .into_owned()
+}
+
 #[test]
 fn full_slice_produces_audio_and_undo_restores_it() {
     let mut session = Session::default();
@@ -83,10 +93,10 @@ fn full_slice_produces_audio_and_undo_restores_it() {
 }
 
 #[test]
-fn describe_lists_sixteen_commands() {
+fn describe_lists_eighteen_commands() {
     let mut session = Session::default();
     let out = run(&mut session, "describe", json!({}));
-    assert_eq!(out["commands"].as_array().unwrap().len(), 16);
+    assert_eq!(out["commands"].as_array().unwrap().len(), 18);
     assert!(out["project"].is_null());
 }
 
@@ -111,6 +121,75 @@ fn remove_track_supports_undo_and_redo() {
     run(&mut session, "redo", json!({}));
     let state = run(&mut session, "project.state", json!({}));
     assert_eq!(state["project"]["tracks"].as_array().unwrap().len(), 0);
+}
+
+#[test]
+fn project_save_and_open_round_trip() {
+    let mut session = Session::default();
+    run(&mut session, "project.create", json!({ "name": "saved" }));
+    run(
+        &mut session,
+        "track.create",
+        json!({ "name": "bass", "source": "sine", "frequency": 110.0 }),
+    );
+    run(
+        &mut session,
+        "device.add",
+        json!({ "track_id": "track-1", "kind": "gain" }),
+    );
+    run(
+        &mut session,
+        "param.set",
+        json!({
+            "path": "/tracks/track-1/devices/device-1/params/gain",
+            "value": 0.5
+        }),
+    );
+
+    let path = project_temp_path("round-trip");
+    let saved = run(&mut session, "project.save", json!({ "path": path }));
+    assert!(saved["bytes"].as_u64().unwrap() > 0);
+
+    let mut opened = Session::default();
+    let response = run(&mut opened, "project.open", json!({ "path": path }));
+    assert_eq!(response["project"]["name"], "saved");
+
+    let state = run(&mut opened, "project.state", json!({}));
+    assert_eq!(state["project"]["tracks"][0]["source"]["frequency"], 110.0);
+    assert_eq!(
+        state["project"]["tracks"][0]["devices"][0]["params"]["gain"],
+        0.5
+    );
+
+    let next = run(&mut opened, "track.create", json!({ "name": "next" }));
+    assert_eq!(next["track_id"], "track-2");
+
+    run(&mut opened, "undo", json!({ "steps": 2 }));
+    let state = run(&mut opened, "project.state", json!({}));
+    assert!(state["project"].is_null());
+
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn project_open_rejects_unknown_format_version() {
+    let path = project_temp_path("bad-version");
+    std::fs::write(
+        &path,
+        r#"{"format_version":99,"project":{"name":"x","sample_rate":48000,"tracks":[]}}"#,
+    )
+    .unwrap();
+
+    let mut session = Session::default();
+    let error = session
+        .execute(&CommandRequest {
+            cmd: "project.open".to_string(),
+            args: json!({ "path": path }),
+        })
+        .unwrap_err();
+    assert_eq!(error.code, "invalid_args");
+
+    std::fs::remove_file(path).unwrap();
 }
 
 #[test]

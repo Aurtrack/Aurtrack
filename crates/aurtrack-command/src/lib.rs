@@ -240,6 +240,26 @@ fn project_state_schema() -> Value {
     object_schema(json!({}), &[])
 }
 
+fn project_path_schema() -> Value {
+    object_schema(
+        json!({
+            "path": {
+                "type": "string",
+                "description": "工程文件路径，建议使用 .aurtrack.json"
+            }
+        }),
+        &["path"],
+    )
+}
+
+fn project_save_schema() -> Value {
+    project_path_schema()
+}
+
+fn project_open_schema() -> Value {
+    project_path_schema()
+}
+
 fn track_remove_schema() -> Value {
     object_schema(json!({ "track_id": { "type": "string" } }), &["track_id"])
 }
@@ -283,7 +303,7 @@ fn transport_gain_schema() -> Value {
     )
 }
 
-static COMMANDS: [CommandSpec; 16] = [
+static COMMANDS: [CommandSpec; 18] = [
     CommandSpec {
         id: "project.create",
         summary: "创建或替换当前工程",
@@ -295,6 +315,18 @@ static COMMANDS: [CommandSpec; 16] = [
         summary: "返回完整工程状态",
         undo: UndoKind::None,
         input_schema: project_state_schema,
+    },
+    CommandSpec {
+        id: "project.save",
+        summary: "把当前工程保存到文件",
+        undo: UndoKind::None,
+        input_schema: project_save_schema,
+    },
+    CommandSpec {
+        id: "project.open",
+        summary: "从文件打开工程",
+        undo: UndoKind::Snapshot,
+        input_schema: project_open_schema,
     },
     CommandSpec {
         id: "track.create",

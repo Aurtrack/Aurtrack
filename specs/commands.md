@@ -1,6 +1,6 @@
-# 命令规范 v0.3
+# 命令规范 v0.4
 
-这份文档定义 Aurtrack 的可运行命令面：16 条命令、统一的返回结构、寻址规则，以及 MCP 的映射方式。代码必须与本文一致。
+这份文档定义 Aurtrack 的可运行命令面：18 条命令、统一的返回结构、寻址规则，以及 MCP 的映射方式。代码必须与本文一致。
 
 ## 信封
 
@@ -281,6 +281,38 @@
 
 `track.remove` 与 `device.remove` 都可撤销。
 
+## 工程文件
+
+工程文件格式见 `docs/adr/0002-project-file.md`：UTF-8 JSON，顶层是 `{ "format_version": 1, "project": { ... } }`。
+
+### 17. `project.save`
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `path` | string | 是 | 目标路径，建议 `.aurtrack.json` |
+
+返回：
+
+```json
+{ "path": "...", "bytes": 1234 }
+```
+
+保存不产生撤销快照；父目录不存在时会创建。
+
+### 18. `project.open`
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `path` | string | 是 | 工程文件路径 |
+
+返回：
+
+```json
+{ "path": "...", "project": { ... } }
+```
+
+打开会校验 `format_version`、采样率、ID 命名与唯一性；成功后才替换当前工程，可撤销。版本不匹配直接拒绝。
+
 ## MCP 映射
 
 工具名是命令 ID 把 `.` 换成 `_`：
@@ -301,6 +333,8 @@
 | `undo` | `undo` |
 | `redo` | `redo` |
 | `project.state` | `project_state` |
+| `project.save` | `project_save` |
+| `project.open` | `project_open` |
 | `track.remove` | `track_remove` |
 | `device.remove` | `device_remove` |
 

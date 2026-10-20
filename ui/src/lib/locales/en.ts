@@ -54,6 +54,10 @@ export const en: Record<MessageKey, Message> = {
   "transport.render": "RENDER WAV",
   "transport.undo": "UNDO",
   "transport.redo": "REDO",
+  "transport.save": "SAVE",
+  "transport.open": "OPEN",
+  "transport.file": (params) => `FILE: ${params.file}`,
+  "transport.unsaved": "UNSAVED",
   "transport.status": (params) => `STATUS: ${params.status}`,
 
   "log.title": "COMMAND LOG",
@@ -88,6 +92,10 @@ export const en: Record<MessageKey, Message> = {
   "status.rendered": (params) =>
     `Rendered: peak ${params.peak} · rms ${params.rms} · ${params.frames} frames`,
   "status.renderFailed": (params) => `Render failed: ${params.message}`,
+  "status.saved": (params) => `Saved: ${params.file}`,
+  "status.saveFailed": (params) => `Save failed: ${params.message}`,
+  "status.opened": (params) => `Opened: ${params.file}`,
+  "status.openFailed": (params) => `Open failed: ${params.message}`,
 
   "error.not_found": "Not found",
   "error.invalid_args": "Invalid arguments",

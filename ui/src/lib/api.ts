@@ -117,6 +117,12 @@ export async function audioInfo(): Promise<AudioInfo> {
   return getInvoke()<AudioInfo>("audio_info");
 }
 
+export async function pickProjectPath(
+  mode: "save" | "open",
+): Promise<string | null> {
+  return getInvoke()<string | null>("pick_project_path", { mode });
+}
+
 export async function projectState(): Promise<ProjectState> {
   return call<ProjectState>("project.state");
 }

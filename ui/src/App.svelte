@@ -12,6 +12,7 @@
     call,
     errorMessage,
     openFile,
+    pickProjectPath,
     projectState,
     renderPath,
     setMasterGain,
@@ -46,6 +47,7 @@
 
   let project = $state<Project | null>(null);
   let selectedTrackId = $state("");
+  let projectPath = $state("");
   let gain = $state(50);
   let busy = $state(false);
   let playing = $state(false);
@@ -61,6 +63,7 @@
   let projectPolling = false;
 
   let tracks = $derived(project?.tracks ?? []);
+  let projectFile = $derived(fileName(projectPath));
   let selectedTrack = $derived(
     tracks.find((track) => track.id === selectedTrackId) ?? tracks[0] ?? null,
   );
@@ -86,6 +89,11 @@
     params?: Record<string, string | number>,
   ) {
     status = { key, params };
+  }
+
+  function fileName(path: string): string {
+    const parts = path.split(/[\\/]/);
+    return parts[parts.length - 1] ?? path;
   }
 
   function errorMessageFor(error: unknown): string {
@@ -345,6 +353,54 @@
     }
   }
 
+  async function saveProject() {
+    if (busy) return;
+    let path: string | null;
+    try {
+      path = await pickProjectPath("save");
+    } catch (error) {
+      fail("status.saveFailed", error);
+      return;
+    }
+    if (!path) return;
+
+    busy = true;
+    try {
+      await run("project.save", { path });
+      projectPath = path;
+      setStatus("status.saved", { file: fileName(path) });
+    } catch (error) {
+      fail("status.saveFailed", error);
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function openProject() {
+    if (busy) return;
+    let path: string | null;
+    try {
+      path = await pickProjectPath("open");
+    } catch (error) {
+      fail("status.openFailed", error);
+      return;
+    }
+    if (!path) return;
+
+    busy = true;
+    try {
+      await run("project.open", { path });
+      await refreshProject();
+      await reloadIfPlaying();
+      projectPath = path;
+      setStatus("status.opened", { file: fileName(path) });
+    } catch (error) {
+      fail("status.openFailed", error);
+    } finally {
+      busy = false;
+    }
+  }
+
   function onGainChange(value: number) {
     gain = value;
     void setMasterGain(value / 100).catch(() => {});
@@ -408,11 +464,14 @@
         {busy}
         {gain}
         status={statusText}
+        fileName={projectFile}
         {commandCount}
         onPlay={play}
         onStop={stop}
         onGainChange={onGainChange}
         onRender={render}
+        onSave={saveProject}
+        onOpen={openProject}
         onUndo={undo}
         onRedo={redo}
       />

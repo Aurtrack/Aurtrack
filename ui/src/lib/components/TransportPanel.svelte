@@ -6,11 +6,14 @@
     busy: boolean;
     gain: number;
     status: string;
+    fileName: string;
     commandCount: number;
     onPlay: () => void;
     onStop: () => void;
     onGainChange: (value: number) => void;
     onRender: () => void;
+    onSave: () => void;
+    onOpen: () => void;
     onUndo: () => void;
     onRedo: () => void;
   }
@@ -20,11 +23,14 @@
     busy,
     gain,
     status,
+    fileName,
     commandCount,
     onPlay,
     onStop,
     onGainChange,
     onRender,
+    onSave,
+    onOpen,
     onUndo,
     onRedo,
   }: Props = $props();
@@ -54,6 +60,12 @@
   </div>
 
   <div class="actions">
+    <button disabled={busy} onclick={onOpen}>
+      {t("transport.open")}
+    </button>
+    <button disabled={busy} onclick={onSave}>
+      {t("transport.save")}
+    </button>
     <button class="primary" disabled={busy || playing} onclick={onPlay}>
       {t("transport.play")}
     </button>
@@ -71,6 +83,11 @@
     </button>
   </div>
 
+  <p class="status">
+    {t("transport.file", {
+      file: fileName || t("transport.unsaved"),
+    })}
+  </p>
   <p class="status">
     {t("transport.status", { status })}
   </p>

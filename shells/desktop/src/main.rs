@@ -85,6 +85,19 @@ fn open_with_system(path: &Path) -> std::io::Result<()> {
     Ok(())
 }
 
+#[tauri::command]
+fn pick_project_path(mode: String) -> Option<String> {
+    let dialog = rfd::FileDialog::new()
+        .add_filter("Aurtrack 工程", &["json"])
+        .set_file_name("project.aurtrack.json");
+    let path = if mode == "save" {
+        dialog.set_title("保存 Aurtrack 工程").save_file()
+    } else {
+        dialog.set_title("打开 Aurtrack 工程").pick_file()
+    };
+    path.map(|path| path.to_string_lossy().into_owned())
+}
+
 fn main() {
     let mut runtime = Runtime::new();
     if let Err(error) = runtime.ensure_audio() {
@@ -119,7 +132,8 @@ fn main() {
             execute,
             render_path,
             open_file,
-            audio_info
+            audio_info,
+            pick_project_path
         ])
         .run(tauri::generate_context!())
     {

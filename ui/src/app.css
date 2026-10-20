@@ -289,8 +289,8 @@ body {
   cursor: pointer;
 }
 
-.track-select:hover {
-  background: transparent;
+.track-row .track-select:hover {
+  background: #e4eaf6;
   color: var(--ink);
 }
 

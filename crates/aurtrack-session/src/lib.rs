@@ -23,7 +23,7 @@
     clippy::needless_pass_by_value
 )]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::Path;
 
@@ -33,7 +33,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 /// 最小工程模型。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Project {
     pub name: String,
     pub sample_rate: u32,
@@ -41,7 +41,7 @@ pub struct Project {
 }
 
 /// 一条轨道。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Track {
     pub id: String,
     pub name: String,
@@ -50,7 +50,7 @@ pub struct Track {
 }
 
 /// 轨道信号源。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Source {
     Silence,
@@ -58,11 +58,20 @@ pub enum Source {
 }
 
 /// 轨道上的设备。
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Device {
     pub id: String,
     pub kind: String,
     pub params: BTreeMap<String, f64>,
+}
+
+const PROJECT_FORMAT_VERSION: u32 = 1;
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProjectFile {
+    format_version: u32,
+    project: Project,
 }
 
 #[derive(Debug, Clone)]
@@ -93,6 +102,8 @@ impl Session {
         match request.cmd.as_str() {
             "project.create" => self.cmd_project_create(&request.args),
             "project.state" => Ok(self.cmd_project_state()),
+            "project.save" => self.cmd_project_save(&request.args),
+            "project.open" => self.cmd_project_open(&request.args),
             "track.create" => self.cmd_track_create(&request.args),
             "track.remove" => self.cmd_track_remove(&request.args),
             "device.add" => self.cmd_device_add(&request.args),
@@ -350,6 +361,67 @@ impl Session {
         CommandResponse::ok(json!({ "project": &self.project }))
     }
 
+    fn cmd_project_save(&self, args: &Value) -> Result<CommandResponse, CommandError> {
+        let args: ProjectPathArgs = parse_args(args)?;
+        let path = args.path.trim();
+        if path.is_empty() {
+            return Err(CommandError::invalid_args("path 不能为空"));
+        }
+        let project = self
+            .project
+            .as_ref()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let file = ProjectFile {
+            format_version: PROJECT_FORMAT_VERSION,
+            project: project.clone(),
+        };
+        let text = serde_json::to_string_pretty(&file)
+            .map_err(|error| CommandError::new("io_error", format!("序列化工程失败：{error}")))?;
+        let target = Path::new(path);
+        if let Some(parent) = target.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent).map_err(|error| {
+                    CommandError::new("io_error", format!("创建工程目录失败：{error}"))
+                })?;
+            }
+        }
+        std::fs::write(target, text.as_bytes())
+            .map_err(|error| CommandError::new("io_error", format!("写工程失败：{error}")))?;
+        Ok(CommandResponse::ok(json!({
+            "path": path,
+            "bytes": text.len(),
+        })))
+    }
+
+    fn cmd_project_open(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        let args: ProjectPathArgs = parse_args(args)?;
+        let path = args.path.trim();
+        if path.is_empty() {
+            return Err(CommandError::invalid_args("path 不能为空"));
+        }
+        let text = std::fs::read_to_string(path)
+            .map_err(|error| CommandError::new("io_error", format!("读工程失败：{error}")))?;
+        let file: ProjectFile = serde_json::from_str(&text).map_err(|error| {
+            CommandError::invalid_args(format!("工程文件不是合法 JSON：{error}"))
+        })?;
+        if file.format_version != PROJECT_FORMAT_VERSION {
+            return Err(CommandError::invalid_args(format!(
+                "不支持的工程格式版本：{}",
+                file.format_version
+            )));
+        }
+        let (next_track, next_device) = validate_project(&file.project)?;
+        let token = self.snapshot("project.open");
+        self.project = Some(file.project);
+        self.next_track = next_track;
+        self.next_device = next_device;
+        Ok(CommandResponse::ok(json!({
+            "path": path,
+            "project": self.project_summary(),
+        }))
+        .with_undo(token))
+    }
+
     fn cmd_track_remove(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
         let args: TrackRemoveArgs = parse_args(args)?;
         let track_id = args.track_id;
@@ -487,6 +559,96 @@ fn parse_device_path(path: &str) -> Result<(&str, &str), CommandError> {
             "设备路径不合法：{path}"
         ))),
     }
+}
+
+fn parse_id(id: &str, prefix: &str) -> Option<u64> {
+    let number = id.strip_prefix(prefix)?.parse::<u64>().ok()?;
+    (number > 0).then_some(number)
+}
+
+fn validate_project(project: &Project) -> Result<(u64, u64), CommandError> {
+    if project.name.trim().is_empty() {
+        return Err(CommandError::invalid_args("工程名不能为空"));
+    }
+    if !(8_000..=192_000).contains(&project.sample_rate) {
+        return Err(CommandError::invalid_args(
+            "sample_rate 必须在 8000 到 192000 之间",
+        ));
+    }
+
+    let mut track_ids = BTreeSet::new();
+    let mut device_ids = BTreeSet::new();
+    let mut max_track = 0;
+    let mut max_device = 0;
+
+    for track in &project.tracks {
+        let Some(number) = parse_id(&track.id, "track-") else {
+            return Err(CommandError::invalid_args(format!(
+                "轨道 ID 不合法：{}",
+                track.id
+            )));
+        };
+        max_track = max_track.max(number);
+
+        if !track_ids.insert(track.id.as_str()) {
+            return Err(CommandError::invalid_args(format!(
+                "轨道 ID 重复：{}",
+                track.id
+            )));
+        }
+        if track.name.trim().is_empty() {
+            return Err(CommandError::invalid_args(format!(
+                "轨道名不能为空：{}",
+                track.id
+            )));
+        }
+        if let Source::Sine { frequency } = &track.source {
+            if !frequency.is_finite()
+                || *frequency <= 0.0
+                || *frequency >= f64::from(project.sample_rate) / 2.0
+            {
+                return Err(CommandError::invalid_args(format!(
+                    "轨道频率不合法：{}",
+                    track.id
+                )));
+            }
+        }
+
+        for device in &track.devices {
+            let Some(number) = parse_id(&device.id, "device-") else {
+                return Err(CommandError::invalid_args(format!(
+                    "设备 ID 不合法：{}",
+                    device.id
+                )));
+            };
+            max_device = max_device.max(number);
+
+            if !device_ids.insert(device.id.as_str()) {
+                return Err(CommandError::invalid_args(format!(
+                    "设备 ID 重复：{}",
+                    device.id
+                )));
+            }
+            if device.kind.trim().is_empty() {
+                return Err(CommandError::invalid_args(format!(
+                    "设备类型不能为空：{}",
+                    device.id
+                )));
+            }
+            for (name, value) in &device.params {
+                if !value.is_finite() {
+                    return Err(CommandError::invalid_args(format!(
+                        "设备参数不是有限数：{name}"
+                    )));
+                }
+                if device.kind == "gain" && name == "gain" {
+                    validate_gain(*value)?;
+                }
+            }
+        }
+    }
+
+    Ok((max_track, max_device))
 }
 
 fn validate_gain(value: f64) -> Result<(), CommandError> {
@@ -646,5 +808,11 @@ struct TrackRemoveArgs {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct DeviceRemoveArgs {
+    path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProjectPathArgs {
     path: String,
 }

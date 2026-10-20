@@ -51,6 +51,10 @@ export const zhCN = {
   "transport.render": "渲染 WAV",
   "transport.undo": "撤销",
   "transport.redo": "重做",
+  "transport.save": "保存工程",
+  "transport.open": "打开工程",
+  "transport.file": (params) => `文件：${params.file}`,
+  "transport.unsaved": "未保存",
   "transport.status": (params) => `状态：${params.status}`,
 
   "log.title": "命令日志",
@@ -82,6 +86,10 @@ export const zhCN = {
   "status.rendered": (params) =>
     `已渲染：峰值 ${params.peak} · 均方根 ${params.rms} · ${params.frames} 帧`,
   "status.renderFailed": (params) => `渲染失败：${params.message}`,
+  "status.saved": (params) => `已保存：${params.file}`,
+  "status.saveFailed": (params) => `保存失败：${params.message}`,
+  "status.opened": (params) => `已打开：${params.file}`,
+  "status.openFailed": (params) => `打开失败：${params.message}`,
 
   "error.not_found": "找不到目标对象",
   "error.invalid_args": "参数不合法",
