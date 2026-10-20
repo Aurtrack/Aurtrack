@@ -115,6 +115,25 @@ export const zhCN = {
 
   "project.defaultName": "Aurtrack 工程",
 
+  "recovery.title": "恢复未保存工程",
+  "recovery.message": "上次退出前有未保存的修改。恢复这份工程，还是丢弃？",
+  "recovery.restore": "恢复",
+  "recovery.discard": "丢弃",
+
+  "close.title": "工程未保存",
+  "close.message": "当前工程有未保存的修改。保存后退出，还是不保存？",
+  "close.save": "保存并退出",
+  "close.discard": "不保存退出",
+  "close.cancel": "取消",
+
+  "open.title": "打开其他工程",
+  "open.message": "当前工程有未保存修改。继续打开会丢弃这些修改。",
+  "open.confirm": "继续打开",
+  "open.cancel": "取消",
+
+  "recent.label": "最近工程",
+  "recent.none": "暂无最近工程",
+
   "status.connecting": "正在连接会话…",
   "status.ready": "会话就绪。添加轨道，或按播放。",
   "status.initFailed": (params) => `初始化失败：${params.message}`,
@@ -143,6 +162,13 @@ export const zhCN = {
   "status.saveFailed": (params) => `保存失败：${params.message}`,
   "status.opened": (params) => `已打开：${params.file}`,
   "status.openFailed": (params) => `打开失败：${params.message}`,
+  "status.recovered": "已恢复未保存工程",
+  "status.recoveryFailed": (params) => `恢复工程失败：${params.message}`,
+  "status.recoveryDiscarded": "已丢弃恢复文件",
+  "status.recoveryDiscardFailed": (params) =>
+    `丢弃恢复文件失败：${params.message}`,
+  "status.closeGuardFailed": (params) => `关闭拦截初始化失败：${params.message}`,
+  "status.closeFailed": (params) => `关闭窗口失败：${params.message}`,
   "status.clipCreated": (params) => `已创建片段 ${params.id}`,
   "status.clipCreateFailed": (params) => `建片段失败：${params.message}`,
   "status.clipRemoved": (params) => `已删除片段 ${params.id}`,

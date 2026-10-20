@@ -1,10 +1,15 @@
 import {
   audioInfo,
   call,
+  destroyWindow,
   errorMessage,
+  onCloseRequested,
   openFile,
   pickProjectPath,
   projectState,
+  recoveryExists,
+  recoveryPath,
+  removeRecoveryFile,
   renderPath,
   setMasterGain,
   transportPlay,
@@ -34,9 +39,58 @@ type Status = {
   params?: Record<string, string | number>;
 };
 
+export type RecentProject = {
+  path: string;
+  name: string;
+  savedAt: number;
+};
+
+const MUTATING_COMMANDS = new Set([
+  "track.create",
+  "track.remove",
+  "device.add",
+  "device.remove",
+  "param.set",
+  "clip.create",
+  "clip.update",
+  "clip.remove",
+  "note.add",
+  "note.update",
+  "note.remove",
+  "undo",
+  "redo",
+  "project.open",
+]);
+
+const RECENT_KEY = "aurtrack.recent.v1";
+const MAX_RECENT = 8;
+const RECOVERY_DELAY_MS = 1200;
+
 function fileName(path: string): string {
   const parts = path.split(/[\\/]/);
   return parts[parts.length - 1] ?? path;
+}
+
+function isRecentProject(value: unknown): value is RecentProject {
+  if (typeof value !== "object" || value === null) return false;
+  const raw = value as Record<string, unknown>;
+  return (
+    typeof raw.path === "string" &&
+    typeof raw.name === "string" &&
+    typeof raw.savedAt === "number"
+  );
+}
+
+function loadRecentProjects(): RecentProject[] {
+  try {
+    const raw = localStorage.getItem(RECENT_KEY);
+    if (!raw) return [];
+    const parsed: unknown = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return parsed.filter(isRecentProject).slice(0, MAX_RECENT);
+  } catch {
+    return [];
+  }
 }
 
 export class SessionStore {
@@ -55,12 +109,24 @@ export class SessionStore {
   logLines = $state<string[]>([]);
   playhead = $state(0);
   commandCount = $state(0);
+  dirty = $state(false);
+  recoveryAvailable = $state(false);
+  closeRequested = $state(false);
+  pendingOpenPath = $state<string | null>(null);
+  recentProjects = $state<RecentProject[]>(loadRecentProjects());
   private lastSeekAt = 0;
+  private lastProjectSnapshot = "";
   private polling = false;
   private projectPolling = false;
   private transportTimer: number | null = null;
   private projectTimer: number | null = null;
+  private recoveryTimer: number | null = null;
+  private recoveryPath = "";
+  private recoveryToken = 0;
+  private recovering = false;
   private started = false;
+  private closeGuardRegistered = false;
+  private unlistenClose: (() => void) | null = null;
 
   tracks = $derived(this.project?.tracks ?? []);
   projectFile = $derived(fileName(this.projectPath));
@@ -80,7 +146,10 @@ export class SessionStore {
   start() {
     if (this.started) return;
     this.started = true;
-    void this.bootstrap();
+    void this.bootstrap().then(() => {
+      void this.checkRecovery();
+    });
+    void this.initCloseGuard();
     this.transportTimer = window.setInterval(() => {
       void this.syncTransport();
     }, 33);
@@ -100,6 +169,16 @@ export class SessionStore {
       window.clearInterval(this.projectTimer);
       this.projectTimer = null;
     }
+    if (this.recoveryTimer !== null) {
+      window.clearTimeout(this.recoveryTimer);
+      this.recoveryTimer = null;
+    }
+    if (this.unlistenClose) {
+      this.unlistenClose();
+      this.unlistenClose = null;
+      this.closeGuardRegistered = false;
+    }
+    this.closeRequested = false;
   }
 
   selectTrack(trackId: string) {
@@ -116,6 +195,82 @@ export class SessionStore {
   selectClipId(clipId: string) {
     const track = this.selectedTrack;
     if (track) this.selectedClipId = clipId;
+  }
+
+  async openRecent(path: string) {
+    if (this.busy) return;
+    if (this.dirty) {
+      this.pendingOpenPath = path;
+      return;
+    }
+    await this.openPath(path);
+  }
+
+  async confirmPendingOpen() {
+    const path = this.pendingOpenPath;
+    if (!path) return;
+    this.pendingOpenPath = null;
+    await this.openPath(path);
+  }
+
+  cancelPendingOpen() {
+    this.pendingOpenPath = null;
+  }
+
+  cancelClose() {
+    this.closeRequested = false;
+  }
+
+  async saveAndClose() {
+    if (this.busy) return;
+    const saved = await this.saveProject();
+    if (saved) await this.closeWindow();
+  }
+
+  async discardAndClose() {
+    if (this.busy) return;
+    try {
+      await removeRecoveryFile();
+    } catch (error) {
+      this.fail("status.recoveryDiscardFailed", error);
+      return;
+    }
+    this.dirty = false;
+    await this.closeWindow();
+  }
+
+  async restoreRecovery() {
+    if (this.busy) return;
+    this.busy = true;
+    try {
+      if (!this.recoveryPath) this.recoveryPath = await recoveryPath();
+      await this.run("project.open", { path: this.recoveryPath });
+      await this.refreshProject();
+      await this.reloadIfPlaying();
+      this.projectPath = "";
+      this.dirty = true;
+      this.recoveryAvailable = false;
+      this.setStatus("status.recovered");
+    } catch (error) {
+      this.fail("status.recoveryFailed", error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  async discardRecovery() {
+    if (this.busy) return;
+    this.busy = true;
+    try {
+      await removeRecoveryFile();
+      this.recoveryAvailable = false;
+      this.recoveryPath = "";
+      this.setStatus("status.recoveryDiscarded");
+    } catch (error) {
+      this.fail("status.recoveryDiscardFailed", error);
+    } finally {
+      this.busy = false;
+    }
   }
 
   async addTrack(input: {
@@ -414,24 +569,30 @@ export class SessionStore {
     }
   }
 
-  async saveProject() {
-    if (this.busy) return;
-    let path: string | null;
-    try {
-      path = await pickProjectPath("save");
-    } catch (error) {
-      this.fail("status.saveFailed", error);
-      return;
+  async saveProject(): Promise<boolean> {
+    if (this.busy) return false;
+    let path = this.projectPath;
+    if (!path) {
+      try {
+        path = (await pickProjectPath("save")) ?? "";
+      } catch (error) {
+        this.fail("status.saveFailed", error);
+        return false;
+      }
+      if (!path) return false;
     }
-    if (!path) return;
 
     this.busy = true;
     try {
       await this.run("project.save", { path });
       this.projectPath = path;
+      this.rememberRecent(path);
+      await this.clearRecovery();
       this.setStatus("status.saved", { file: fileName(path) });
+      return true;
     } catch (error) {
       this.fail("status.saveFailed", error);
+      return false;
     } finally {
       this.busy = false;
     }
@@ -447,13 +608,23 @@ export class SessionStore {
       return;
     }
     if (!path) return;
+    if (this.dirty) {
+      this.pendingOpenPath = path;
+      return;
+    }
+    await this.openPath(path);
+  }
 
+  private async openPath(path: string) {
+    if (this.busy) return;
     this.busy = true;
     try {
       await this.run("project.open", { path });
       await this.refreshProject();
       await this.reloadIfPlaying();
       this.projectPath = path;
+      this.rememberRecent(path);
+      await this.clearRecovery();
       this.setStatus("status.opened", { file: fileName(path) });
     } catch (error) {
       this.fail("status.openFailed", error);
@@ -465,6 +636,114 @@ export class SessionStore {
   onGainChange(value: number) {
     this.gain = value;
     void setMasterGain(value / 100).catch(() => {});
+  }
+
+  private rememberRecent(path: string) {
+    const entry: RecentProject = {
+      path,
+      name: fileName(path),
+      savedAt: Date.now(),
+    };
+    this.recentProjects = [
+      entry,
+      ...this.recentProjects.filter((item) => item.path !== path),
+    ].slice(0, MAX_RECENT);
+    try {
+      localStorage.setItem(RECENT_KEY, JSON.stringify(this.recentProjects));
+    } catch {
+      // 最近工程是本地偏好，存储失败不影响当前会话。
+    }
+  }
+
+  private markDirty() {
+    this.dirty = true;
+    this.scheduleRecovery();
+  }
+
+  private scheduleRecovery() {
+    if (this.recoveryTimer !== null) {
+      window.clearTimeout(this.recoveryTimer);
+    }
+    this.recoveryTimer = window.setTimeout(() => {
+      this.recoveryTimer = null;
+      void this.writeRecovery();
+    }, RECOVERY_DELAY_MS);
+  }
+
+  private async writeRecovery() {
+    if (!this.dirty || this.recovering) return;
+    if (!this.recoveryPath) {
+      try {
+        this.recoveryPath = await recoveryPath();
+      } catch {
+        return;
+      }
+    }
+    const token = this.recoveryToken;
+    const path = this.recoveryPath;
+    this.recovering = true;
+    try {
+      await call("project.save", { path });
+    } catch {
+      // 自动恢复失败不覆盖用户当前操作，下一次修改会重试。
+    } finally {
+      this.recovering = false;
+    }
+    if (token !== this.recoveryToken && !this.dirty) {
+      try {
+        await removeRecoveryFile();
+      } catch {
+        // 已保存的工程不需要恢复文件，删除失败留给下次清理。
+      }
+    }
+  }
+
+  private async clearRecovery() {
+    this.recoveryToken += 1;
+    this.dirty = false;
+    this.recoveryAvailable = false;
+    this.lastProjectSnapshot = JSON.stringify(this.project);
+    if (this.recoveryTimer !== null) {
+      window.clearTimeout(this.recoveryTimer);
+      this.recoveryTimer = null;
+    }
+    try {
+      await removeRecoveryFile();
+    } catch {
+      // 恢复文件清理失败不影响已经保存的工程。
+    }
+  }
+
+  private async checkRecovery() {
+    try {
+      this.recoveryPath = await recoveryPath();
+      this.recoveryAvailable = await recoveryExists();
+    } catch {
+      this.recoveryAvailable = false;
+    }
+  }
+
+  private async initCloseGuard() {
+    if (this.closeGuardRegistered) return;
+    this.closeGuardRegistered = true;
+    try {
+      this.unlistenClose = await onCloseRequested((event) => {
+        if (!this.dirty) return;
+        event.preventDefault();
+        this.closeRequested = true;
+      });
+    } catch (error) {
+      this.closeGuardRegistered = false;
+      this.fail("status.closeGuardFailed", error);
+    }
+  }
+
+  private async closeWindow() {
+    try {
+      await destroyWindow();
+    } catch (error) {
+      this.fail("status.closeFailed", error);
+    }
   }
 
   private buildTimelineTracks() {
@@ -542,7 +821,9 @@ export class SessionStore {
     args: Record<string, unknown> = {},
   ): Promise<T> {
     this.log(`→ ${cmd} ${JSON.stringify(args)}`);
-    return call<T>(cmd, args);
+    const result = await call<T>(cmd, args);
+    if (MUTATING_COMMANDS.has(cmd)) this.markDirty();
+    return result;
   }
 
   private async refreshAudio() {
@@ -562,6 +843,15 @@ export class SessionStore {
       const state: ProjectState = await projectState();
       this.project = state.project;
       this.ensureSelection();
+      const snapshot = JSON.stringify(state.project);
+      if (
+        this.lastProjectSnapshot !== "" &&
+        snapshot !== this.lastProjectSnapshot &&
+        !this.dirty
+      ) {
+        this.markDirty();
+      }
+      this.lastProjectSnapshot = snapshot;
     } catch {
       // 轮询失败时保持现状，不打断交互。
     } finally {
@@ -594,6 +884,7 @@ export class SessionStore {
         this.project = created.project;
       }
       this.ensureSelection();
+      this.lastProjectSnapshot = JSON.stringify(this.project);
       const description = await call<{ commands: { id: string }[] }>(
         "describe",
       );

@@ -118,6 +118,27 @@ export const en: Record<MessageKey, Message> = {
 
   "project.defaultName": "Aurtrack Project",
 
+  "recovery.title": "RECOVER UNSAVED PROJECT",
+  "recovery.message":
+    "The last session ended with unsaved changes. Recover it or discard it?",
+  "recovery.restore": "RECOVER",
+  "recovery.discard": "DISCARD",
+
+  "close.title": "UNSAVED PROJECT",
+  "close.message": "The current project has unsaved changes. Save before exit?",
+  "close.save": "SAVE AND EXIT",
+  "close.discard": "EXIT WITHOUT SAVING",
+  "close.cancel": "CANCEL",
+
+  "open.title": "OPEN ANOTHER PROJECT",
+  "open.message":
+    "The current project has unsaved changes. Opening another project will discard them.",
+  "open.confirm": "OPEN ANYWAY",
+  "open.cancel": "CANCEL",
+
+  "recent.label": "RECENT",
+  "recent.none": "NO RECENT PROJECTS",
+
   "status.connecting": "Connecting to session…",
   "status.ready": "Session ready. Add a track, or press PLAY.",
   "status.initFailed": (params) => `Init failed: ${params.message}`,
@@ -149,6 +170,14 @@ export const en: Record<MessageKey, Message> = {
   "status.saveFailed": (params) => `Save failed: ${params.message}`,
   "status.opened": (params) => `Opened: ${params.file}`,
   "status.openFailed": (params) => `Open failed: ${params.message}`,
+  "status.recovered": "Recovered unsaved project",
+  "status.recoveryFailed": (params) => `Recovery failed: ${params.message}`,
+  "status.recoveryDiscarded": "Recovery file discarded",
+  "status.recoveryDiscardFailed": (params) =>
+    `Discard recovery failed: ${params.message}`,
+  "status.closeGuardFailed": (params) =>
+    `Close guard unavailable: ${params.message}`,
+  "status.closeFailed": (params) => `Close failed: ${params.message}`,
   "status.clipCreated": (params) => `Created clip ${params.id}`,
   "status.clipCreateFailed": (params) =>
     `Create clip failed: ${params.message}`,

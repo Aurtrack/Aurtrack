@@ -70,6 +70,7 @@
     gain={session.gain}
     status={session.statusText}
     fileName={session.projectFile}
+    dirty={session.dirty}
     commandCount={session.commandCount}
     onPlay={() => void session.play()}
     onStop={() => void session.stop()}

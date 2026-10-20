@@ -7,6 +7,7 @@
     gain: number;
     status: string;
     fileName: string;
+    dirty: boolean;
     commandCount: number;
     onPlay: () => void;
     onStop: () => void;
@@ -24,6 +25,7 @@
     gain,
     status,
     fileName,
+    dirty,
     commandCount,
     onPlay,
     onStop,
@@ -85,7 +87,7 @@
 
   <p class="status">
     {t("transport.file", {
-      file: fileName || t("transport.unsaved"),
+      file: `${fileName || t("transport.unsaved")}${dirty ? " *" : ""}`,
     })}
   </p>
   <p class="status">

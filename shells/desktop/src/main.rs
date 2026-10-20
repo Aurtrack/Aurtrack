@@ -16,7 +16,7 @@ use std::sync::{Arc, Mutex};
 use aurtrack_command::{CommandError, CommandRequest, CommandResponse};
 use aurtrack_ipc::ServerHandle;
 use aurtrack_runtime::{AudioInfo, Runtime};
-use tauri::State;
+use tauri::{Manager, State};
 
 struct AppState {
     runtime: Arc<Mutex<Runtime>>,
@@ -98,6 +98,34 @@ fn pick_project_path(mode: String) -> Option<String> {
     path.map(|path| path.to_string_lossy().into_owned())
 }
 
+fn recovery_file(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let directory = app
+        .path()
+        .app_local_data_dir()
+        .map_err(|error| format!("定位恢复目录失败：{error}"))?;
+    std::fs::create_dir_all(&directory).map_err(|error| format!("创建恢复目录失败：{error}"))?;
+    Ok(directory.join("recovery.aurtrack.json"))
+}
+
+#[tauri::command]
+fn recovery_path(app: tauri::AppHandle) -> Result<String, String> {
+    Ok(recovery_file(&app)?.to_string_lossy().into_owned())
+}
+
+#[tauri::command]
+fn recovery_exists(app: tauri::AppHandle) -> Result<bool, String> {
+    Ok(recovery_file(&app)?.is_file())
+}
+
+#[tauri::command]
+fn recovery_remove(app: tauri::AppHandle) -> Result<(), String> {
+    let path = recovery_file(&app)?;
+    if path.exists() {
+        std::fs::remove_file(&path).map_err(|error| format!("删除恢复文件失败：{error}"))?;
+    }
+    Ok(())
+}
+
 fn main() {
     let mut runtime = Runtime::new();
     if let Err(error) = runtime.ensure_audio() {
@@ -133,7 +161,10 @@ fn main() {
             render_path,
             open_file,
             audio_info,
-            pick_project_path
+            pick_project_path,
+            recovery_path,
+            recovery_exists,
+            recovery_remove
         ])
         .run(tauri::generate_context!())
     {

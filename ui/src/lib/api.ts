@@ -59,11 +59,25 @@ type Invoke = <T>(
   args?: Record<string, unknown>,
 ) => Promise<T>;
 
+type CloseRequestedEvent = {
+  preventDefault: () => void;
+};
+
+type TauriWindow = {
+  onCloseRequested: (
+    handler: (event: CloseRequestedEvent) => void | Promise<void>,
+  ) => Promise<() => void>;
+  destroy: () => Promise<void>;
+};
+
 declare global {
   interface Window {
     __TAURI__?: {
       core: {
         invoke: Invoke;
+      };
+      window?: {
+        getCurrentWindow: () => TauriWindow;
       };
     };
   }
@@ -138,6 +152,36 @@ export async function pickProjectPath(
   mode: "save" | "open",
 ): Promise<string | null> {
   return getInvoke()<string | null>("pick_project_path", { mode });
+}
+
+export async function recoveryPath(): Promise<string> {
+  return getInvoke()<string>("recovery_path");
+}
+
+export async function recoveryExists(): Promise<boolean> {
+  return getInvoke()<boolean>("recovery_exists");
+}
+
+export async function removeRecoveryFile(): Promise<void> {
+  await getInvoke()<void>("recovery_remove");
+}
+
+export async function onCloseRequested(
+  handler: (event: CloseRequestedEvent) => void | Promise<void>,
+): Promise<() => void> {
+  const tauri = window.__TAURI__;
+  if (!tauri?.window) {
+    throw new Error("Tauri 窗口 API 不可用");
+  }
+  return tauri.window.getCurrentWindow().onCloseRequested(handler);
+}
+
+export async function destroyWindow(): Promise<void> {
+  const tauri = window.__TAURI__;
+  if (!tauri?.window) {
+    throw new Error("Tauri 窗口 API 不可用");
+  }
+  await tauri.window.getCurrentWindow().destroy();
 }
 
 export async function projectState(): Promise<ProjectState> {
