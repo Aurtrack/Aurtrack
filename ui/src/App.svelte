@@ -18,7 +18,59 @@
       session.projectFile || t("transport.unsaved")
     } — Aurtrack`;
   });
+
+  function isTypingTarget(target: EventTarget | null): boolean {
+    const element = target as HTMLElement | null;
+    if (!element) return false;
+    return (
+      element.tagName === "INPUT" ||
+      element.tagName === "TEXTAREA" ||
+      element.tagName === "SELECT" ||
+      element.isContentEditable
+    );
+  }
+
+  function isButtonTarget(target: EventTarget | null): boolean {
+    const element = target as HTMLElement | null;
+    return element?.tagName === "BUTTON" || element?.tagName === "A";
+  }
+
+  function handleKeydown(event: KeyboardEvent) {
+    if (event.defaultPrevented || isTypingTarget(event.target)) return;
+    const modifier = event.ctrlKey || event.metaKey;
+    const key = event.key.toLowerCase();
+
+    if (modifier && key === "s") {
+      event.preventDefault();
+      void session.saveProject();
+    } else if (modifier && key === "o") {
+      event.preventDefault();
+      void session.openProject();
+    } else if (modifier && key === "z") {
+      event.preventDefault();
+      if (event.shiftKey) void session.redo();
+      else void session.undo();
+    } else if (modifier && key === "y") {
+      event.preventDefault();
+      void session.redo();
+    } else if (modifier && key === "d") {
+      event.preventDefault();
+      void session.duplicateSelected();
+    } else if (
+      (key === "delete" || key === "backspace") &&
+      !isButtonTarget(event.target)
+    ) {
+      event.preventDefault();
+      void session.deleteSelected();
+    } else if (key === " " && !isButtonTarget(event.target)) {
+      event.preventDefault();
+      if (session.playing) void session.stop();
+      else void session.play();
+    }
+  }
 </script>
+
+<svelte:window onkeydown={handleKeydown} />
 
 <main class="sheet">
   <Header audioState={session.audioState} sampleRate={session.sampleRate} />

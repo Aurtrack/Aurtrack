@@ -297,6 +297,45 @@ fn clip_update_schema() -> Value {
     )
 }
 
+fn clip_duplicate_schema() -> Value {
+    object_schema(
+        json!({
+            "path": { "type": "string", "description": "/tracks/{id}/clips/{id}" }
+        }),
+        &["path"],
+    )
+}
+
+fn note_duplicate_schema() -> Value {
+    object_schema(
+        json!({
+            "path": {
+                "type": "string",
+                "description": "/tracks/{id}/clips/{id}/notes/{id}"
+            }
+        }),
+        &["path"],
+    )
+}
+
+fn note_quantize_schema() -> Value {
+    object_schema(
+        json!({
+            "path": {
+                "type": "string",
+                "description": "/tracks/{id}/clips/{id}/notes/{id}"
+            },
+            "grid": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "maximum": 5,
+                "description": "量化网格，单位秒，例如 0.125 表示 1/16"
+            }
+        }),
+        &["path", "grid"],
+    )
+}
+
 fn note_add_schema() -> Value {
     object_schema(
         json!({
@@ -377,7 +416,7 @@ fn transport_gain_schema() -> Value {
     )
 }
 
-static COMMANDS: [CommandSpec; 24] = [
+static COMMANDS: [CommandSpec; 27] = [
     CommandSpec {
         id: "project.create",
         summary: "创建或替换当前工程",
@@ -433,6 +472,12 @@ static COMMANDS: [CommandSpec; 24] = [
         input_schema: clip_remove_schema,
     },
     CommandSpec {
+        id: "clip.duplicate",
+        summary: "在原片段后面复制一个片段",
+        undo: UndoKind::Snapshot,
+        input_schema: clip_duplicate_schema,
+    },
+    CommandSpec {
         id: "note.add",
         summary: "在片段里添加音符",
         undo: UndoKind::Snapshot,
@@ -449,6 +494,18 @@ static COMMANDS: [CommandSpec; 24] = [
         summary: "删除一个音符",
         undo: UndoKind::Snapshot,
         input_schema: note_remove_schema,
+    },
+    CommandSpec {
+        id: "note.duplicate",
+        summary: "在原音符后面复制一个音符",
+        undo: UndoKind::Snapshot,
+        input_schema: note_duplicate_schema,
+    },
+    CommandSpec {
+        id: "note.quantize",
+        summary: "把音符起点量化到指定网格",
+        undo: UndoKind::Snapshot,
+        input_schema: note_quantize_schema,
     },
     CommandSpec {
         id: "device.add",

@@ -30,6 +30,8 @@
     trackId={session.selectedTrack?.id ?? null}
     clip={session.selectedClip}
     busy={session.busy}
+    selectedNoteId={session.selectedNoteId}
+    onSelectNote={(noteId: string) => session.selectNote(noteId)}
     onAddNote={(path, input) => void session.addNote(path, input)}
     onUpdateNote={(path, patch) => void session.updateNote(path, patch)}
     onRemoveNote={(path: string) => void session.deleteNote(path)}
@@ -48,11 +50,16 @@
     track={session.selectedTrack}
     busy={session.busy}
     selectedClipId={session.selectedClipId}
+    selectedNoteId={session.selectedNoteId}
     onSelectClip={(id: string) => session.selectClipId(id)}
+    onSelectNote={(id: string) => session.selectNote(id)}
     onAddClip={(trackId, input) => void session.addClip(trackId, input)}
     onRemoveClip={(path: string) => void session.deleteClip(path)}
+    onDuplicateClip={(path: string) => void session.duplicateClip(path)}
     onAddNote={(path, input) => void session.addNote(path, input)}
     onRemoveNote={(path: string) => void session.deleteNote(path)}
+    onDuplicateNote={(path: string) => void session.duplicateNote(path)}
+    onQuantizeNote={(path, grid) => void session.quantizeNote(path, grid)}
   />
 {:else if kind === "inspector"}
   <TrackInspector

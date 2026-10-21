@@ -25,6 +25,8 @@ export const en: Record<MessageKey, Message> = {
   "menu.quit": "Quit",
   "menu.undo": "Undo",
   "menu.redo": "Redo",
+  "menu.duplicateSelected": "Duplicate selected",
+  "menu.deleteSelected": "Delete selected",
   "menu.renderWav": "Render WAV",
   "menu.resetLayout": "Reset layout",
   "menu.language": "Language",
@@ -56,6 +58,7 @@ export const en: Record<MessageKey, Message> = {
   "clips.duration": "DURATION",
   "clips.add": "ADD CLIP",
   "clips.empty": "NO CLIPS",
+  "clips.duplicate": "DUPLICATE CLIP",
   "clips.removeTitle": "Remove clip",
   "clips.defaultName": (params) => `Clip ${params.index}`,
   "clips.range": (params) =>
@@ -65,6 +68,8 @@ export const en: Record<MessageKey, Message> = {
   "notes.total": (params) => `${params.count} TOTAL`,
   "notes.empty":
     "NO NOTES YET · ADD BELOW OR CLICK THE PIANO ROLL",
+  "notes.duplicate": "DUPLICATE NOTE",
+  "notes.quantize16": "QUANTIZE 1/16",
   "notes.add": "ADD NOTE",
   "notes.pitch": "PITCH",
   "notes.start": "START",
@@ -217,11 +222,20 @@ export const en: Record<MessageKey, Message> = {
   "status.clipUpdated": (params) => `Updated clip ${params.id}`,
   "status.clipUpdateFailed": (params) =>
     `Update clip failed: ${params.message}`,
+  "status.clipDuplicated": (params) => `Duplicated clip ${params.id}`,
+  "status.clipDuplicateFailed": (params) =>
+    `Duplicate clip failed: ${params.message}`,
   "status.noteAdded": (params) => `Added note ${params.id}`,
   "status.noteAddFailed": (params) => `Add note failed: ${params.message}`,
   "status.noteRemoved": (params) => `Removed note ${params.id}`,
   "status.noteRemoveFailed": (params) =>
     `Remove note failed: ${params.message}`,
+  "status.noteDuplicated": (params) => `Duplicated note ${params.id}`,
+  "status.noteDuplicateFailed": (params) =>
+    `Duplicate note failed: ${params.message}`,
+  "status.noteQuantized": (params) => `Quantized note ${params.id}`,
+  "status.noteQuantizeFailed": (params) =>
+    `Quantize note failed: ${params.message}`,
   "status.noteUpdated": (params) => `Updated note ${params.id}`,
   "status.noteUpdateFailed": (params) =>
     `Update note failed: ${params.message}`,

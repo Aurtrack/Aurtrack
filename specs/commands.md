@@ -1,6 +1,6 @@
-# 命令规范 v0.6
+# 命令规范 v0.7
 
-这份文档定义 Aurtrack 的可运行命令面：24 条命令、统一的返回结构、寻址规则，以及 MCP 的映射方式。代码必须与本文一致。
+这份文档定义 Aurtrack 的可运行命令面：27 条命令、统一的返回结构、寻址规则，以及 MCP 的映射方式。代码必须与本文一致。
 
 ## 信封
 
@@ -373,7 +373,7 @@
 { "path": "/tracks/track-1/clips/clip-1/notes/note-1" }
 ```
 
-四条片段/音符命令都可撤销。工程文件版本 2 起包含 `clips` 与 `notes`；当前不做旧版本兼容，旧文件直接拒绝。
+片段与音符命令都可撤销。工程文件版本 2 起包含 `clips` 与 `notes`；当前不做旧版本兼容，旧文件直接拒绝。
 
 ### 23. `clip.update`
 
@@ -410,6 +410,49 @@
 { "path": "/tracks/track-1/clips/clip-1/notes/note-1", "note": { } }
 ```
 
+### 25. `clip.duplicate`
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `path` | string | 是 | `/tracks/{id}/clips/{id}` |
+
+在原片段后面复制一份新片段，新起点为原片段终点；如果超出 5 秒时间线则拒绝。片段里的音符会分配新的 `note-*` ID。
+
+返回：
+
+```json
+{ "track_id": "track-1", "clip_id": "clip-2", "path": "/tracks/track-1/clips/clip-2", "clip": { } }
+```
+
+### 26. `note.duplicate`
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `path` | string | 是 | `/tracks/{id}/clips/{id}/notes/{id}` |
+
+在原音符后面复制一份新音符，新起点为原音符终点；超出片段长度则拒绝。
+
+返回：
+
+```json
+{ "path": "/tracks/track-1/clips/clip-1/notes/note-2", "note_id": "note-2", "note": { } }
+```
+
+### 27. `note.quantize`
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `path` | string | 是 | `/tracks/{id}/clips/{id}/notes/{id}` |
+| `grid` | number | 是 | 量化网格，单位秒，必须大于 0 且不超过 5 |
+
+把音符起点吸附到最近的网格点，并夹在片段范围内；音符长度和力度不变。`grid: 0.125` 表示 1/16。
+
+返回：
+
+```json
+{ "path": "/tracks/track-1/clips/clip-1/notes/note-1", "note": { }, "grid": 0.125 }
+```
+
 ## MCP 映射
 
 工具名是命令 ID 把 `.` 换成 `_`：
@@ -436,9 +479,12 @@
 | `clip.create` | `clip_create` |
 | `clip.update` | `clip_update` |
 | `clip.remove` | `clip_remove` |
+| `clip.duplicate` | `clip_duplicate` |
 | `note.add` | `note_add` |
 | `note.update` | `note_update` |
 | `note.remove` | `note_remove` |
+| `note.duplicate` | `note_duplicate` |
+| `note.quantize` | `note_quantize` |
 | `device.remove` | `device_remove` |
 
 - `tools/list` 的 `inputSchema` 直接来自命令注册表；

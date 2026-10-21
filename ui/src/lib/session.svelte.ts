@@ -55,9 +55,12 @@ const MUTATING_COMMANDS = new Set([
   "clip.create",
   "clip.update",
   "clip.remove",
+  "clip.duplicate",
   "note.add",
   "note.update",
   "note.remove",
+  "note.duplicate",
+  "note.quantize",
   "undo",
   "redo",
   "project.open",
@@ -100,6 +103,7 @@ export class SessionStore {
   private project = $state<Project | null>(null);
   selectedTrackId = $state("");
   selectedClipId = $state("");
+  selectedNoteId = $state("");
   private projectPath = $state("");
   gain = $state(50);
   busy = $state(false);
@@ -140,6 +144,21 @@ export class SessionStore {
     this.selectedTrack?.clips.find((clip) => clip.id === this.selectedClipId) ??
       this.selectedTrack?.clips[0] ??
       null,
+  );
+  selectedNote = $derived(
+    this.selectedClip?.notes.find(
+      (note) => note.id === this.selectedNoteId,
+    ) ?? null,
+  );
+  selectedClipPath = $derived(
+    this.selectedTrack && this.selectedClip
+      ? `/tracks/${this.selectedTrack.id}/clips/${this.selectedClip.id}`
+      : null,
+  );
+  selectedNotePath = $derived(
+    this.selectedTrack && this.selectedClip && this.selectedNote
+      ? `/tracks/${this.selectedTrack.id}/clips/${this.selectedClip.id}/notes/${this.selectedNote.id}`
+      : null,
   );
   statusText = $derived(t(this.status.key, this.status.params ?? {}));
   timelineTracks = $derived(this.buildTimelineTracks());
@@ -186,16 +205,48 @@ export class SessionStore {
     this.selectedTrackId = trackId;
     const track = this.project?.tracks.find((item) => item.id === trackId);
     this.selectedClipId = track?.clips[0]?.id ?? "";
+    this.selectedNoteId = "";
   }
 
   selectClip(trackId: string, clipId: string) {
     this.selectedTrackId = trackId;
     this.selectedClipId = clipId;
+    this.selectedNoteId = "";
   }
 
   selectClipId(clipId: string) {
     const track = this.selectedTrack;
-    if (track) this.selectedClipId = clipId;
+    if (track) {
+      this.selectedClipId = clipId;
+      this.selectedNoteId = "";
+    }
+  }
+
+  selectNote(noteId: string) {
+    const clip = this.selectedClip;
+    if (clip?.notes.some((note) => note.id === noteId)) {
+      this.selectedNoteId = noteId;
+    }
+  }
+
+  async duplicateSelected() {
+    if (this.selectedNotePath) {
+      await this.duplicateNote(this.selectedNotePath);
+      return;
+    }
+    if (this.selectedClipPath) {
+      await this.duplicateClip(this.selectedClipPath);
+    }
+  }
+
+  async deleteSelected() {
+    if (this.selectedNotePath) {
+      await this.deleteNote(this.selectedNotePath);
+      return;
+    }
+    if (this.selectedClipPath) {
+      await this.deleteClip(this.selectedClipPath);
+    }
   }
 
   async openRecent(path: string) {
@@ -383,6 +434,7 @@ export class SessionStore {
       await this.refreshProject();
       await this.reloadIfPlaying();
       this.selectedClipId = result.clip_id;
+      this.selectedNoteId = "";
       this.setStatus("status.clipCreated", { id: result.clip_id });
     } catch (error) {
       this.fail("status.clipCreateFailed", error);
@@ -398,10 +450,30 @@ export class SessionStore {
       await this.run("clip.remove", { path });
       await this.refreshProject();
       await this.reloadIfPlaying();
+      this.selectedNoteId = "";
       const id = path.split("/").pop() ?? path;
       this.setStatus("status.clipRemoved", { id });
     } catch (error) {
       this.fail("status.clipRemoveFailed", error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  async duplicateClip(path: string) {
+    if (this.busy) return;
+    this.busy = true;
+    try {
+      const result = await this.run<{ clip_id: string }>("clip.duplicate", {
+        path,
+      });
+      await this.refreshProject();
+      await this.reloadIfPlaying();
+      this.selectedClipId = result.clip_id;
+      this.selectedNoteId = "";
+      this.setStatus("status.clipDuplicated", { id: result.clip_id });
+    } catch (error) {
+      this.fail("status.clipDuplicateFailed", error);
     } finally {
       this.busy = false;
     }
@@ -425,6 +497,7 @@ export class SessionStore {
       });
       await this.refreshProject();
       await this.reloadIfPlaying();
+      this.selectedNoteId = result.note_id;
       this.setStatus("status.noteAdded", { id: result.note_id });
     } catch (error) {
       this.fail("status.noteAddFailed", error);
@@ -441,9 +514,45 @@ export class SessionStore {
       await this.refreshProject();
       await this.reloadIfPlaying();
       const id = path.split("/").pop() ?? path;
+      if (this.selectedNoteId === id) this.selectedNoteId = "";
       this.setStatus("status.noteRemoved", { id });
     } catch (error) {
       this.fail("status.noteRemoveFailed", error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  async duplicateNote(path: string) {
+    if (this.busy) return;
+    this.busy = true;
+    try {
+      const result = await this.run<{ note_id: string }>("note.duplicate", {
+        path,
+      });
+      await this.refreshProject();
+      await this.reloadIfPlaying();
+      this.selectedNoteId = result.note_id;
+      this.setStatus("status.noteDuplicated", { id: result.note_id });
+    } catch (error) {
+      this.fail("status.noteDuplicateFailed", error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  async quantizeNote(path: string, grid: number) {
+    if (this.busy) return;
+    this.busy = true;
+    try {
+      await this.run("note.quantize", { path, grid });
+      await this.refreshProject();
+      await this.reloadIfPlaying();
+      this.setStatus("status.noteQuantized", {
+        id: path.split("/").pop() ?? path,
+      });
+    } catch (error) {
+      this.fail("status.noteQuantizeFailed", error);
     } finally {
       this.busy = false;
     }
@@ -887,6 +996,14 @@ export class SessionStore {
     const clips = track?.clips ?? [];
     if (!clips.some((clip) => clip.id === this.selectedClipId)) {
       this.selectedClipId = clips[0]?.id ?? "";
+    }
+    const clip = clips.find((item) => item.id === this.selectedClipId);
+    const notes = clip?.notes ?? [];
+    if (
+      this.selectedNoteId !== "" &&
+      !notes.some((note) => note.id === this.selectedNoteId)
+    ) {
+      this.selectedNoteId = "";
     }
   }
 

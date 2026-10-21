@@ -19,6 +19,8 @@
     trackId: string | null;
     clip: Clip | null;
     busy: boolean;
+    selectedNoteId: string;
+    onSelectNote: (noteId: string) => void;
     onAddNote: (
       path: string,
       input: {
@@ -35,8 +37,16 @@
     onRemoveNote: (path: string) => void;
   }
 
-  let { trackId, clip, busy, onAddNote, onUpdateNote, onRemoveNote }: Props =
-    $props();
+  let {
+    trackId,
+    clip,
+    busy,
+    selectedNoteId,
+    onSelectNote,
+    onAddNote,
+    onUpdateNote,
+    onRemoveNote,
+  }: Props = $props();
 
   type Preview = {
     noteId: string;
@@ -62,7 +72,6 @@
   const ZOOM_LEVELS = [1, 2, 4, 8];
 
   let canvas = $state<HTMLCanvasElement>();
-  let selectedNoteId = $state("");
   let preview = $state<Preview | null>(null);
   let drag: DragState | null = null;
   let rowHeight = $state(16);
@@ -80,15 +89,6 @@
     viewStart,
   });
   let canvasHeight = $derived(pianoHeight(rowHeight));
-
-  $effect(() => {
-    const notes = clip?.notes ?? [];
-    if (notes.length === 0) {
-      if (selectedNoteId !== "") selectedNoteId = "";
-    } else if (!notes.some((note) => note.id === selectedNoteId)) {
-      selectedNoteId = notes[0]?.id ?? "";
-    }
-  });
 
   $effect(() => {
     const id = clip?.id ?? "";
@@ -183,7 +183,7 @@
     if (hit.kind === "note") {
       const note = clip.notes.find((item) => item.id === hit.noteId);
       if (!note) return;
-      selectedNoteId = note.id;
+      onSelectNote(note.id);
       const rect = canvas.getBoundingClientRect();
       drag = {
         noteId: note.id,

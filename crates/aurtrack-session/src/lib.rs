@@ -133,9 +133,12 @@ impl Session {
             "clip.create" => self.cmd_clip_create(&request.args),
             "clip.update" => self.cmd_clip_update(&request.args),
             "clip.remove" => self.cmd_clip_remove(&request.args),
+            "clip.duplicate" => self.cmd_clip_duplicate(&request.args),
             "note.add" => self.cmd_note_add(&request.args),
             "note.update" => self.cmd_note_update(&request.args),
             "note.remove" => self.cmd_note_remove(&request.args),
+            "note.duplicate" => self.cmd_note_duplicate(&request.args),
+            "note.quantize" => self.cmd_note_quantize(&request.args),
             "device.add" => self.cmd_device_add(&request.args),
             "device.remove" => self.cmd_device_remove(&request.args),
             "param.set" => self.cmd_param_set(&request.args),
@@ -604,6 +607,63 @@ impl Session {
         Ok(CommandResponse::ok(json!({ "path": path })).with_undo(token))
     }
 
+    fn cmd_clip_duplicate(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        let args: ClipPathArgs = parse_args(args)?;
+        let path = args.path;
+        let (track_id, clip_id) = parse_clip_path(&path)?;
+        let source = self
+            .project
+            .as_ref()
+            .and_then(|project| project.tracks.iter().find(|track| track.id == track_id))
+            .and_then(|track| track.clips.iter().find(|clip| clip.id == clip_id))
+            .cloned()
+            .ok_or_else(|| CommandError::not_found(format!("找不到片段：{path}")))?;
+        let start = source.start + source.duration;
+        if start + source.duration > TIMELINE_SECONDS + 1e-9 {
+            return Err(CommandError::invalid_args(
+                "片段后面没有空间，先缩短或移动片段",
+            ));
+        }
+
+        let token = self.snapshot("clip.duplicate");
+        self.next_clip += 1;
+        let new_clip_id = format!("clip-{}", self.next_clip);
+        let mut notes = Vec::with_capacity(source.notes.len());
+        for note in &source.notes {
+            self.next_note += 1;
+            notes.push(Note {
+                id: format!("note-{}", self.next_note),
+                ..note.clone()
+            });
+        }
+        let clip = Clip {
+            id: new_clip_id.clone(),
+            name: format!("{} 副本", source.name),
+            start,
+            duration: source.duration,
+            notes,
+        };
+
+        let project = self
+            .project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let track = project
+            .tracks
+            .iter_mut()
+            .find(|track| track.id == track_id)
+            .ok_or_else(|| CommandError::not_found(format!("找不到片段：{path}")))?;
+        track.clips.push(clip.clone());
+
+        Ok(CommandResponse::ok(json!({
+            "track_id": track_id,
+            "clip_id": new_clip_id,
+            "path": format!("/tracks/{track_id}/clips/{new_clip_id}"),
+            "clip": clip,
+        }))
+        .with_undo(token))
+    }
+
     fn cmd_note_add(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
         let args: NoteAddArgs = parse_args(args)?;
         let path = args.path;
@@ -750,6 +810,123 @@ impl Session {
             .ok_or_else(|| CommandError::not_found(format!("找不到音符：{path}")))?;
         clip.notes.retain(|note| note.id != note_id);
         Ok(CommandResponse::ok(json!({ "path": path })).with_undo(token))
+    }
+
+    fn cmd_note_duplicate(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        let args: NotePathArgs = parse_args(args)?;
+        let path = args.path;
+        let (track_id, clip_id, note_id) = parse_note_path(&path)?;
+        let (clip_duration, source) = self
+            .project
+            .as_ref()
+            .and_then(|project| project.tracks.iter().find(|track| track.id == track_id))
+            .and_then(|track| track.clips.iter().find(|clip| clip.id == clip_id))
+            .and_then(|clip| {
+                clip.notes
+                    .iter()
+                    .find(|note| note.id == note_id)
+                    .map(|note| (clip.duration, note.clone()))
+            })
+            .ok_or_else(|| CommandError::not_found(format!("找不到音符：{path}")))?;
+        let start = source.start + source.duration;
+        if start + source.duration > clip_duration + 1e-9 {
+            return Err(CommandError::invalid_args(
+                "音符后面没有空间，先缩短或移动音符",
+            ));
+        }
+
+        let token = self.snapshot("note.duplicate");
+        self.next_note += 1;
+        let new_note_id = format!("note-{}", self.next_note);
+        let note = Note {
+            id: new_note_id.clone(),
+            start,
+            ..source
+        };
+        let project = self
+            .project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let track = project
+            .tracks
+            .iter_mut()
+            .find(|track| track.id == track_id)
+            .ok_or_else(|| CommandError::not_found(format!("找不到音符：{path}")))?;
+        let clip = track
+            .clips
+            .iter_mut()
+            .find(|clip| clip.id == clip_id)
+            .ok_or_else(|| CommandError::not_found(format!("找不到音符：{path}")))?;
+        clip.notes.push(note.clone());
+
+        Ok(CommandResponse::ok(json!({
+            "path": format!("/tracks/{track_id}/clips/{clip_id}/notes/{new_note_id}"),
+            "note_id": new_note_id,
+            "note": note,
+        }))
+        .with_undo(token))
+    }
+
+    fn cmd_note_quantize(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        let args: NoteQuantizeArgs = parse_args(args)?;
+        if !args.grid.is_finite() || args.grid <= 0.0 || args.grid > TIMELINE_SECONDS {
+            return Err(CommandError::invalid_args(
+                "grid 必须是 0 到 5 秒之间的正数",
+            ));
+        }
+        let path = args.path;
+        let (track_id, clip_id, note_id) = parse_note_path(&path)?;
+        let (clip_duration, existing) = self
+            .project
+            .as_ref()
+            .and_then(|project| project.tracks.iter().find(|track| track.id == track_id))
+            .and_then(|track| track.clips.iter().find(|clip| clip.id == clip_id))
+            .and_then(|clip| {
+                clip.notes
+                    .iter()
+                    .find(|note| note.id == note_id)
+                    .map(|note| (clip.duration, note.clone()))
+            })
+            .ok_or_else(|| CommandError::not_found(format!("找不到音符：{path}")))?;
+        let max_start = (clip_duration - existing.duration).max(0.0);
+        let start = ((existing.start / args.grid).round() * args.grid).clamp(0.0, max_start);
+        validate_note_values(
+            existing.pitch,
+            start,
+            existing.duration,
+            existing.velocity,
+            clip_duration,
+        )?;
+
+        let token = self.snapshot("note.quantize");
+        let project = self
+            .project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let track = project
+            .tracks
+            .iter_mut()
+            .find(|track| track.id == track_id)
+            .ok_or_else(|| CommandError::not_found(format!("找不到音符：{path}")))?;
+        let clip = track
+            .clips
+            .iter_mut()
+            .find(|clip| clip.id == clip_id)
+            .ok_or_else(|| CommandError::not_found(format!("找不到音符：{path}")))?;
+        let note = clip
+            .notes
+            .iter_mut()
+            .find(|note| note.id == note_id)
+            .ok_or_else(|| CommandError::not_found(format!("找不到音符：{path}")))?;
+        note.start = start;
+        let updated = note.clone();
+
+        Ok(CommandResponse::ok(json!({
+            "path": path,
+            "note": updated,
+            "grid": args.grid,
+        }))
+        .with_undo(token))
     }
 
     fn cmd_device_remove(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
@@ -1334,4 +1511,11 @@ struct NoteUpdateArgs {
 #[serde(deny_unknown_fields)]
 struct NotePathArgs {
     path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NoteQuantizeArgs {
+    path: String,
+    grid: f64,
 }

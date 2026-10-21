@@ -84,7 +84,8 @@
               disabled={session.busy}
               onclick={() => run(() => void session.openProject())}
             >
-              {t("menu.open")}
+              <span>{t("menu.open")}</span>
+              <span class="menu-shortcut">Ctrl+O</span>
             </button>
             <button
               class="menu-item"
@@ -92,7 +93,8 @@
               disabled={session.busy}
               onclick={() => run(() => void session.saveProject())}
             >
-              {t("menu.save")}
+              <span>{t("menu.save")}</span>
+              <span class="menu-shortcut">Ctrl+S</span>
             </button>
             <button
               class="menu-item"
@@ -137,7 +139,8 @@
               disabled={session.busy}
               onclick={() => run(() => void session.undo())}
             >
-              {t("menu.undo")}
+              <span>{t("menu.undo")}</span>
+              <span class="menu-shortcut">Ctrl+Z</span>
             </button>
             <button
               class="menu-item"
@@ -145,7 +148,29 @@
               disabled={session.busy}
               onclick={() => run(() => void session.redo())}
             >
-              {t("menu.redo")}
+              <span>{t("menu.redo")}</span>
+              <span class="menu-shortcut">Ctrl+Y</span>
+            </button>
+            <div class="menu-separator"></div>
+            <button
+              class="menu-item"
+              role="menuitem"
+              disabled={session.busy ||
+                (!session.selectedNotePath && !session.selectedClipPath)}
+              onclick={() => run(() => void session.duplicateSelected())}
+            >
+              <span>{t("menu.duplicateSelected")}</span>
+              <span class="menu-shortcut">Ctrl+D</span>
+            </button>
+            <button
+              class="menu-item"
+              role="menuitem"
+              disabled={session.busy ||
+                (!session.selectedNotePath && !session.selectedClipPath)}
+              onclick={() => run(() => void session.deleteSelected())}
+            >
+              <span>{t("menu.deleteSelected")}</span>
+              <span class="menu-shortcut">Delete</span>
             </button>
           {:else if menu.id === "render"}
             <button

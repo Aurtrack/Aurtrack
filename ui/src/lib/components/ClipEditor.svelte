@@ -22,6 +22,11 @@
       },
     ) => void;
     onRemoveNote: (path: string) => void;
+    selectedNoteId: string;
+    onSelectNote: (noteId: string) => void;
+    onDuplicateClip: (path: string) => void;
+    onDuplicateNote: (path: string) => void;
+    onQuantizeNote: (path: string, grid: number) => void;
   }
 
   let {
@@ -33,6 +38,11 @@
     onRemoveClip,
     onAddNote,
     onRemoveNote,
+    selectedNoteId,
+    onSelectNote,
+    onDuplicateClip,
+    onDuplicateNote,
+    onQuantizeNote,
   }: Props = $props();
 
   let clipName = $state("");
@@ -168,11 +178,21 @@
 
     {#if selectedClip}
       {@const current = selectedClip}
+      {@const selectedNote =
+        current.notes.find((note) => note.id === selectedNoteId) ?? null}
       <div class="clip-notes-head">
         <span class="track-meta">{t("notes.title")} · {current.id}</span>
         <span class="track-meta">
           {t("notes.total", { count: current.notes.length })}
         </span>
+        <button
+          class="mini-button"
+          disabled={busy}
+          onclick={() =>
+            onDuplicateClip(`/tracks/${owner.id}/clips/${current.id}`)}
+        >
+          {t("clips.duplicate")}
+        </button>
       </div>
 
       <div class="note-list">
@@ -180,16 +200,22 @@
           <p class="empty">{t("notes.empty")}</p>
         {/if}
         {#each current.notes as note (note.id)}
-          <div class="note-row">
-            <span class="device-id">{note.id}</span>
-            <span class="note-pitch">{noteName(note.pitch)}</span>
-            <span class="track-meta">
-              {t("notes.meta", {
-                start: formatNumber(note.start, 2),
-                duration: formatNumber(note.duration, 2),
-                velocity: formatNumber(note.velocity * 100),
-              })}
-            </span>
+          <div class="note-row" class:selected={note.id === selectedNoteId}>
+            <button
+              class="note-select"
+              disabled={busy}
+              onclick={() => onSelectNote(note.id)}
+            >
+              <span class="device-id">{note.id}</span>
+              <span class="note-pitch">{noteName(note.pitch)}</span>
+              <span class="track-meta">
+                {t("notes.meta", {
+                  start: formatNumber(note.start, 2),
+                  duration: formatNumber(note.duration, 2),
+                  velocity: formatNumber(note.velocity * 100),
+                })}
+              </span>
+            </button>
             <button
               class="track-remove"
               title={t("notes.removeTitle")}
@@ -204,6 +230,32 @@
           </div>
         {/each}
       </div>
+
+      {#if selectedNote}
+        <div class="note-actions">
+          <button
+            class="mini-button"
+            disabled={busy}
+            onclick={() =>
+              onDuplicateNote(
+                `/tracks/${owner.id}/clips/${current.id}/notes/${selectedNote.id}`,
+              )}
+          >
+            {t("notes.duplicate")}
+          </button>
+          <button
+            class="mini-button"
+            disabled={busy}
+            onclick={() =>
+              onQuantizeNote(
+                `/tracks/${owner.id}/clips/${current.id}/notes/${selectedNote.id}`,
+                0.125,
+              )}
+          >
+            {t("notes.quantize16")}
+          </button>
+        </div>
+      {/if}
 
       <div class="note-form">
         <label class="field narrow">

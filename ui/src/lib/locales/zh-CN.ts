@@ -24,6 +24,8 @@ export const zhCN = {
   "menu.quit": "退出",
   "menu.undo": "撤销",
   "menu.redo": "重做",
+  "menu.duplicateSelected": "复制选中",
+  "menu.deleteSelected": "删除选中",
   "menu.renderWav": "渲染 WAV",
   "menu.resetLayout": "重置布局",
   "menu.language": "语言",
@@ -52,6 +54,7 @@ export const zhCN = {
   "clips.duration": "长度",
   "clips.add": "添加片段",
   "clips.empty": "还没有片段",
+  "clips.duplicate": "复制片段",
   "clips.removeTitle": "删除片段",
   "clips.defaultName": (params) => `片段 ${params.index}`,
   "clips.range": (params) =>
@@ -60,6 +63,8 @@ export const zhCN = {
   "notes.title": "音符",
   "notes.total": (params) => `共 ${params.count} 个`,
   "notes.empty": "片段还没有音符。在下方添加，或用钢琴卷帘点击空白。",
+  "notes.duplicate": "复制音符",
+  "notes.quantize16": "量化 1/16",
   "notes.add": "添加音符",
   "notes.pitch": "音高",
   "notes.start": "起点",
@@ -203,10 +208,19 @@ export const zhCN = {
   "status.clipRemoveFailed": (params) => `删除片段失败：${params.message}`,
   "status.clipUpdated": (params) => `已更新片段 ${params.id}`,
   "status.clipUpdateFailed": (params) => `更新片段失败：${params.message}`,
+  "status.clipDuplicated": (params) => `已复制片段 ${params.id}`,
+  "status.clipDuplicateFailed": (params) =>
+    `复制片段失败：${params.message}`,
   "status.noteAdded": (params) => `已添加音符 ${params.id}`,
   "status.noteAddFailed": (params) => `添加音符失败：${params.message}`,
   "status.noteRemoved": (params) => `已删除音符 ${params.id}`,
   "status.noteRemoveFailed": (params) => `删除音符失败：${params.message}`,
+  "status.noteDuplicated": (params) => `已复制音符 ${params.id}`,
+  "status.noteDuplicateFailed": (params) =>
+    `复制音符失败：${params.message}`,
+  "status.noteQuantized": (params) => `已量化音符 ${params.id}`,
+  "status.noteQuantizeFailed": (params) =>
+    `量化音符失败：${params.message}`,
   "status.noteUpdated": (params) => `已更新音符 ${params.id}`,
   "status.noteUpdateFailed": (params) => `更新音符失败：${params.message}`,
 

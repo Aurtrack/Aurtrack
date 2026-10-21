@@ -144,6 +144,16 @@ body {
   cursor: default;
 }
 
+.menu-shortcut {
+  color: var(--muted);
+  font-size: 9px;
+  letter-spacing: 0;
+}
+
+.menu-item:hover:not(:disabled) .menu-shortcut {
+  color: #fff;
+}
+
 .menu-recent {
   display: block;
   max-width: 340px;
@@ -820,6 +830,7 @@ body {
 
 .clip-notes-head {
   display: flex;
+  align-items: center;
   justify-content: space-between;
   gap: 12px;
   padding: 8px 22px;
@@ -832,6 +843,46 @@ body {
   gap: 10px;
   padding: 6px 12px 6px 22px;
   border-bottom: 1px solid var(--line);
+}
+
+.note-row.selected {
+  background: #e4eaf6;
+}
+
+.note-select {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.note-select:disabled {
+  cursor: default;
+}
+
+.note-select .track-meta {
+  flex: 1;
+}
+
+.note-actions {
+  display: flex;
+  gap: 6px;
+  padding: 8px 22px;
+  border-bottom: 1px solid var(--line);
+}
+
+.mini-button {
+  padding: 3px 8px;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-transform: none;
 }
 
 .note-row .track-meta {

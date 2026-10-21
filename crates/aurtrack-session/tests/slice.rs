@@ -93,10 +93,69 @@ fn full_slice_produces_audio_and_undo_restores_it() {
 }
 
 #[test]
-fn describe_lists_twenty_four_commands() {
+fn duplicate_and_quantize_notes_and_clips() {
+    let mut session = Session::default();
+    run(&mut session, "project.create", json!({}));
+    run(&mut session, "track.create", json!({ "name": "lead" }));
+    run(
+        &mut session,
+        "clip.create",
+        json!({ "track_id": "track-1", "start": 0.0, "duration": 2.0 }),
+    );
+    let note_path = "/tracks/track-1/clips/clip-1/notes/note-1";
+    run(
+        &mut session,
+        "note.add",
+        json!({
+            "path": "/tracks/track-1/clips/clip-1",
+            "pitch": 60,
+            "start": 0.27,
+            "duration": 0.5,
+            "velocity": 0.8,
+        }),
+    );
+
+    let duplicate = run(&mut session, "note.duplicate", json!({ "path": note_path }));
+    assert_ne!(duplicate["note_id"], "note-1");
+    assert!((duplicate["note"]["start"].as_f64().unwrap() - 0.77).abs() < 1e-9);
+
+    let quantized = run(
+        &mut session,
+        "note.quantize",
+        json!({ "path": note_path, "grid": 0.25 }),
+    );
+    assert!((quantized["note"]["start"].as_f64().unwrap() - 0.25).abs() < 1e-9);
+
+    let clip = run(
+        &mut session,
+        "clip.duplicate",
+        json!({ "path": "/tracks/track-1/clips/clip-1" }),
+    );
+    assert_eq!(clip["clip_id"], "clip-2");
+    assert!((clip["clip"]["start"].as_f64().unwrap() - 2.0).abs() < 1e-9);
+    assert_eq!(clip["clip"]["notes"].as_array().unwrap().len(), 2);
+
+    let state = run(&mut session, "project.state", json!({}));
+    let clips = state["project"]["tracks"][0]["clips"].as_array().unwrap();
+    assert_eq!(clips.len(), 2);
+    let copied = clips
+        .iter()
+        .find(|clip| clip["id"] == "clip-2")
+        .expect("copy exists");
+    let ids = copied["notes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|note| note["id"].as_str().unwrap())
+        .collect::<std::collections::HashSet<_>>();
+    assert_eq!(ids.len(), 2);
+}
+
+#[test]
+fn describe_lists_twenty_seven_commands() {
     let mut session = Session::default();
     let out = run(&mut session, "describe", json!({}));
-    assert_eq!(out["commands"].as_array().unwrap().len(), 24);
+    assert_eq!(out["commands"].as_array().unwrap().len(), 27);
     assert!(out["project"].is_null());
 }
 
