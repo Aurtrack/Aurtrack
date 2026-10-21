@@ -154,6 +154,9 @@ export const zhCN = {
   "graph.terminal": "轨道输出",
   "graph.foot": "节点参数直接写入工程，可撤销",
   "graph.direction": "输入 → 输出",
+  "number.decrease": "减小",
+  "number.increase": "增大",
+  "number.dragHint": "左右拖动改值，单击输入",
 
   "device.kind.gain": "增益",
   "device.kind.adsr": "ADSR",

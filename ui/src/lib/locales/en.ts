@@ -159,6 +159,9 @@ export const en: Record<MessageKey, Message> = {
   "graph.terminal": "TRACK OUT",
   "graph.foot": "Node params write to the project and support undo",
   "graph.direction": "IN → OUT",
+  "number.decrease": "Decrease",
+  "number.increase": "Increase",
+  "number.dragHint": "Drag to change, click to type",
 
   "device.kind.gain": "GAIN",
   "device.kind.adsr": "ADSR",

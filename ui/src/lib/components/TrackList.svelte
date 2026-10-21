@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Track } from "../api";
   import { formatNumber, t } from "../i18n.svelte";
+  import NumberField from "./NumberField.svelte";
 
   interface Props {
     tracks: Track[];
@@ -68,14 +69,17 @@
       <option value="silence">{t("tracks.source.silence")}</option>
       <option value="sine">{t("tracks.source.sine")}</option>
     </select>
-    <input
-      class="text-input number"
-      type="number"
-      min="20"
-      max="20000"
-      bind:value={frequency}
-      disabled={source === "silence"}
-    />
+    <div class="track-frequency">
+      <NumberField
+        value={frequency}
+        min={20}
+        max={20000}
+        step={1}
+        precision={0}
+        disabled={source === "silence"}
+        onchange={(value) => (frequency = value)}
+      />
+    </div>
     <button class="primary" disabled={busy} onclick={submit}>
       {t("tracks.add")}
     </button>

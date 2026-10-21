@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Device, GraphNode, Track } from "../api";
   import { formatNumber, t } from "../i18n.svelte";
+  import NumberField from "./NumberField.svelte";
 
   interface Props {
     track: Track | null;
@@ -125,22 +126,16 @@
             <span class="device-id">{device.id}</span>
             <span class="device-kind">{kindLabel(device.kind)}</span>
             {#if device.kind === "gain"}
-              <input
-                type="range"
-                min="0"
-                max="200"
-                value={Math.round(gainOf(device) * 100)}
-                onchange={(event) =>
-                  onGainChange(
-                    current.id,
-                    device.id,
-                    Number((event.currentTarget as HTMLInputElement).value) /
-                      100,
-                  )}
+              <NumberField
+                value={gainOf(device)}
+                min={0}
+                max={4}
+                step={0.05}
+                precision={2}
+                disabled={busy}
+                onchange={(value) =>
+                  onGainChange(current.id, device.id, value)}
               />
-              <span class="readout">
-                {formatNumber(gainOf(device) * 100)}%
-              </span>
             {:else if device.kind === "amp.adsr"}
               <span class="readout">
                 A {formatNumber(paramOf(device, "attack", 0.01), 2)} /
@@ -185,88 +180,60 @@
             <div class="adsr-grid">
               <label class="field narrow">
                 <span>{t("device.adsr.attack")}</span>
-                <input
-                  class="text-input"
-                  type="number"
-                  min="0.001"
-                  max="10"
-                  step="0.01"
+                <NumberField
                   value={paramOf(device, "attack", 0.01)}
+                  min={0.001}
+                  max={10}
+                  step={0.01}
+                  precision={2}
                   disabled={busy}
-                  onchange={(event) =>
-                    onParamChange(
-                      current.id,
-                      device.id,
-                      "attack",
-                      Number(
-                        (event.currentTarget as HTMLInputElement).value,
-                      ),
-                    )}
+                  onchange={(value) =>
+                    onParamChange(current.id, device.id, "attack", value)}
                 />
               </label>
               <label class="field narrow">
                 <span>{t("device.adsr.decay")}</span>
-                <input
-                  class="text-input"
-                  type="number"
-                  min="0"
-                  max="10"
-                  step="0.01"
+                <NumberField
                   value={paramOf(device, "decay", 0.12)}
+                  min={0}
+                  max={10}
+                  step={0.01}
+                  precision={2}
                   disabled={busy}
-                  onchange={(event) =>
-                    onParamChange(
-                      current.id,
-                      device.id,
-                      "decay",
-                      Number(
-                        (event.currentTarget as HTMLInputElement).value,
-                      ),
-                    )}
+                  onchange={(value) =>
+                    onParamChange(current.id, device.id, "decay", value)}
                 />
               </label>
               <label class="field narrow">
                 <span>{t("device.adsr.sustain")}</span>
-                <input
-                  class="text-input"
-                  type="number"
-                  min="0"
-                  max="100"
-                  step="1"
-                  value={Math.round(
-                    paramOf(device, "sustain", 0.75) * 100,
-                  )}
+                <NumberField
+                  value={Math.round(paramOf(device, "sustain", 0.75) * 100)}
+                  min={0}
+                  max={100}
+                  step={1}
+                  precision={0}
+                  suffix="%"
                   disabled={busy}
-                  onchange={(event) =>
+                  onchange={(value) =>
                     onParamChange(
                       current.id,
                       device.id,
                       "sustain",
-                      Number(
-                        (event.currentTarget as HTMLInputElement).value,
-                      ) / 100,
+                      value / 100,
                     )}
                 />
               </label>
               <label class="field narrow">
                 <span>{t("device.adsr.release")}</span>
-                <input
-                  class="text-input"
-                  type="number"
-                  min="0.001"
-                  max="10"
-                  step="0.01"
+                <NumberField
                   value={paramOf(device, "release", 0.18)}
+                  min={0.001}
+                  max={10}
+                  step={0.01}
+                  precision={2}
                   disabled={busy}
-                  onchange={(event) =>
-                    onParamChange(
-                      current.id,
-                      device.id,
-                      "release",
-                      Number(
-                        (event.currentTarget as HTMLInputElement).value,
-                      ),
-                    )}
+                  onchange={(value) =>
+                    onParamChange(current.id, device.id, "release", value)}
                 />
               </label>
             </div>

@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { GraphNode, Track } from "../api";
   import { formatNumber, t } from "../i18n.svelte";
+  import NumberField from "./NumberField.svelte";
 
   interface Props {
     track: Track | null;
@@ -205,99 +206,70 @@
               <div class="graph-param-grid">
                 <label>
                   <span>{t("device.adsr.attack")}</span>
-                  <input
-                    class="text-input"
-                    type="number"
-                    min="0.001"
-                    max="10"
-                    step="0.01"
+                  <NumberField
                     value={paramOf(node, "attack", 0.01)}
+                    min={0.001}
+                    max={10}
+                    step={0.01}
+                    precision={2}
                     disabled={busy}
-                    onchange={(event) =>
-                      onParamChange(
-                        owner.id,
-                        node.id,
-                        "attack",
-                        Number((event.currentTarget as HTMLInputElement).value),
-                      )}
+                    onchange={(value) =>
+                      onParamChange(owner.id, node.id, "attack", value)}
                   />
                 </label>
                 <label>
                   <span>{t("device.adsr.decay")}</span>
-                  <input
-                    class="text-input"
-                    type="number"
-                    min="0"
-                    max="10"
-                    step="0.01"
+                  <NumberField
                     value={paramOf(node, "decay", 0.12)}
+                    min={0}
+                    max={10}
+                    step={0.01}
+                    precision={2}
                     disabled={busy}
-                    onchange={(event) =>
-                      onParamChange(
-                        owner.id,
-                        node.id,
-                        "decay",
-                        Number((event.currentTarget as HTMLInputElement).value),
-                      )}
+                    onchange={(value) =>
+                      onParamChange(owner.id, node.id, "decay", value)}
                   />
                 </label>
                 <label>
                   <span>{t("device.adsr.sustain")}</span>
-                  <input
-                    class="text-input"
-                    type="number"
-                    min="0"
-                    max="100"
-                    step="1"
+                  <NumberField
                     value={Math.round(paramOf(node, "sustain", 0.75) * 100)}
+                    min={0}
+                    max={100}
+                    step={1}
+                    precision={0}
+                    suffix="%"
                     disabled={busy}
-                    onchange={(event) =>
-                      onParamChange(
-                        owner.id,
-                        node.id,
-                        "sustain",
-                        Number((event.currentTarget as HTMLInputElement).value) / 100,
-                      )}
+                    onchange={(value) =>
+                      onParamChange(owner.id, node.id, "sustain", value / 100)}
                   />
                 </label>
                 <label>
                   <span>{t("device.adsr.release")}</span>
-                  <input
-                    class="text-input"
-                    type="number"
-                    min="0.001"
-                    max="10"
-                    step="0.01"
+                  <NumberField
                     value={paramOf(node, "release", 0.18)}
+                    min={0.001}
+                    max={10}
+                    step={0.01}
+                    precision={2}
                     disabled={busy}
-                    onchange={(event) =>
-                      onParamChange(
-                        owner.id,
-                        node.id,
-                        "release",
-                        Number((event.currentTarget as HTMLInputElement).value),
-                      )}
+                    onchange={(value) =>
+                      onParamChange(owner.id, node.id, "release", value)}
                   />
                 </label>
               </div>
             {:else if node.kind === "gain"}
               <label class="graph-param-row">
                 <span>{t("graph.gain")}</span>
-                <input
-                  class="text-input"
-                  type="number"
-                  min="0"
-                  max="4"
-                  step="0.05"
+                <NumberField
                   value={paramOf(node, "gain", 1)}
+                  min={0}
+                  max={4}
+                  step={0.05}
+                  precision={2}
                   disabled={busy}
-                  onchange={(event) =>
-                    onParamChange(
-                      owner.id,
-                      node.id,
-                      "gain",
-                      Number((event.currentTarget as HTMLInputElement).value),
-                    )}
+                  onchange={(value) =>
+                    onParamChange(owner.id, node.id, "gain", value)}
                 />
               </label>
             {:else}

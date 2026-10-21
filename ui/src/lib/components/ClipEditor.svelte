@@ -7,6 +7,7 @@
     secondsToBeats,
   } from "../music";
   import type { NoteSelectMode } from "../session.svelte";
+  import NumberField from "./NumberField.svelte";
 
   interface Props {
     track: Track | null;
@@ -158,22 +159,22 @@
       </label>
       <label class="field narrow">
         <span>{t("clips.start")}</span>
-        <input
-          class="text-input"
-          type="number"
-          min="0"
-          step="0.25"
-          bind:value={clipStart}
+        <NumberField
+          value={clipStart}
+          min={0}
+          step={0.25}
+          precision={2}
+          onchange={(value) => (clipStart = value)}
         />
       </label>
       <label class="field narrow">
         <span>{t("clips.duration")}</span>
-        <input
-          class="text-input"
-          type="number"
-          min="0.25"
-          step="0.25"
-          bind:value={clipDuration}
+        <NumberField
+          value={clipDuration}
+          min={0.25}
+          step={0.25}
+          precision={2}
+          onchange={(value) => (clipDuration = value)}
         />
       </label>
       <button class="primary" disabled={busy} onclick={() => submitClip(owner.id)}>
@@ -302,43 +303,45 @@
       <div class="note-form">
         <label class="field narrow">
           <span>{t("notes.pitch")}</span>
-          <input
-            class="text-input"
-            type="number"
-            min="0"
-            max="127"
-            bind:value={notePitch}
+          <NumberField
+            value={notePitch}
+            min={0}
+            max={127}
+            step={1}
+            precision={0}
+            onchange={(value) => (notePitch = value)}
           />
         </label>
         <label class="field narrow">
           <span>{t("notes.start")}</span>
-          <input
-            class="text-input"
-            type="number"
-            min="0"
-            step="0.25"
-            bind:value={noteStart}
+          <NumberField
+            value={noteStart}
+            min={0}
+            step={0.25}
+            precision={2}
+            onchange={(value) => (noteStart = value)}
           />
         </label>
         <label class="field narrow">
           <span>{t("notes.duration")}</span>
-          <input
-            class="text-input"
-            type="number"
-            min="0.25"
-            step="0.25"
-            bind:value={noteDuration}
+          <NumberField
+            value={noteDuration}
+            min={0.25}
+            step={0.25}
+            precision={2}
+            onchange={(value) => (noteDuration = value)}
           />
         </label>
         <label class="field narrow">
           <span>{t("notes.velocity")}</span>
-          <input
-            class="text-input"
-            type="number"
-            min="0"
-            max="100"
-            step="1"
-            bind:value={noteVelocity}
+          <NumberField
+            value={noteVelocity}
+            min={0}
+            max={100}
+            step={1}
+            precision={0}
+            suffix="%"
+            onchange={(value) => (noteVelocity = value)}
           />
         </label>
         <button

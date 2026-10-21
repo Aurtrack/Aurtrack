@@ -618,6 +618,96 @@ body {
   color: var(--muted);
 }
 
+.number-field {
+  display: flex;
+  align-items: stretch;
+  min-width: 0;
+  height: 26px;
+  border: 1px solid var(--line);
+  background: #fff;
+}
+
+.number-field:focus-within {
+  border-color: var(--blue);
+}
+
+.number-field.disabled {
+  opacity: 0.45;
+}
+
+.number-step {
+  flex: 0 0 14px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 11px;
+  line-height: 1;
+  padding: 0;
+  opacity: 0.35;
+  cursor: pointer;
+  text-transform: none;
+}
+
+.number-field:hover .number-step,
+.number-field:focus-within .number-step {
+  opacity: 1;
+}
+
+.number-step:hover:not(:disabled) {
+  color: var(--blue);
+}
+
+.number-value {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  text-align: center;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+  padding: 0 3px;
+  cursor: ew-resize;
+}
+
+.number-value:hover:not(:disabled) {
+  color: var(--blue);
+}
+
+.number-input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  text-align: center;
+  padding: 0 3px;
+  outline: none;
+}
+
+.number-suffix {
+  align-self: center;
+  padding-right: 3px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 9px;
+}
+
+.number-field.dragging .number-value {
+  color: var(--blue);
+}
+
 .track-form .text-input {
   flex: 1;
 }
@@ -629,6 +719,16 @@ body {
 
 .track-form .text-input.number {
   width: 72px;
+}
+
+.track-frequency {
+  display: flex;
+  flex: 0 0 82px;
+}
+
+.track-frequency .number-field {
+  width: 100%;
+  height: 29px;
 }
 
 .track-form select.text-input {
@@ -911,6 +1011,11 @@ body {
 
 .graph-param-row .text-input {
   width: 64px;
+  height: 22px;
+}
+
+.graph-param-row .number-field {
+  width: 72px;
   height: 22px;
 }
 
@@ -1256,6 +1361,25 @@ body {
   align-items: center;
   gap: 12px;
   padding: 7px 22px;
+}
+
+.control-row .number-field {
+  flex: 1;
+  max-width: 220px;
+}
+
+.device-row .number-field {
+  flex: 1;
+  max-width: 120px;
+}
+
+.graph-param-grid .number-field {
+  height: 22px;
+}
+
+.graph-param-grid .number-field .number-value,
+.graph-param-grid .number-field .number-input {
+  font-size: 9px;
 }
 
 .label {

@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { TimeSignature } from "../api";
   import { t } from "../i18n.svelte";
+  import NumberField from "./NumberField.svelte";
 
   interface Props {
     playing: boolean;
@@ -60,10 +61,6 @@
   );
   let loopEndBar = $derived(barSeconds > 0 ? loopEnd / barSeconds + 1 : 1);
 
-  function inputValue(event: Event): number {
-    return Number((event.currentTarget as HTMLInputElement).value);
-  }
-
   function changeSignature(event: Event) {
     const value = (event.currentTarget as HTMLSelectElement).value;
     const [numerator, denominator] = value.split("/").map(Number);
@@ -74,16 +71,12 @@
     }
   }
 
-  function changeLoopStart(event: Event) {
-    onTimebaseChange({
-      loop_start: Math.max(0, (inputValue(event) - 1) * barSeconds),
-    });
+  function changeLoopStart(bar: number) {
+    onTimebaseChange({ loop_start: Math.max(0, (bar - 1) * barSeconds) });
   }
 
-  function changeLoopEnd(event: Event) {
-    onTimebaseChange({
-      loop_end: Math.max(0, (inputValue(event) - 1) * barSeconds),
-    });
+  function changeLoopEnd(bar: number) {
+    onTimebaseChange({ loop_end: Math.max(0, (bar - 1) * barSeconds) });
   }
 </script>
 
@@ -100,16 +93,14 @@
   <div class="timebase-grid">
     <label class="field narrow">
       <span>{t("transport.tempo")}</span>
-      <input
-        class="text-input"
-        type="number"
-        min="20"
-        max="300"
-        step="1"
+      <NumberField
         value={tempo}
+        min={20}
+        max={300}
+        step={1}
+        precision={0}
         disabled={busy}
-        onchange={(event) =>
-          onTimebaseChange({ tempo_bpm: inputValue(event) })}
+        onchange={(value) => onTimebaseChange({ tempo_bpm: value })}
       />
     </label>
     <label class="field narrow">
@@ -130,38 +121,36 @@
     </label>
     <label class="field narrow">
       <span>{t("transport.bars")}</span>
-      <input
-        class="text-input"
-        type="number"
-        min="1"
-        max="512"
-        step="1"
+      <NumberField
         value={lengthBars}
+        min={1}
+        max={512}
+        step={1}
+        precision={0}
         disabled={busy}
-        onchange={(event) =>
-          onTimebaseChange({ length_bars: inputValue(event) })}
+        onchange={(value) => onTimebaseChange({ length_bars: value })}
       />
     </label>
     <label class="field narrow">
       <span>{t("transport.loopStart")}</span>
-      <input
-        class="text-input"
-        type="number"
-        min="1"
-        step="0.25"
-        value={loopStartBar.toFixed(2)}
+      <NumberField
+        value={loopStartBar}
+        min={1}
+        max={lengthBars + 1}
+        step={0.25}
+        precision={2}
         disabled={busy}
         onchange={changeLoopStart}
       />
     </label>
     <label class="field narrow">
       <span>{t("transport.loopEnd")}</span>
-      <input
-        class="text-input"
-        type="number"
-        min="1"
-        step="0.25"
-        value={loopEndBar.toFixed(2)}
+      <NumberField
+        value={loopEndBar}
+        min={1}
+        max={lengthBars + 1}
+        step={0.25}
+        precision={2}
         disabled={busy}
         onchange={changeLoopEnd}
       />
@@ -170,15 +159,16 @@
 
   <div class="control-row">
     <span class="label">{t("transport.master")}</span>
-    <input
-      type="range"
-      min="0"
-      max="100"
-      value={gain}
-      oninput={(event) =>
-        onGainChange(Number((event.currentTarget as HTMLInputElement).value))}
+    <NumberField
+      value={Math.round(gain)}
+      min={0}
+      max={100}
+      step={1}
+      precision={0}
+      suffix="%"
+      disabled={busy}
+      onchange={onGainChange}
     />
-    <span class="readout">{Math.round(gain).toString().padStart(3, "0")}%</span>
   </div>
 
   <div class="actions">
