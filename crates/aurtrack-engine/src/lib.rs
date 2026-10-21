@@ -14,7 +14,8 @@
     clippy::cast_precision_loss,
     clippy::cast_possible_truncation,
     clippy::cast_sign_loss,
-    clippy::cast_lossless
+    clippy::cast_lossless,
+    clippy::too_many_lines
 )]
 
 use std::sync::Arc;
@@ -25,7 +26,7 @@ use arc_swap::ArcSwap;
 /// 音符首尾的去咔嗒微包络长度。
 pub const NOTE_FADE_SECONDS: f64 = 0.005;
 
-const SEEK_FADE_SECONDS: f64 = 0.003;
+const DECLICK_FADE_SECONDS: f64 = 0.003;
 const NO_SEEK: u64 = u64::MAX;
 const FADE_IDLE: u8 = 0;
 const FADE_OUT: u8 = 1;
@@ -84,8 +85,10 @@ impl PlaybackPlan {
 pub struct Playback {
     plan: ArcSwap<PlaybackPlan>,
     playing: AtomicBool,
+    stop_requested: AtomicBool,
     position: AtomicU64,
     master_gain: AtomicU64,
+    transport_gain: AtomicU64,
     seek_target: AtomicU64,
     fade_target: AtomicU64,
     seek_stage: AtomicU8,
@@ -97,8 +100,10 @@ impl Playback {
         Self {
             plan: ArcSwap::from_pointee(PlaybackPlan::silent(sample_rate, 5.0)),
             playing: AtomicBool::new(false),
+            stop_requested: AtomicBool::new(false),
             position: AtomicU64::new(0),
             master_gain: AtomicU64::new(1.0_f64.to_bits()),
+            transport_gain: AtomicU64::new(0.0_f64.to_bits()),
             seek_target: AtomicU64::new(NO_SEEK),
             fade_target: AtomicU64::new(NO_SEEK),
             seek_stage: AtomicU8::new(FADE_IDLE),
@@ -111,22 +116,26 @@ impl Playback {
     }
 
     pub fn play(&self) {
-        self.playing.store(true, Ordering::Release);
+        let was_stopping = self.stop_requested.swap(false, Ordering::AcqRel);
+        let was_playing = self.playing.swap(true, Ordering::AcqRel);
+        if !was_playing || was_stopping {
+            self.transport_gain
+                .store(0.0_f64.to_bits(), Ordering::Release);
+        }
     }
 
     pub fn stop(&self) {
-        self.playing.store(false, Ordering::Release);
-        let target = self.seek_target.swap(NO_SEEK, Ordering::AcqRel);
-        if target != NO_SEEK {
-            self.position.store(target, Ordering::Release);
+        if self.playing.load(Ordering::Acquire) {
+            self.stop_requested.store(true, Ordering::Release);
         }
+        self.seek_target.store(NO_SEEK, Ordering::Release);
         self.fade_target.store(NO_SEEK, Ordering::Release);
         self.seek_stage.store(FADE_IDLE, Ordering::Release);
         self.fade_elapsed.store(0, Ordering::Release);
     }
 
     pub fn is_playing(&self) -> bool {
-        self.playing.load(Ordering::Acquire)
+        self.playing.load(Ordering::Acquire) && !self.stop_requested.load(Ordering::Acquire)
     }
 
     pub fn seek(&self, seconds: f64) {
@@ -178,8 +187,18 @@ impl Playback {
         let plan = self.plan.load();
         let sample_rate = f64::from(plan.sample_rate).max(1.0);
         let loop_frames = (plan.loop_seconds * sample_rate).round().max(1.0) as u64;
-        let fade_frames = (SEEK_FADE_SECONDS * sample_rate).round().max(1.0) as u64;
+        let fade_frames = (DECLICK_FADE_SECONDS * sample_rate).round().max(1.0) as u64;
+        let loop_fade = if loop_frames > fade_frames * 2 {
+            fade_frames
+        } else {
+            0
+        };
+        let loop_start = loop_fade;
         let master_gain = f64::from_bits(self.master_gain.load(Ordering::Relaxed));
+        let stop_requested = self.stop_requested.load(Ordering::Acquire);
+        let target_gain = if stop_requested { 0.0 } else { 1.0 };
+        let gain_step = 1.0 / fade_frames as f64;
+        let mut gain = f64::from_bits(self.transport_gain.load(Ordering::Relaxed));
         let mut position = self.position.load(Ordering::Relaxed);
         let mut stage = self.seek_stage.load(Ordering::Acquire);
         let mut target = if stage == FADE_IN {
@@ -189,6 +208,13 @@ impl Playback {
         };
         let mut elapsed = self.fade_elapsed.load(Ordering::Relaxed);
 
+        if stop_requested && gain <= 0.0 {
+            self.playing.store(false, Ordering::Release);
+            self.stop_requested.store(false, Ordering::Release);
+            out.fill(0.0);
+            return;
+        }
+
         if stage == FADE_IDLE && target != NO_SEEK {
             stage = FADE_OUT;
             elapsed = 0;
@@ -197,58 +223,91 @@ impl Playback {
             elapsed = 0;
         }
 
-        for slot in out.iter_mut() {
-            if stage == FADE_OUT {
-                let gain = 1.0 - (elapsed + 1) as f64 / fade_frames as f64;
-                *slot = (Self::sample_at(&plan, position, master_gain) * gain) as f32;
-                position = advance(position, loop_frames);
+        for (index, slot) in out.iter_mut().enumerate() {
+            let seek_gain = if stage == FADE_OUT {
+                Some(1.0 - (elapsed + 1) as f64 / fade_frames as f64)
+            } else if stage == FADE_IN {
+                Some((elapsed + 1) as f64 / fade_frames as f64)
+            } else {
+                None
+            };
+            let sample =
+                Self::sample_with_loop(&plan, position, loop_frames, loop_fade, master_gain);
+            *slot = (sample * seek_gain.unwrap_or(1.0) * gain) as f32;
+
+            if seek_gain.is_some() {
                 elapsed += 1;
                 if elapsed >= fade_frames {
-                    target = self.seek_target.load(Ordering::Acquire);
-                    if target == NO_SEEK {
+                    if stage == FADE_OUT {
+                        target = self.seek_target.load(Ordering::Acquire);
+                        if target == NO_SEEK {
+                            stage = FADE_IDLE;
+                            elapsed = 0;
+                        } else {
+                            position = target;
+                            self.fade_target.store(target, Ordering::Release);
+                            stage = FADE_IN;
+                            elapsed = 0;
+                        }
+                    } else {
                         stage = FADE_IDLE;
                         elapsed = 0;
-                    } else {
-                        position = target;
-                        self.fade_target.store(target, Ordering::Release);
-                        stage = FADE_IN;
-                        elapsed = 0;
+                        let latest = self.seek_target.load(Ordering::Acquire);
+                        if latest != NO_SEEK && latest != target {
+                            target = latest;
+                            stage = FADE_OUT;
+                        } else {
+                            target = NO_SEEK;
+                            self.seek_target.store(NO_SEEK, Ordering::Release);
+                            self.fade_target.store(NO_SEEK, Ordering::Release);
+                        }
                     }
                 }
-            } else if stage == FADE_IN {
-                let gain = (elapsed + 1) as f64 / fade_frames as f64;
-                *slot = (Self::sample_at(&plan, position, master_gain) * gain) as f32;
-                position = advance(position, loop_frames);
-                elapsed += 1;
-                if elapsed >= fade_frames {
-                    stage = FADE_IDLE;
-                    elapsed = 0;
-                    let latest = self.seek_target.load(Ordering::Acquire);
-                    if latest != NO_SEEK && latest != target {
-                        target = latest;
-                        stage = FADE_OUT;
-                    } else {
-                        target = NO_SEEK;
-                        self.seek_target.store(NO_SEEK, Ordering::Release);
-                        self.fade_target.store(NO_SEEK, Ordering::Release);
-                    }
-                }
-            } else {
-                *slot = Self::sample_at(&plan, position, master_gain) as f32;
-                position = advance(position, loop_frames);
             }
+
+            if stop_requested {
+                gain = (gain - gain_step).max(0.0);
+                if gain <= 0.0 {
+                    self.playing.store(false, Ordering::Release);
+                    self.stop_requested.store(false, Ordering::Release);
+                    out[index + 1..].fill(0.0);
+                    break;
+                }
+            } else if gain < target_gain {
+                gain = (gain + gain_step).min(target_gain);
+            }
+            position = advance(position, loop_frames, loop_start);
         }
 
-        if !self.playing.load(Ordering::Acquire) {
-            return;
-        }
         self.position.store(position, Ordering::Release);
+        self.transport_gain.store(gain.to_bits(), Ordering::Release);
         if stage != FADE_IDLE {
             self.seek_stage.store(stage, Ordering::Release);
             self.fade_elapsed.store(elapsed, Ordering::Release);
         } else if self.seek_stage.load(Ordering::Acquire) == FADE_IDLE {
             self.fade_elapsed.store(0, Ordering::Release);
         }
+    }
+
+    fn sample_with_loop(
+        plan: &PlaybackPlan,
+        position: u64,
+        loop_frames: u64,
+        loop_fade: u64,
+        master_gain: f64,
+    ) -> f64 {
+        if loop_fade == 0 {
+            return Self::sample_at(plan, position, master_gain);
+        }
+        let start = loop_frames.saturating_sub(loop_fade);
+        if position < start {
+            return Self::sample_at(plan, position, master_gain);
+        }
+        let offset = position - start;
+        let blend = (offset + 1) as f64 / loop_fade as f64;
+        let tail = Self::sample_at(plan, position, master_gain);
+        let head = Self::sample_at(plan, offset, master_gain);
+        tail * (1.0 - blend) + head * blend
     }
 
     fn sample_at(plan: &PlaybackPlan, position: u64, master_gain: f64) -> f64 {
@@ -275,9 +334,13 @@ impl Playback {
     }
 }
 
-fn advance(position: u64, loop_frames: u64) -> u64 {
+fn advance(position: u64, loop_frames: u64, loop_start: u64) -> u64 {
     let next = position + 1;
-    if next >= loop_frames { 0 } else { next }
+    if next >= loop_frames {
+        loop_start
+    } else {
+        next
+    }
 }
 
 #[cfg(test)]
@@ -308,14 +371,52 @@ mod tests {
     }
 
     #[test]
-    fn stop_outputs_silence() {
+    fn stop_fades_then_outputs_silence() {
         let playback = Playback::new(48_000);
         playback.set_plan(plan());
         playback.play();
         playback.stop();
+        assert!(!playback.is_playing());
         let mut buffer = [1.0_f32; 480];
         playback.render(&mut buffer);
-        assert!(buffer.iter().all(|sample| *sample == 0.0));
+        assert!(buffer[200..].iter().all(|sample| *sample == 0.0));
+        let mut silent = [1.0_f32; 480];
+        playback.render(&mut silent);
+        assert!(silent.iter().all(|sample| *sample == 0.0));
+    }
+
+    #[test]
+    fn play_fades_in() {
+        let playback = Playback::new(48_000);
+        playback.set_plan(plan());
+        playback.seek(1.0);
+        playback.play();
+        let mut buffer = [0.0_f32; 480];
+        playback.render(&mut buffer);
+        assert!(buffer[0].abs() < 1e-12);
+        assert!(buffer[300..].iter().any(|sample| sample.abs() > 0.0));
+    }
+
+    #[test]
+    fn loop_seam_crossfades() {
+        let playback = Playback::new(48_000);
+        playback.set_plan(PlaybackPlan {
+            sample_rate: 48_000,
+            loop_seconds: 0.1,
+            tracks: vec![TrackPlan {
+                frequency: Some(331.0),
+                gain: 1.0,
+                notes: Vec::new(),
+            }],
+        });
+        playback.play();
+        let mut buffer = vec![0.0_f32; 6_000];
+        playback.render(&mut buffer);
+        let max_delta = buffer
+            .windows(2)
+            .map(|pair| (pair[1] - pair[0]).abs())
+            .fold(0.0_f32, f32::max);
+        assert!(max_delta < 0.03, "loop step too large: {max_delta}");
     }
 
     #[test]
