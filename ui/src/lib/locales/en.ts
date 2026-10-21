@@ -44,7 +44,7 @@ export const en: Record<MessageKey, Message> = {
     return `${count} TRACK${count === 1 ? "" : "S"} / ${params.duration} S`;
   },
   "timeline.empty": "NO TRACKS",
-  "timeline.hint": "CLICK TO SEEK / DRAG TO EDIT",
+  "timeline.hint": "CLICK TO SEEK / DRAG TO EDIT / DRAG A CLIP ACROSS TRACKS",
   "timeline.playhead": (params) => `T+${params.seconds} S`,
   "timeline.trackMeta": (params) =>
     `SINE ${params.frequency} HZ / ${params.devices} DEV`,
@@ -70,8 +70,10 @@ export const en: Record<MessageKey, Message> = {
   "notes.total": (params) => `${params.count} TOTAL`,
   "notes.empty":
     "NO NOTES YET · ADD BELOW OR CLICK THE PIANO ROLL",
-  "notes.duplicate": "DUPLICATE NOTE",
+  "notes.duplicate": "DUPLICATE SELECTED",
   "notes.quantize16": "QUANTIZE 1/16",
+  "notes.deleteSelected": "DELETE SELECTED",
+  "notes.selected": (params) => `${params.count} NOTE(S) SELECTED`,
   "notes.add": "ADD NOTE",
   "notes.pitch": "PITCH",
   "notes.start": "START",
@@ -89,7 +91,7 @@ export const en: Record<MessageKey, Message> = {
   "piano.zoomIn": "Zoom in",
   "piano.zoomOut": "Zoom out",
   "piano.scroll": "Horizontal scroll",
-  "piano.hint": "CLICK TO ADD · DRAG TO MOVE · EDGE TO RESIZE · RIGHT-CLICK TO DELETE · ZOOM ABOVE",
+  "piano.hint": "CLICK EMPTY TO ADD · DRAG TO BOX-SELECT · CTRL/SHIFT TO MULTI-SELECT · DRAG TO MOVE · EDGE TO RESIZE · RIGHT-CLICK TO DELETE",
 
   "panel.timeline": "TIMELINE",
   "panel.piano": "PIANO ROLL",
@@ -227,6 +229,9 @@ export const en: Record<MessageKey, Message> = {
   "status.clipDuplicated": (params) => `Duplicated clip ${params.id}`,
   "status.clipDuplicateFailed": (params) =>
     `Duplicate clip failed: ${params.message}`,
+  "status.clipMoved": (params) => `Moved clip ${params.id}`,
+  "status.clipMoveFailed": (params) =>
+    `Move clip failed: ${params.message}`,
   "status.noteAdded": (params) => `Added note ${params.id}`,
   "status.noteAddFailed": (params) => `Add note failed: ${params.message}`,
   "status.noteRemoved": (params) => `Removed note ${params.id}`,
@@ -235,13 +240,19 @@ export const en: Record<MessageKey, Message> = {
   "status.noteDuplicated": (params) => `Duplicated note ${params.id}`,
   "status.noteDuplicateFailed": (params) =>
     `Duplicate note failed: ${params.message}`,
+  "status.notesDuplicated": (params) =>
+    `Duplicated ${params.count} note(s) after the group`,
+  "status.notesRemoved": (params) => `Removed ${params.count} note(s)`,
   "status.noteQuantized": (params) => `Quantized note ${params.id}`,
   "status.noteQuantizeFailed": (params) =>
     `Quantize note failed: ${params.message}`,
+  "status.notesQuantized": (params) =>
+    `Quantized ${params.count} note(s)`,
   "status.noteUpdated": (params) => `Updated note ${params.id}`,
   "status.noteUpdateFailed": (params) =>
     `Update note failed: ${params.message}`,
   "status.noteCopied": "Note copied",
+  "status.notesCopied": (params) => `Copied ${params.count} note(s)`,
   "status.clipCopied": "Clip copied",
   "status.copyEmpty": "Nothing to copy",
   "status.pasted": "Pasted",

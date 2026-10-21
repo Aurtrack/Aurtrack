@@ -24,14 +24,18 @@
       void session.updateClip(path, patch)}
     onUpdateNote={(path: string, patch: { start?: number; duration?: number }) =>
       void session.updateNote(path, patch)}
+    onMoveClip={(path: string, trackId: string, start: number) =>
+      void session.moveClip(path, trackId, start)}
   />
 {:else if kind === "piano"}
   <PianoRoll
     trackId={session.selectedTrack?.id ?? null}
     clip={session.selectedClip}
     busy={session.busy}
-    selectedNoteId={session.selectedNoteId}
-    onSelectNote={(noteId: string) => session.selectNote(noteId)}
+    selectedNoteIds={session.selectedNoteIds}
+    onSelectNote={(noteId, mode) => session.selectNote(noteId, mode)}
+    onSelectNotes={(noteIds, additive) =>
+      session.selectNotes(noteIds, additive)}
     onAddNote={(path, input) => void session.addNote(path, input)}
     onUpdateNote={(path, patch) => void session.updateNote(path, patch)}
     onRemoveNote={(path: string) => void session.deleteNote(path)}
@@ -50,16 +54,17 @@
     track={session.selectedTrack}
     busy={session.busy}
     selectedClipId={session.selectedClipId}
-    selectedNoteId={session.selectedNoteId}
+    selectedNoteIds={session.selectedNoteIds}
     onSelectClip={(id: string) => session.selectClipId(id)}
-    onSelectNote={(id: string) => session.selectNote(id)}
+    onSelectNote={(id, mode) => session.selectNote(id, mode)}
     onAddClip={(trackId, input) => void session.addClip(trackId, input)}
     onRemoveClip={(path: string) => void session.deleteClip(path)}
     onDuplicateClip={(path: string) => void session.duplicateClip(path)}
     onAddNote={(path, input) => void session.addNote(path, input)}
     onRemoveNote={(path: string) => void session.deleteNote(path)}
-    onDuplicateNote={(path: string) => void session.duplicateNote(path)}
-    onQuantizeNote={(path, grid) => void session.quantizeNote(path, grid)}
+    onDuplicateSelected={() => void session.duplicateSelected()}
+    onQuantizeSelected={(grid) => void session.quantizeSelected(grid)}
+    onDeleteSelected={() => void session.deleteSelected()}
   />
 {:else if kind === "inspector"}
   <TrackInspector

@@ -1,6 +1,6 @@
-# 命令规范 v0.8
+# 命令规范 v0.9
 
-这份文档定义 Aurtrack 的可运行命令面：29 条命令、统一的返回结构、寻址规则，以及 MCP 的映射方式。代码必须与本文一致。
+这份文档定义 Aurtrack 的可运行命令面：32 条命令、统一的返回结构、寻址规则，以及 MCP 的映射方式。代码必须与本文一致。
 
 ## 信封
 
@@ -490,6 +490,51 @@
 { "track_id": "track-1", "clip_id": "clip-2", "path": "/tracks/track-1/clips/clip-2", "clip": { } }
 ```
 
+### 30. `note.remove_many`
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `paths` | array | 是 | 音符路径数组，1 到 512 个，不能重复 |
+
+先校验全部路径；任意一个不存在就整批拒绝，不产生部分删除。全部存在时只产生一个撤销快照。
+
+返回：
+
+```json
+{ "paths": ["/tracks/track-1/clips/clip-1/notes/note-1"], "removed": 1 }
+```
+
+### 31. `note.quantize_many`
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `paths` | array | 是 | 音符路径数组，1 到 512 个，不能重复 |
+| `grid` | number | 是 | 量化网格，单位秒，必须大于 0 且不超过 5 |
+
+先校验全部路径，再按与 `note.quantize` 相同的规则计算新起点；任意一个不存在就整批拒绝。只产生一个撤销快照。
+
+返回：
+
+```json
+{ "paths": ["/tracks/track-1/clips/clip-1/notes/note-1"], "grid": 0.125, "count": 1 }
+```
+
+### 32. `clip.move`
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `path` | string | 是 | `/tracks/{id}/clips/{id}` |
+| `track_id` | string | 是 | 目标轨道 ID |
+| `start` | number | 否 | 新起点；省略时保持原起点 |
+
+把片段移到另一条轨道或新起点，片段 ID、名称、长度和全部音符保持不变。目标轨道必须存在，移动后片段仍须落在 5 秒时间线内。跨轨移动只产生一个撤销快照。
+
+返回：
+
+```json
+{ "path": "/tracks/track-2/clips/clip-1", "track_id": "track-2", "clip": { } }
+```
+
 ## MCP 映射
 
 工具名是命令 ID 把 `.` 换成 `_`：
@@ -522,8 +567,11 @@
 | `note.remove` | `note_remove` |
 | `note.duplicate` | `note_duplicate` |
 | `note.quantize` | `note_quantize` |
+| `note.remove_many` | `note_remove_many` |
+| `note.quantize_many` | `note_quantize_many` |
 | `note.paste` | `note_paste` |
 | `clip.paste` | `clip_paste` |
+| `clip.move` | `clip_move` |
 | `device.remove` | `device_remove` |
 
 - `tools/list` 的 `inputSchema` 直接来自命令注册表；

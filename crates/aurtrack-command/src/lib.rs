@@ -306,6 +306,22 @@ fn clip_duplicate_schema() -> Value {
     )
 }
 
+fn clip_move_schema() -> Value {
+    object_schema(
+        json!({
+            "path": { "type": "string", "description": "/tracks/{id}/clips/{id}" },
+            "track_id": { "type": "string", "description": "目标轨道 ID" },
+            "start": {
+                "type": "number",
+                "minimum": 0,
+                "maximum": 5,
+                "description": "新起点；省略时保持原起点"
+            }
+        }),
+        &["path", "track_id"],
+    )
+}
+
 fn note_duplicate_schema() -> Value {
     object_schema(
         json!({
@@ -411,6 +427,48 @@ fn note_remove_schema() -> Value {
     )
 }
 
+fn note_remove_many_schema() -> Value {
+    object_schema(
+        json!({
+            "paths": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 512,
+                "uniqueItems": true,
+                "items": {
+                    "type": "string",
+                    "description": "/tracks/{id}/clips/{id}/notes/{id}"
+                }
+            }
+        }),
+        &["paths"],
+    )
+}
+
+fn note_quantize_many_schema() -> Value {
+    object_schema(
+        json!({
+            "paths": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 512,
+                "uniqueItems": true,
+                "items": {
+                    "type": "string",
+                    "description": "/tracks/{id}/clips/{id}/notes/{id}"
+                }
+            },
+            "grid": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "maximum": 5,
+                "description": "量化网格，单位秒，例如 0.125 表示 1/16"
+            }
+        }),
+        &["paths", "grid"],
+    )
+}
+
 fn note_update_schema() -> Value {
     object_schema(
         json!({
@@ -466,7 +524,7 @@ fn transport_gain_schema() -> Value {
     )
 }
 
-static COMMANDS: [CommandSpec; 29] = [
+static COMMANDS: [CommandSpec; 32] = [
     CommandSpec {
         id: "project.create",
         summary: "创建或替换当前工程",
@@ -528,6 +586,12 @@ static COMMANDS: [CommandSpec; 29] = [
         input_schema: clip_duplicate_schema,
     },
     CommandSpec {
+        id: "clip.move",
+        summary: "把片段移动到另一条轨道或新起点",
+        undo: UndoKind::Snapshot,
+        input_schema: clip_move_schema,
+    },
+    CommandSpec {
         id: "note.add",
         summary: "在片段里添加音符",
         undo: UndoKind::Snapshot,
@@ -556,6 +620,18 @@ static COMMANDS: [CommandSpec; 29] = [
         summary: "把音符起点量化到指定网格",
         undo: UndoKind::Snapshot,
         input_schema: note_quantize_schema,
+    },
+    CommandSpec {
+        id: "note.remove_many",
+        summary: "批量删除音符",
+        undo: UndoKind::Snapshot,
+        input_schema: note_remove_many_schema,
+    },
+    CommandSpec {
+        id: "note.quantize_many",
+        summary: "批量量化音符起点",
+        undo: UndoKind::Snapshot,
+        input_schema: note_quantize_many_schema,
     },
     CommandSpec {
         id: "note.paste",

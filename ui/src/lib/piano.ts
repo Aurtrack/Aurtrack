@@ -83,7 +83,7 @@ function clampedView(clip: Clip, view: PianoView): PianoView {
 export function drawPiano(
   canvas: HTMLCanvasElement,
   clip: Clip | null,
-  selectedNoteId: string,
+  selectedNoteIds: readonly string[],
   rawView: PianoView,
 ): void {
   const width = canvas.clientWidth;
@@ -185,7 +185,7 @@ export function drawPiano(
     context.strokeStyle = COLORS.blueDark;
     context.strokeRect(startX + 0.5, y + 0.5, widthPx - 1, rowHeight - 2);
 
-    if (note.id === selectedNoteId) {
+    if (selectedNoteIds.includes(note.id)) {
       context.strokeStyle = COLORS.ink;
       context.lineWidth = 1.5;
       context.strokeRect(startX + 0.5, y + 0.5, widthPx - 1, rowHeight - 2);
@@ -257,4 +257,45 @@ export function hitTestPiano(
       Math.max(0, view.viewStart + (x - PIANO_LEFT) / pixelsPerSecond),
     ),
   };
+}
+
+// 返回与画布内矩形相交的音符 ID，坐标以画布左上角为原点。
+export function notesInRect(
+  canvas: HTMLCanvasElement,
+  clip: Clip | null,
+  rawView: PianoView,
+  left: number,
+  top: number,
+  right: number,
+  bottom: number,
+): string[] {
+  if (!clip) return [];
+  const width = canvas.clientWidth;
+  const height = canvas.clientHeight;
+  if (width === 0 || height === 0) return [];
+
+  const view = clampedView(clip, rawView);
+  const usableWidth = width - PIANO_LEFT - PIANO_PADDING;
+  if (usableWidth <= 0) return [];
+  const pixelsPerSecond = usableWidth / view.visibleDuration;
+  const x1 = Math.min(left, right);
+  const x2 = Math.max(left, right);
+  const y1 = Math.min(top, bottom);
+  const y2 = Math.max(top, bottom);
+
+  return clip.notes
+    .filter((note) => {
+      if (note.pitch < PIANO_LOW || note.pitch > PIANO_HIGH) return false;
+      const startX =
+        PIANO_LEFT + (note.start - view.viewStart) * pixelsPerSecond;
+      const noteWidth = Math.max(3, note.duration * pixelsPerSecond);
+      const y = rowY(note.pitch, view.rowHeight);
+      return (
+        startX <= x2 &&
+        startX + noteWidth >= x1 &&
+        y <= y2 &&
+        y + view.rowHeight >= y1
+      );
+    })
+    .map((note) => note.id);
 }

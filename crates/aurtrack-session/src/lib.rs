@@ -88,6 +88,7 @@ pub struct Device {
 
 const PROJECT_FORMAT_VERSION: u32 = 2;
 const TIMELINE_SECONDS: f64 = 5.0;
+const MAX_BATCH_NOTES: usize = 512;
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -134,11 +135,14 @@ impl Session {
             "clip.update" => self.cmd_clip_update(&request.args),
             "clip.remove" => self.cmd_clip_remove(&request.args),
             "clip.duplicate" => self.cmd_clip_duplicate(&request.args),
+            "clip.move" => self.cmd_clip_move(&request.args),
             "note.add" => self.cmd_note_add(&request.args),
             "note.update" => self.cmd_note_update(&request.args),
             "note.remove" => self.cmd_note_remove(&request.args),
             "note.duplicate" => self.cmd_note_duplicate(&request.args),
             "note.quantize" => self.cmd_note_quantize(&request.args),
+            "note.remove_many" => self.cmd_note_remove_many(&request.args),
+            "note.quantize_many" => self.cmd_note_quantize_many(&request.args),
             "note.paste" => self.cmd_note_paste(&request.args),
             "clip.paste" => self.cmd_clip_paste(&request.args),
             "device.add" => self.cmd_device_add(&request.args),
@@ -666,6 +670,87 @@ impl Session {
         .with_undo(token))
     }
 
+    fn cmd_clip_move(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        let args: ClipMoveArgs = parse_args(args)?;
+        let path = args.path;
+        let (track_id, clip_id) = parse_clip_path(&path)?;
+        let source = self
+            .project
+            .as_ref()
+            .and_then(|project| project.tracks.iter().find(|track| track.id == track_id))
+            .and_then(|track| track.clips.iter().find(|clip| clip.id == clip_id))
+            .cloned()
+            .ok_or_else(|| CommandError::not_found(format!("找不到片段：{path}")))?;
+        let target_exists = self
+            .project
+            .as_ref()
+            .is_some_and(|project| project.tracks.iter().any(|track| track.id == args.track_id));
+        if !target_exists {
+            return Err(CommandError::not_found(format!(
+                "找不到轨道：{}",
+                args.track_id
+            )));
+        }
+        let start = args.start.unwrap_or(source.start);
+        validate_clip_range(start, source.duration)?;
+        if track_id == args.track_id && (start - source.start).abs() < 1e-9 {
+            return Err(CommandError::invalid_args("片段没有移动"));
+        }
+
+        let source_track_index = self
+            .project
+            .as_ref()
+            .and_then(|project| project.tracks.iter().position(|track| track.id == track_id))
+            .ok_or_else(|| CommandError::not_found(format!("找不到片段：{path}")))?;
+        let clip_index = self
+            .project
+            .as_ref()
+            .and_then(|project| {
+                project.tracks[source_track_index]
+                    .clips
+                    .iter()
+                    .position(|clip| clip.id == clip_id)
+            })
+            .ok_or_else(|| CommandError::not_found(format!("找不到片段：{path}")))?;
+        let target_track_index = self
+            .project
+            .as_ref()
+            .and_then(|project| {
+                project
+                    .tracks
+                    .iter()
+                    .position(|track| track.id == args.track_id)
+            })
+            .ok_or_else(|| CommandError::not_found(format!("找不到轨道：{}", args.track_id)))?;
+
+        let token = self.snapshot("clip.move");
+        let project = self
+            .project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let clip = if source_track_index == target_track_index {
+            let clip = project.tracks[source_track_index]
+                .clips
+                .get_mut(clip_index)
+                .ok_or_else(|| CommandError::not_found(format!("找不到片段：{path}")))?;
+            clip.start = start;
+            clip.clone()
+        } else {
+            let mut clip = project.tracks[source_track_index].clips.remove(clip_index);
+            clip.start = start;
+            project.tracks[target_track_index].clips.push(clip.clone());
+            clip
+        };
+        let new_path = format!("/tracks/{}/clips/{clip_id}", args.track_id);
+
+        Ok(CommandResponse::ok(json!({
+            "path": new_path,
+            "track_id": args.track_id,
+            "clip": clip,
+        }))
+        .with_undo(token))
+    }
+
     fn cmd_note_add(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
         let args: NoteAddArgs = parse_args(args)?;
         let path = args.path;
@@ -927,6 +1012,154 @@ impl Session {
             "path": path,
             "note": updated,
             "grid": args.grid,
+        }))
+        .with_undo(token))
+    }
+
+    fn cmd_note_remove_many(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        let args: NotePathsArgs = parse_args(args)?;
+        if args.paths.is_empty() {
+            return Err(CommandError::invalid_args("paths 不能为空"));
+        }
+        if args.paths.len() > MAX_BATCH_NOTES {
+            return Err(CommandError::invalid_args(format!(
+                "paths 一次最多 {MAX_BATCH_NOTES} 个"
+            )));
+        }
+        let mut seen = BTreeSet::new();
+        let mut targets = Vec::with_capacity(args.paths.len());
+        for path in &args.paths {
+            if !seen.insert(path.as_str()) {
+                return Err(CommandError::invalid_args(format!(
+                    "paths 不能重复：{path}"
+                )));
+            }
+            let (track_id, clip_id, note_id) = parse_note_path(path)?;
+            let exists = self.project.as_ref().is_some_and(|project| {
+                project.tracks.iter().any(|track| {
+                    track.id == track_id
+                        && track.clips.iter().any(|clip| {
+                            clip.id == clip_id && clip.notes.iter().any(|note| note.id == note_id)
+                        })
+                })
+            });
+            if !exists {
+                return Err(CommandError::not_found(format!("找不到音符：{path}")));
+            }
+            targets.push((
+                track_id.to_string(),
+                clip_id.to_string(),
+                note_id.to_string(),
+            ));
+        }
+
+        let token = self.snapshot("note.remove_many");
+        for (track_id, clip_id, note_id) in &targets {
+            let project = self
+                .project
+                .as_mut()
+                .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+            let track = project
+                .tracks
+                .iter_mut()
+                .find(|track| &track.id == track_id)
+                .ok_or_else(|| CommandError::not_found(format!("找不到轨道：{track_id}")))?;
+            let clip = track
+                .clips
+                .iter_mut()
+                .find(|clip| &clip.id == clip_id)
+                .ok_or_else(|| CommandError::not_found(format!("找不到片段：{clip_id}")))?;
+            clip.notes.retain(|note| &note.id != note_id);
+        }
+
+        Ok(CommandResponse::ok(json!({
+            "paths": args.paths,
+            "removed": targets.len(),
+        }))
+        .with_undo(token))
+    }
+
+    fn cmd_note_quantize_many(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        let args: NoteQuantizeManyArgs = parse_args(args)?;
+        if args.paths.is_empty() {
+            return Err(CommandError::invalid_args("paths 不能为空"));
+        }
+        if args.paths.len() > MAX_BATCH_NOTES {
+            return Err(CommandError::invalid_args(format!(
+                "paths 一次最多 {MAX_BATCH_NOTES} 个"
+            )));
+        }
+        if !args.grid.is_finite() || args.grid <= 0.0 || args.grid > TIMELINE_SECONDS {
+            return Err(CommandError::invalid_args(
+                "grid 必须是 0 到 5 秒之间的正数",
+            ));
+        }
+        let mut seen = BTreeSet::new();
+        let mut targets = Vec::with_capacity(args.paths.len());
+        for path in &args.paths {
+            if !seen.insert(path.as_str()) {
+                return Err(CommandError::invalid_args(format!(
+                    "paths 不能重复：{path}"
+                )));
+            }
+            let (track_id, clip_id, note_id) = parse_note_path(path)?;
+            let (clip_duration, existing) = self
+                .project
+                .as_ref()
+                .and_then(|project| project.tracks.iter().find(|track| track.id == track_id))
+                .and_then(|track| track.clips.iter().find(|clip| clip.id == clip_id))
+                .and_then(|clip| {
+                    clip.notes
+                        .iter()
+                        .find(|note| note.id == note_id)
+                        .map(|note| (clip.duration, note.clone()))
+                })
+                .ok_or_else(|| CommandError::not_found(format!("找不到音符：{path}")))?;
+            let max_start = (clip_duration - existing.duration).max(0.0);
+            let start = ((existing.start / args.grid).round() * args.grid).clamp(0.0, max_start);
+            validate_note_values(
+                existing.pitch,
+                start,
+                existing.duration,
+                existing.velocity,
+                clip_duration,
+            )?;
+            targets.push((
+                track_id.to_string(),
+                clip_id.to_string(),
+                note_id.to_string(),
+                start,
+            ));
+        }
+
+        let token = self.snapshot("note.quantize_many");
+        for (track_id, clip_id, note_id, start) in &targets {
+            let project = self
+                .project
+                .as_mut()
+                .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+            let track = project
+                .tracks
+                .iter_mut()
+                .find(|track| &track.id == track_id)
+                .ok_or_else(|| CommandError::not_found(format!("找不到轨道：{track_id}")))?;
+            let clip = track
+                .clips
+                .iter_mut()
+                .find(|clip| &clip.id == clip_id)
+                .ok_or_else(|| CommandError::not_found(format!("找不到片段：{clip_id}")))?;
+            let note = clip
+                .notes
+                .iter_mut()
+                .find(|note| &note.id == note_id)
+                .ok_or_else(|| CommandError::not_found(format!("找不到音符：{note_id}")))?;
+            note.start = *start;
+        }
+
+        Ok(CommandResponse::ok(json!({
+            "paths": args.paths,
+            "grid": args.grid,
+            "count": targets.len(),
         }))
         .with_undo(token))
     }
@@ -1620,6 +1853,15 @@ struct ClipUpdateArgs {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct ClipMoveArgs {
+    path: String,
+    track_id: String,
+    #[serde(default)]
+    start: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct NoteAddArgs {
     path: String,
     pitch: u8,
@@ -1651,8 +1893,21 @@ struct NotePathArgs {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct NotePathsArgs {
+    paths: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct NoteQuantizeArgs {
     path: String,
+    grid: f64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NoteQuantizeManyArgs {
+    paths: Vec<String>,
     grid: f64,
 }
 

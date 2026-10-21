@@ -40,7 +40,7 @@ export const zhCN = {
   "timeline.title": "时间线",
   "timeline.meta": (params) => `${params.tracks} 轨 / ${params.duration} 秒`,
   "timeline.empty": "还没有轨道",
-  "timeline.hint": "点击定位 / 拖动编辑",
+  "timeline.hint": "点击定位 / 拖动编辑 / 片段上下拖到其他轨道",
   "timeline.playhead": (params) => `T+${params.seconds} 秒`,
   "timeline.trackMeta": (params) =>
     `正弦 ${params.frequency} Hz / ${params.devices} 设备`,
@@ -65,8 +65,10 @@ export const zhCN = {
   "notes.title": "音符",
   "notes.total": (params) => `共 ${params.count} 个`,
   "notes.empty": "片段还没有音符。在下方添加，或用钢琴卷帘点击空白。",
-  "notes.duplicate": "复制音符",
-  "notes.quantize16": "量化 1/16",
+  "notes.duplicate": "复制选中",
+  "notes.quantize16": "量化选中 1/16",
+  "notes.deleteSelected": "删除选中",
+  "notes.selected": (params) => `已选 ${params.count} 个音符`,
   "notes.add": "添加音符",
   "notes.pitch": "音高",
   "notes.start": "起点",
@@ -84,7 +86,7 @@ export const zhCN = {
   "piano.zoomIn": "放大",
   "piano.zoomOut": "缩小",
   "piano.scroll": "横向滚动",
-  "piano.hint": "点击空白加音符 · 拖动移动 · 边缘缩放 · 右键删除 · 上方控件缩放",
+  "piano.hint": "点击空白加音符 · 拖动框选 · Ctrl/Shift 多选 · 拖动移动 · 边缘缩放 · 右键删除",
 
   "panel.timeline": "时间线",
   "panel.piano": "钢琴卷帘",
@@ -213,6 +215,8 @@ export const zhCN = {
   "status.clipDuplicated": (params) => `已复制片段 ${params.id}`,
   "status.clipDuplicateFailed": (params) =>
     `复制片段失败：${params.message}`,
+  "status.clipMoved": (params) => `已移动片段 ${params.id}`,
+  "status.clipMoveFailed": (params) => `移动片段失败：${params.message}`,
   "status.noteAdded": (params) => `已添加音符 ${params.id}`,
   "status.noteAddFailed": (params) => `添加音符失败：${params.message}`,
   "status.noteRemoved": (params) => `已删除音符 ${params.id}`,
@@ -220,12 +224,17 @@ export const zhCN = {
   "status.noteDuplicated": (params) => `已复制音符 ${params.id}`,
   "status.noteDuplicateFailed": (params) =>
     `复制音符失败：${params.message}`,
+  "status.notesDuplicated": (params) =>
+    `已在后方复制 ${params.count} 个音符`,
+  "status.notesRemoved": (params) => `已删除 ${params.count} 个音符`,
   "status.noteQuantized": (params) => `已量化音符 ${params.id}`,
   "status.noteQuantizeFailed": (params) =>
     `量化音符失败：${params.message}`,
+  "status.notesQuantized": (params) => `已量化 ${params.count} 个音符`,
   "status.noteUpdated": (params) => `已更新音符 ${params.id}`,
   "status.noteUpdateFailed": (params) => `更新音符失败：${params.message}`,
   "status.noteCopied": "已复制音符",
+  "status.notesCopied": (params) => `已复制 ${params.count} 个音符`,
   "status.clipCopied": "已复制片段",
   "status.copyEmpty": "没有可复制的对象",
   "status.pasted": "已粘贴",

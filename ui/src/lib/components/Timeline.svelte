@@ -6,6 +6,7 @@
     drawTimeline,
     hitTestTimeline,
     secondsAtX,
+    trackAtY,
     type TimelineHit,
     type TimelineTrack,
   } from "../timeline";
@@ -24,6 +25,7 @@
       path: string,
       patch: { start: number; duration: number },
     ) => void;
+    onMoveClip?: (path: string, trackId: string, start: number) => void;
   }
 
   let {
@@ -34,11 +36,13 @@
     onSelectClip,
     onUpdateClip,
     onUpdateNote,
+    onMoveClip,
   }: Props = $props();
 
   type Preview = {
     kind: "clip" | "note";
     trackId: string;
+    targetTrackId: string;
     clipId: string;
     noteId?: string;
     start: number;
@@ -97,8 +101,36 @@
     current: Preview | null,
   ): TimelineTrack[] {
     if (!current) return list;
+    if (current.kind === "clip" && current.targetTrackId !== current.trackId) {
+      const clip = list
+        .find((track) => track.id === current.trackId)
+        ?.clips.find((item) => item.id === current.clipId);
+      if (!clip) return list;
+      return list.map((track) => {
+        if (track.id === current.trackId) {
+          return {
+            ...track,
+            clips: track.clips.filter((item) => item.id !== current.clipId),
+          };
+        }
+        if (track.id === current.targetTrackId) {
+          return {
+            ...track,
+            clips: [
+              ...track.clips,
+              {
+                ...clip,
+                start: current.start,
+                duration: current.duration,
+              },
+            ],
+          };
+        }
+        return track;
+      });
+    }
     return list.map((track) => {
-      if (track.id !== current.trackId) return track;
+      if (track.id !== current.targetTrackId) return track;
       return {
         ...track,
         clips: track.clips.map((clip) => {
@@ -180,6 +212,7 @@
       preview = {
         kind: hit.kind,
         trackId: hit.trackId,
+        targetTrackId: hit.trackId,
         clipId: hit.clipId,
         noteId: hit.kind === "note" ? hit.noteId : undefined,
         start: originStart,
@@ -229,9 +262,16 @@
             duration - drag.originStart,
           );
         }
+        let targetTrackId = hit.trackId;
+        if (hit.mode === "move") {
+          const index = trackAtY(canvas, tracks.length, event.clientY);
+          const target = index === null ? undefined : tracks[index];
+          if (target) targetTrackId = target.id;
+        }
         preview = {
           kind: "clip",
           trackId: hit.trackId,
+          targetTrackId,
           clipId: hit.clipId,
           start,
           duration: nextDuration,
@@ -257,6 +297,7 @@
         preview = {
           kind: "note",
           trackId: hit.trackId,
+          targetTrackId: hit.trackId,
           clipId: hit.clipId,
           noteId: hit.noteId,
           start,
@@ -299,8 +340,16 @@
       const changed =
         Math.abs(preview.start - origin.originStart) > 1e-9 ||
         Math.abs(preview.duration - origin.originDuration) > 1e-9;
-      if (changed) {
-        const hit = origin.hit;
+      const hit = origin.hit;
+      const trackChanged =
+        hit.kind === "clip" && preview.targetTrackId !== hit.trackId;
+      if (trackChanged) {
+        onMoveClip?.(
+          `/tracks/${hit.trackId}/clips/${hit.clipId}`,
+          preview.targetTrackId,
+          preview.start,
+        );
+      } else if (changed) {
         if (hit.kind === "clip") {
           onUpdateClip?.(`/tracks/${hit.trackId}/clips/${hit.clipId}`, {
             start: preview.start,

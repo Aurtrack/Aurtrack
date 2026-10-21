@@ -326,12 +326,23 @@ body {
   min-width: 120px;
 }
 
+.piano-canvas-wrap {
+  position: relative;
+}
+
 .piano-canvas {
   display: block;
   width: 100%;
   border: 1px solid var(--line);
   cursor: crosshair;
   touch-action: none;
+}
+
+.piano-marquee {
+  position: absolute;
+  pointer-events: none;
+  border: 1px solid var(--blue);
+  background: rgba(47, 95, 208, 0.1);
 }
 
 .timeline-label {
@@ -873,9 +884,14 @@ body {
 
 .note-actions {
   display: flex;
+  align-items: center;
   gap: 6px;
   padding: 8px 22px;
   border-bottom: 1px solid var(--line);
+}
+
+.note-actions .track-meta {
+  margin-right: auto;
 }
 
 .mini-button {

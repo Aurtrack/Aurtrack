@@ -156,7 +156,8 @@
               class="menu-item"
               role="menuitem"
               disabled={session.busy ||
-                (!session.selectedNotePath && !session.selectedClipPath)}
+                (session.selectedNoteIds.length === 0 &&
+                  !session.selectedClipPath)}
               onclick={() => run(() => session.copySelected())}
             >
               <span>{t("menu.copySelected")}</span>
@@ -175,7 +176,8 @@
               class="menu-item"
               role="menuitem"
               disabled={session.busy ||
-                (!session.selectedNotePath && !session.selectedClipPath)}
+                (session.selectedNoteIds.length === 0 &&
+                  !session.selectedClipPath)}
               onclick={() => run(() => void session.duplicateSelected())}
             >
               <span>{t("menu.duplicateSelected")}</span>
@@ -185,7 +187,8 @@
               class="menu-item"
               role="menuitem"
               disabled={session.busy ||
-                (!session.selectedNotePath && !session.selectedClipPath)}
+                (session.selectedNoteIds.length === 0 &&
+                  !session.selectedClipPath)}
               onclick={() => run(() => void session.deleteSelected())}
             >
               <span>{t("menu.deleteSelected")}</span>

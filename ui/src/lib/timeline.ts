@@ -296,6 +296,22 @@ export function secondsAtX(
   return Math.min(duration, Math.max(0, ratio * duration));
 }
 
+export function trackAtY(
+  canvas: HTMLCanvasElement,
+  trackCount: number,
+  clientY: number,
+): number | null {
+  if (trackCount <= 0) return null;
+  const rect = canvas.getBoundingClientRect();
+  if (rect.height === 0) return null;
+  const laneTop = PADDING + RULER_HEIGHT + 6;
+  const laneArea = rect.height - laneTop - PADDING;
+  const laneHeight = laneArea / trackCount;
+  if (laneHeight <= 0) return null;
+  const raw = Math.floor((clientY - rect.top - laneTop) / laneHeight);
+  return Math.min(trackCount - 1, Math.max(0, raw));
+}
+
 export function hitTestTimeline(
   canvas: HTMLCanvasElement,
   view: TimelineView,

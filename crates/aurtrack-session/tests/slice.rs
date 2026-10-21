@@ -202,10 +202,138 @@ fn paste_notes_and_clip_in_one_snapshot() {
 }
 
 #[test]
-fn describe_lists_twenty_nine_commands() {
+fn batch_note_edits_and_cross_track_clip_move_share_snapshots() {
+    let mut session = Session::default();
+    run(&mut session, "project.create", json!({}));
+    run(&mut session, "track.create", json!({ "name": "lead" }));
+    run(&mut session, "track.create", json!({ "name": "pad" }));
+    run(
+        &mut session,
+        "clip.create",
+        json!({ "track_id": "track-1", "start": 0.0, "duration": 2.0 }),
+    );
+    for (pitch, start) in [(60, 0.27), (64, 0.61), (67, 1.3)] {
+        run(
+            &mut session,
+            "note.add",
+            json!({
+                "path": "/tracks/track-1/clips/clip-1",
+                "pitch": pitch,
+                "start": start,
+                "duration": 0.2,
+            }),
+        );
+    }
+
+    let quantized = run(
+        &mut session,
+        "note.quantize_many",
+        json!({
+            "paths": [
+                "/tracks/track-1/clips/clip-1/notes/note-1",
+                "/tracks/track-1/clips/clip-1/notes/note-2"
+            ],
+            "grid": 0.25
+        }),
+    );
+    assert_eq!(quantized["count"], 2);
+    let state = run(&mut session, "project.state", json!({}));
+    let starts = state["project"]["tracks"][0]["clips"][0]["notes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|note| note["start"].as_f64().unwrap())
+        .collect::<Vec<_>>();
+    assert!((starts[0] - 0.25).abs() < 1e-9);
+    assert!((starts[1] - 0.5).abs() < 1e-9);
+
+    run(&mut session, "undo", json!({}));
+    let error = session
+        .execute(&CommandRequest {
+            cmd: "note.remove_many".to_string(),
+            args: json!({
+                "paths": [
+                    "/tracks/track-1/clips/clip-1/notes/note-1",
+                    "/tracks/track-1/clips/clip-1/notes/note-404"
+                ]
+            }),
+        })
+        .unwrap_err();
+    assert_eq!(error.code, "not_found");
+
+    let removed = run(
+        &mut session,
+        "note.remove_many",
+        json!({
+            "paths": [
+                "/tracks/track-1/clips/clip-1/notes/note-1",
+                "/tracks/track-1/clips/clip-1/notes/note-2"
+            ]
+        }),
+    );
+    assert_eq!(removed["removed"], 2);
+    let state = run(&mut session, "project.state", json!({}));
+    assert_eq!(
+        state["project"]["tracks"][0]["clips"][0]["notes"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    run(&mut session, "undo", json!({}));
+    let moved = run(
+        &mut session,
+        "clip.move",
+        json!({
+            "path": "/tracks/track-1/clips/clip-1",
+            "track_id": "track-2",
+            "start": 1.0
+        }),
+    );
+    assert_eq!(moved["path"], "/tracks/track-2/clips/clip-1");
+    assert!((moved["clip"]["start"].as_f64().unwrap() - 1.0).abs() < 1e-9);
+    assert_eq!(moved["clip"]["notes"].as_array().unwrap().len(), 3);
+
+    let state = run(&mut session, "project.state", json!({}));
+    assert_eq!(
+        state["project"]["tracks"][0]["clips"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+    assert_eq!(
+        state["project"]["tracks"][1]["clips"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    run(&mut session, "undo", json!({}));
+    let state = run(&mut session, "project.state", json!({}));
+    assert_eq!(
+        state["project"]["tracks"][0]["clips"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        state["project"]["tracks"][1]["clips"]
+            .as_array()
+            .unwrap()
+            .len(),
+        0
+    );
+}
+
+#[test]
+fn describe_lists_thirty_two_commands() {
     let mut session = Session::default();
     let out = run(&mut session, "describe", json!({}));
-    assert_eq!(out["commands"].as_array().unwrap().len(), 29);
+    assert_eq!(out["commands"].as_array().unwrap().len(), 32);
     assert!(out["project"].is_null());
 }
 

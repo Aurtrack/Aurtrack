@@ -17,6 +17,7 @@ import {
   transportSeek,
   transportState,
   transportStop,
+  type Note,
   type Project,
   type ProjectState,
 } from "./api";
@@ -46,6 +47,8 @@ export type RecentProject = {
   savedAt: number;
 };
 
+export type NoteSelectMode = "replace" | "toggle" | "range";
+
 type ClipboardNote = {
   pitch: number;
   start: number;
@@ -72,11 +75,14 @@ const MUTATING_COMMANDS = new Set([
   "clip.update",
   "clip.remove",
   "clip.duplicate",
+  "clip.move",
   "note.add",
   "note.update",
   "note.remove",
+  "note.remove_many",
   "note.duplicate",
   "note.quantize",
+  "note.quantize_many",
   "note.paste",
   "clip.paste",
   "undo",
@@ -121,7 +127,8 @@ export class SessionStore {
   private project = $state<Project | null>(null);
   selectedTrackId = $state("");
   selectedClipId = $state("");
-  selectedNoteId = $state("");
+  selectedNoteIds = $state<string[]>([]);
+  private selectionAnchorNoteId = $state("");
   private projectPath = $state("");
   gain = $state(50);
   busy = $state(false);
@@ -164,20 +171,32 @@ export class SessionStore {
       this.selectedTrack?.clips[0] ??
       null,
   );
+  selectedNotes = $derived(
+    this.selectedClip
+      ? this.selectedClip.notes.filter((note) =>
+          this.selectedNoteIds.includes(note.id),
+        )
+      : [],
+  );
+  selectedNoteId = $derived(this.selectedNoteIds.at(-1) ?? "");
   selectedNote = $derived(
-    this.selectedClip?.notes.find(
-      (note) => note.id === this.selectedNoteId,
-    ) ?? null,
+    this.selectedNotes.find((note) => note.id === this.selectedNoteId) ?? null,
   );
   selectedClipPath = $derived(
     this.selectedTrack && this.selectedClip
       ? `/tracks/${this.selectedTrack.id}/clips/${this.selectedClip.id}`
       : null,
   );
+  selectedNotePaths = $derived(
+    this.selectedTrack && this.selectedClip
+      ? this.selectedNotes.map(
+          (note) =>
+            `/tracks/${this.selectedTrack?.id}/clips/${this.selectedClip?.id}/notes/${note.id}`,
+        )
+      : [],
+  );
   selectedNotePath = $derived(
-    this.selectedTrack && this.selectedClip && this.selectedNote
-      ? `/tracks/${this.selectedTrack.id}/clips/${this.selectedClip.id}/notes/${this.selectedNote.id}`
-      : null,
+    this.selectedNotePaths.length === 1 ? this.selectedNotePaths[0] : null,
   );
   statusText = $derived(t(this.status.key, this.status.params ?? {}));
   timelineTracks = $derived(this.buildTimelineTracks());
@@ -224,31 +243,101 @@ export class SessionStore {
     this.selectedTrackId = trackId;
     const track = this.project?.tracks.find((item) => item.id === trackId);
     this.selectedClipId = track?.clips[0]?.id ?? "";
-    this.selectedNoteId = "";
+    this.clearNoteSelection();
   }
 
   selectClip(trackId: string, clipId: string) {
     this.selectedTrackId = trackId;
     this.selectedClipId = clipId;
-    this.selectedNoteId = "";
+    this.clearNoteSelection();
   }
 
   selectClipId(clipId: string) {
     const track = this.selectedTrack;
     if (track) {
       this.selectedClipId = clipId;
-      this.selectedNoteId = "";
+      this.clearNoteSelection();
     }
   }
 
-  selectNote(noteId: string) {
+  selectNote(noteId: string, mode: NoteSelectMode = "replace") {
     const clip = this.selectedClip;
-    if (clip?.notes.some((note) => note.id === noteId)) {
-      this.selectedNoteId = noteId;
+    const target = clip?.notes.find((note) => note.id === noteId);
+    if (!clip || !target) return;
+
+    if (mode === "toggle") {
+      if (this.selectedNoteIds.includes(noteId)) {
+        this.setNoteSelection(
+          this.selectedNoteIds.filter((id) => id !== noteId),
+        );
+        if (this.selectionAnchorNoteId === noteId) {
+          this.selectionAnchorNoteId = this.selectedNoteIds.at(-1) ?? "";
+        }
+        return;
+      }
+      this.setNoteSelection([...this.selectedNoteIds, noteId]);
+      this.selectionAnchorNoteId = noteId;
+      return;
+    }
+
+    if (mode === "range") {
+      const anchor =
+        clip.notes.find((note) => note.id === this.selectionAnchorNoteId) ??
+        target;
+      const low = Math.min(anchor.start, target.start);
+      const high = Math.max(anchor.start, target.start);
+      const ids = clip.notes
+        .filter((note) => note.start >= low - 1e-9 && note.start <= high + 1e-9)
+        .map((note) => note.id)
+        .filter((id) => id !== noteId);
+      this.setNoteSelection([...ids, noteId]);
+      this.selectionAnchorNoteId = anchor.id;
+      return;
+    }
+
+    this.setNoteSelection([noteId]);
+    this.selectionAnchorNoteId = noteId;
+  }
+
+  selectNotes(noteIds: string[], additive: boolean) {
+    if (additive && noteIds.length === 0) return;
+    const merged = additive ? [...this.selectedNoteIds, ...noteIds] : noteIds;
+    this.setNoteSelection(merged);
+    if (noteIds.length > 0) {
+      this.selectionAnchorNoteId = noteIds.at(-1) ?? "";
+    }
+  }
+
+  clearNoteSelection() {
+    this.selectedNoteIds = [];
+    this.selectionAnchorNoteId = "";
+  }
+
+  private setNoteSelection(noteIds: string[]) {
+    const clip = this.selectedClip;
+    if (!clip) {
+      this.clearNoteSelection();
+      return;
+    }
+    const seen = new Set<string>();
+    const valid = noteIds.filter((id) => {
+      if (seen.has(id)) return false;
+      if (!clip.notes.some((note) => note.id === id)) return false;
+      seen.add(id);
+      return true;
+    });
+    this.selectedNoteIds = valid;
+    if (!valid.includes(this.selectionAnchorNoteId)) {
+      this.selectionAnchorNoteId = valid.at(-1) ?? "";
     }
   }
 
   async duplicateSelected() {
+    const notes = this.selectedNotes;
+    if (notes.length > 1) {
+      await this.duplicateNotesGroup(notes);
+      return;
+    }
     if (this.selectedNotePath) {
       await this.duplicateNote(this.selectedNotePath);
       return;
@@ -259,8 +348,13 @@ export class SessionStore {
   }
 
   async deleteSelected() {
-    if (this.selectedNotePath) {
-      await this.deleteNote(this.selectedNotePath);
+    const paths = this.selectedNotePaths;
+    if (paths.length > 1) {
+      await this.deleteNotes(paths);
+      return;
+    }
+    if (paths.length === 1) {
+      await this.deleteNote(paths[0] ?? "");
       return;
     }
     if (this.selectedClipPath) {
@@ -268,20 +362,44 @@ export class SessionStore {
     }
   }
 
+  async quantizeSelected(grid: number) {
+    const paths = this.selectedNotePaths;
+    if (paths.length === 0) return;
+    if (paths.length === 1) {
+      await this.quantizeNote(paths[0] ?? "", grid);
+      return;
+    }
+    if (this.busy) return;
+    this.busy = true;
+    try {
+      await this.run("note.quantize_many", { paths, grid });
+      await this.refreshProject();
+      await this.reloadIfPlaying();
+      this.setStatus("status.notesQuantized", { count: paths.length });
+    } catch (error) {
+      this.fail("status.noteQuantizeFailed", error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
   copySelected() {
-    if (this.selectedNote) {
+    const notes = this.selectedNotes;
+    if (notes.length > 0) {
       this.clipboard = {
         kind: "notes",
-        notes: [
-          {
-            pitch: this.selectedNote.pitch,
-            start: this.selectedNote.start,
-            duration: this.selectedNote.duration,
-            velocity: this.selectedNote.velocity,
-          },
-        ],
+        notes: notes.map((note) => ({
+          pitch: note.pitch,
+          start: note.start,
+          duration: note.duration,
+          velocity: note.velocity,
+        })),
       };
-      this.setStatus("status.noteCopied");
+      if (notes.length === 1) {
+        this.setStatus("status.noteCopied");
+      } else {
+        this.setStatus("status.notesCopied", { count: notes.length });
+      }
       return;
     }
     if (this.selectedClip) {
@@ -300,6 +418,54 @@ export class SessionStore {
       return;
     }
     this.setStatus("status.copyEmpty");
+  }
+
+  private async duplicateNotesGroup(notes: Note[]) {
+    if (this.busy) return;
+    const path = this.selectedClipPath;
+    if (!path || notes.length === 0) return;
+    const minStart = Math.min(...notes.map((note) => note.start));
+    const maxEnd = Math.max(...notes.map((note) => note.start + note.duration));
+    const offset = maxEnd - minStart;
+    const drafts = notes.map((note) => ({
+      pitch: note.pitch,
+      start: note.start + offset,
+      duration: note.duration,
+      velocity: note.velocity,
+    }));
+    this.busy = true;
+    try {
+      const result = await this.run<{ note_ids: string[] }>("note.paste", {
+        path,
+        notes: drafts,
+      });
+      await this.refreshProject();
+      await this.reloadIfPlaying();
+      this.setNoteSelection(result.note_ids);
+      this.setStatus("status.notesDuplicated", {
+        count: result.note_ids.length,
+      });
+    } catch (error) {
+      this.fail("status.noteDuplicateFailed", error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  private async deleteNotes(paths: string[]) {
+    if (this.busy) return;
+    this.busy = true;
+    try {
+      await this.run("note.remove_many", { paths });
+      await this.refreshProject();
+      await this.reloadIfPlaying();
+      this.clearNoteSelection();
+      this.setStatus("status.notesRemoved", { count: paths.length });
+    } catch (error) {
+      this.fail("status.noteRemoveFailed", error);
+    } finally {
+      this.busy = false;
+    }
   }
 
   async pasteClipboard() {
@@ -334,7 +500,7 @@ export class SessionStore {
         });
         await this.refreshProject();
         await this.reloadIfPlaying();
-        this.selectedNoteId = result.note_ids[0] ?? "";
+        this.setNoteSelection(result.note_ids);
         this.setStatus("status.pasted");
       } else {
         const track = this.selectedTrack;
@@ -356,7 +522,7 @@ export class SessionStore {
         await this.refreshProject();
         await this.reloadIfPlaying();
         this.selectedClipId = result.clip_id;
-        this.selectedNoteId = "";
+        this.clearNoteSelection();
         this.setStatus("status.pasted");
       }
     } catch (error) {
@@ -551,7 +717,7 @@ export class SessionStore {
       await this.refreshProject();
       await this.reloadIfPlaying();
       this.selectedClipId = result.clip_id;
-      this.selectedNoteId = "";
+      this.clearNoteSelection();
       this.setStatus("status.clipCreated", { id: result.clip_id });
     } catch (error) {
       this.fail("status.clipCreateFailed", error);
@@ -567,7 +733,7 @@ export class SessionStore {
       await this.run("clip.remove", { path });
       await this.refreshProject();
       await this.reloadIfPlaying();
-      this.selectedNoteId = "";
+      this.clearNoteSelection();
       const id = path.split("/").pop() ?? path;
       this.setStatus("status.clipRemoved", { id });
     } catch (error) {
@@ -587,10 +753,28 @@ export class SessionStore {
       await this.refreshProject();
       await this.reloadIfPlaying();
       this.selectedClipId = result.clip_id;
-      this.selectedNoteId = "";
+      this.clearNoteSelection();
       this.setStatus("status.clipDuplicated", { id: result.clip_id });
     } catch (error) {
       this.fail("status.clipDuplicateFailed", error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  async moveClip(path: string, trackId: string, start: number) {
+    if (this.busy) return;
+    this.busy = true;
+    try {
+      await this.run("clip.move", { path, track_id: trackId, start });
+      await this.refreshProject();
+      await this.reloadIfPlaying();
+      this.selectedTrackId = trackId;
+      this.selectedClipId = path.split("/").pop() ?? this.selectedClipId;
+      this.clearNoteSelection();
+      this.setStatus("status.clipMoved", { id: this.selectedClipId });
+    } catch (error) {
+      this.fail("status.clipMoveFailed", error);
     } finally {
       this.busy = false;
     }
@@ -614,7 +798,7 @@ export class SessionStore {
       });
       await this.refreshProject();
       await this.reloadIfPlaying();
-      this.selectedNoteId = result.note_id;
+      this.selectNote(result.note_id);
       this.setStatus("status.noteAdded", { id: result.note_id });
     } catch (error) {
       this.fail("status.noteAddFailed", error);
@@ -631,7 +815,11 @@ export class SessionStore {
       await this.refreshProject();
       await this.reloadIfPlaying();
       const id = path.split("/").pop() ?? path;
-      if (this.selectedNoteId === id) this.selectedNoteId = "";
+      if (this.selectedNoteIds.includes(id)) {
+        this.setNoteSelection(
+          this.selectedNoteIds.filter((noteId) => noteId !== id),
+        );
+      }
       this.setStatus("status.noteRemoved", { id });
     } catch (error) {
       this.fail("status.noteRemoveFailed", error);
@@ -649,7 +837,7 @@ export class SessionStore {
       });
       await this.refreshProject();
       await this.reloadIfPlaying();
-      this.selectedNoteId = result.note_id;
+      this.selectNote(result.note_id);
       this.setStatus("status.noteDuplicated", { id: result.note_id });
     } catch (error) {
       this.fail("status.noteDuplicateFailed", error);
@@ -724,9 +912,12 @@ export class SessionStore {
     if (this.busy) return;
     this.busy = true;
     try {
-      await this.run("undo", { steps: 1 });
+      const result = await this.run<{ undone: string[] }>("undo", {
+        steps: 1,
+      });
       await this.refreshProject();
       await this.reloadIfPlaying();
+      this.ensureVisibleClip(result.undone);
       this.setStatus("status.undone");
     } catch (error) {
       this.fail("status.undoFailed", error);
@@ -739,15 +930,28 @@ export class SessionStore {
     if (this.busy) return;
     this.busy = true;
     try {
-      await this.run("redo", { steps: 1 });
+      const result = await this.run<{ redone: string[] }>("redo", {
+        steps: 1,
+      });
       await this.refreshProject();
       await this.reloadIfPlaying();
+      this.ensureVisibleClip(result.redone);
       this.setStatus("status.redone");
     } catch (error) {
       this.fail("status.redoFailed", error);
     } finally {
       this.busy = false;
     }
+  }
+
+  private ensureVisibleClip(commands: string[]) {
+    const structural = commands.some(
+      (cmd) =>
+        cmd === "clip.move" || cmd === "clip.remove" || cmd === "track.remove",
+    );
+    if (!structural || this.selectedClip) return;
+    const track = this.tracks.find((item) => item.clips.length > 0);
+    if (track?.clips[0]) this.selectClip(track.id, track.clips[0].id);
   }
 
   async play() {
@@ -1080,7 +1284,9 @@ export class SessionStore {
   }
 
   private async refreshProject() {
-    if (this.projectPolling) return;
+    while (this.projectPolling) {
+      await new Promise<void>((resolve) => window.setTimeout(resolve, 8));
+    }
     this.projectPolling = true;
     try {
       const state: ProjectState = await projectState();
@@ -1116,11 +1322,19 @@ export class SessionStore {
     }
     const clip = clips.find((item) => item.id === this.selectedClipId);
     const notes = clip?.notes ?? [];
+    if (this.selectedNoteIds.length > 0) {
+      const valid = this.selectedNoteIds.filter((id) =>
+        notes.some((note) => note.id === id),
+      );
+      if (valid.length !== this.selectedNoteIds.length) {
+        this.selectedNoteIds = valid;
+      }
+    }
     if (
-      this.selectedNoteId !== "" &&
-      !notes.some((note) => note.id === this.selectedNoteId)
+      this.selectionAnchorNoteId !== "" &&
+      !notes.some((note) => note.id === this.selectionAnchorNoteId)
     ) {
-      this.selectedNoteId = "";
+      this.selectionAnchorNoteId = this.selectedNoteIds.at(-1) ?? "";
     }
   }
 

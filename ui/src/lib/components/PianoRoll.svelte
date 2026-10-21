@@ -6,6 +6,7 @@
   import {
     drawPiano,
     hitTestPiano,
+    notesInRect,
     pianoHeight,
     PIANO_HIGH,
     PIANO_LOW,
@@ -14,13 +15,15 @@
     type PianoDragMode,
     type PianoView,
   } from "../piano";
+  import type { NoteSelectMode } from "../session.svelte";
 
   interface Props {
     trackId: string | null;
     clip: Clip | null;
     busy: boolean;
-    selectedNoteId: string;
-    onSelectNote: (noteId: string) => void;
+    selectedNoteIds: string[];
+    onSelectNote: (noteId: string, mode: NoteSelectMode) => void;
+    onSelectNotes: (noteIds: string[], additive: boolean) => void;
     onAddNote: (
       path: string,
       input: {
@@ -41,8 +44,9 @@
     trackId,
     clip,
     busy,
-    selectedNoteId,
+    selectedNoteIds,
     onSelectNote,
+    onSelectNotes,
     onAddNote,
     onUpdateNote,
     onRemoveNote,
@@ -68,12 +72,26 @@
     rowHeight: number;
   };
 
+  type SelectionBox = {
+    left: number;
+    top: number;
+    right: number;
+    bottom: number;
+  };
+
+  type EmptyHit = { pitch: number; time: number };
+
   const SNAP = 0.125;
   const ZOOM_LEVELS = [1, 2, 4, 8];
 
   let canvas = $state<HTMLCanvasElement>();
   let preview = $state<Preview | null>(null);
   let drag: DragState | null = null;
+  let selectionBox = $state<SelectionBox | null>(null);
+  let boxStart: { x: number; y: number } | null = null;
+  let boxOrigin: EmptyHit | null = null;
+  let boxAdditive = false;
+  let boxMoved = false;
   let rowHeight = $state(16);
   let zoomX = $state(1);
   let viewStart = $state(0);
@@ -106,14 +124,14 @@
 
   $effect(() => {
     if (!canvas) return;
-    drawPiano(canvas, displayClip, selectedNoteId, view);
+    drawPiano(canvas, displayClip, selectedNoteIds, view);
   });
 
   onMount(() => {
     if (!canvas) return;
     const observer = new ResizeObserver(() => {
       if (!canvas) return;
-      drawPiano(canvas, displayClip, selectedNoteId, view);
+      drawPiano(canvas, displayClip, selectedNoteIds, view);
     });
     observer.observe(canvas);
     return () => observer.disconnect();
@@ -183,7 +201,17 @@
     if (hit.kind === "note") {
       const note = clip.notes.find((item) => item.id === hit.noteId);
       if (!note) return;
-      onSelectNote(note.id);
+      const mode: NoteSelectMode =
+        event.ctrlKey || event.metaKey
+          ? "toggle"
+          : event.shiftKey
+            ? "range"
+            : "replace";
+      onSelectNote(note.id, mode);
+      if (mode !== "replace") {
+        event.preventDefault();
+        return;
+      }
       const rect = canvas.getBoundingClientRect();
       drag = {
         noteId: note.id,
@@ -209,19 +237,38 @@
       return;
     }
 
-    const duration = Math.min(0.25, clip.duration);
-    const start = clamp(snapSeconds(hit.time), 0, clip.duration - duration);
-    onAddNote(`/tracks/${trackId}/clips/${clip.id}`, {
-      pitch: hit.pitch,
-      start,
-      duration,
-      velocity: 0.8,
-    });
+    boxStart = { x: event.clientX, y: event.clientY };
+    boxOrigin = { pitch: hit.pitch, time: hit.time };
+    boxAdditive = event.ctrlKey || event.metaKey || event.shiftKey;
+    boxMoved = false;
+    selectionBox = null;
+    canvas.setPointerCapture(event.pointerId);
     event.preventDefault();
   }
 
   function handlePointerMove(event: PointerEvent) {
     if (!canvas || !clip) return;
+
+    if (boxStart) {
+      if (
+        Math.abs(event.clientX - boxStart.x) > 3 ||
+        Math.abs(event.clientY - boxStart.y) > 3
+      ) {
+        boxMoved = true;
+      }
+      if (boxMoved) {
+        const rect = canvas.getBoundingClientRect();
+        selectionBox = {
+          left: clamp(boxStart.x - rect.left, 0, rect.width),
+          top: clamp(boxStart.y - rect.top, 0, rect.height),
+          right: clamp(event.clientX - rect.left, 0, rect.width),
+          bottom: clamp(event.clientY - rect.top, 0, rect.height),
+        };
+        cursor = "crosshair";
+      }
+      event.preventDefault();
+      return;
+    }
 
     if (!drag) {
       updateCursor(event);
@@ -271,6 +318,43 @@
       canvas.releasePointerCapture(event.pointerId);
     }
 
+    if (boxStart && boxOrigin && clip) {
+      const box = selectionBox;
+      const moved = boxMoved;
+      const origin = boxOrigin;
+      const additive = boxAdditive;
+      resetBox();
+      if (moved && box) {
+        onSelectNotes(
+          notesInRect(
+            canvas,
+            clip,
+            view,
+            box.left,
+            box.top,
+            box.right,
+            box.bottom,
+          ),
+          additive,
+        );
+      } else if (!additive) {
+        const duration = Math.min(0.25, clip.duration);
+        const start = clamp(
+          snapSeconds(origin.time),
+          0,
+          clip.duration - duration,
+        );
+        onAddNote(`/tracks/${trackId}/clips/${clip.id}`, {
+          pitch: origin.pitch,
+          start,
+          duration,
+          velocity: 0.8,
+        });
+      }
+      event.preventDefault();
+      return;
+    }
+
     const origin = drag;
     if (origin && preview) {
       const changed =
@@ -291,9 +375,18 @@
     cursor = "crosshair";
   }
 
+  function resetBox() {
+    boxStart = null;
+    boxOrigin = null;
+    boxMoved = false;
+    boxAdditive = false;
+    selectionBox = null;
+  }
+
   function handlePointerCancel() {
     drag = null;
     preview = null;
+    resetBox();
     cursor = "crosshair";
   }
 
@@ -377,17 +470,30 @@
     </div>
 
     <div class="piano-body">
-      <canvas
-        class="piano-canvas"
-        style={`height: ${canvasHeight}px; cursor: ${cursor};`}
-        bind:this={canvas}
-        onpointerdown={handlePointerDown}
-        onpointermove={handlePointerMove}
-        onpointerup={handlePointerUp}
-        onpointercancel={handlePointerCancel}
-        onpointerleave={handlePointerLeave}
-        oncontextmenu={handleContextMenu}
-      ></canvas>
+      <div class="piano-canvas-wrap">
+        <canvas
+          class="piano-canvas"
+          style={`height: ${canvasHeight}px; cursor: ${cursor};`}
+          bind:this={canvas}
+          onpointerdown={handlePointerDown}
+          onpointermove={handlePointerMove}
+          onpointerup={handlePointerUp}
+          onpointercancel={handlePointerCancel}
+          onpointerleave={handlePointerLeave}
+          oncontextmenu={handleContextMenu}
+        ></canvas>
+        {#if selectionBox}
+          <div
+            class="piano-marquee"
+            style={`left: ${Math.min(selectionBox.left, selectionBox.right)}px; top: ${Math.min(
+              selectionBox.top,
+              selectionBox.bottom,
+            )}px; width: ${Math.abs(selectionBox.right - selectionBox.left)}px; height: ${Math.abs(
+              selectionBox.bottom - selectionBox.top,
+            )}px;`}
+          ></div>
+        {/if}
+      </div>
     </div>
     <div class="section-foot">
       <span>{t("piano.hint")}</span>

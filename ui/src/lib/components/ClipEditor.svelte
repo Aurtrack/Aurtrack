@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Track } from "../api";
   import { formatNumber, t } from "../i18n.svelte";
+  import type { NoteSelectMode } from "../session.svelte";
 
   interface Props {
     track: Track | null;
@@ -22,11 +23,12 @@
       },
     ) => void;
     onRemoveNote: (path: string) => void;
-    selectedNoteId: string;
-    onSelectNote: (noteId: string) => void;
+    selectedNoteIds: string[];
+    onSelectNote: (noteId: string, mode: NoteSelectMode) => void;
     onDuplicateClip: (path: string) => void;
-    onDuplicateNote: (path: string) => void;
-    onQuantizeNote: (path: string, grid: number) => void;
+    onDuplicateSelected: () => void;
+    onQuantizeSelected: (grid: number) => void;
+    onDeleteSelected: () => void;
   }
 
   let {
@@ -38,11 +40,12 @@
     onRemoveClip,
     onAddNote,
     onRemoveNote,
-    selectedNoteId,
+    selectedNoteIds,
     onSelectNote,
     onDuplicateClip,
-    onDuplicateNote,
-    onQuantizeNote,
+    onDuplicateSelected,
+    onQuantizeSelected,
+    onDeleteSelected,
   }: Props = $props();
 
   let clipName = $state("");
@@ -57,6 +60,18 @@
   let selectedClip = $derived(
     clips.find((clip) => clip.id === selectedClipId) ?? clips[0] ?? null,
   );
+  let selectedCount = $derived(
+    selectedClip
+      ? selectedClip.notes.filter((note) => selectedNoteIds.includes(note.id))
+          .length
+      : 0,
+  );
+
+  function selectMode(event: MouseEvent): NoteSelectMode {
+    if (event.ctrlKey || event.metaKey) return "toggle";
+    if (event.shiftKey) return "range";
+    return "replace";
+  }
 
   const NOTE_NAMES = [
     "C",
@@ -178,8 +193,6 @@
 
     {#if selectedClip}
       {@const current = selectedClip}
-      {@const selectedNote =
-        current.notes.find((note) => note.id === selectedNoteId) ?? null}
       <div class="clip-notes-head">
         <span class="track-meta">{t("notes.title")} · {current.id}</span>
         <span class="track-meta">
@@ -200,11 +213,14 @@
           <p class="empty">{t("notes.empty")}</p>
         {/if}
         {#each current.notes as note (note.id)}
-          <div class="note-row" class:selected={note.id === selectedNoteId}>
+          <div
+            class="note-row"
+            class:selected={selectedNoteIds.includes(note.id)}
+          >
             <button
               class="note-select"
               disabled={busy}
-              onclick={() => onSelectNote(note.id)}
+              onclick={(event) => onSelectNote(note.id, selectMode(event))}
             >
               <span class="device-id">{note.id}</span>
               <span class="note-pitch">{noteName(note.pitch)}</span>
@@ -231,28 +247,31 @@
         {/each}
       </div>
 
-      {#if selectedNote}
+      {#if selectedCount > 0}
         <div class="note-actions">
+          <span class="track-meta">
+            {t("notes.selected", { count: selectedCount })}
+          </span>
           <button
             class="mini-button"
             disabled={busy}
-            onclick={() =>
-              onDuplicateNote(
-                `/tracks/${owner.id}/clips/${current.id}/notes/${selectedNote.id}`,
-              )}
+            onclick={() => onDuplicateSelected()}
           >
             {t("notes.duplicate")}
           </button>
           <button
             class="mini-button"
             disabled={busy}
-            onclick={() =>
-              onQuantizeNote(
-                `/tracks/${owner.id}/clips/${current.id}/notes/${selectedNote.id}`,
-                0.125,
-              )}
+            onclick={() => onQuantizeSelected(0.125)}
           >
             {t("notes.quantize16")}
+          </button>
+          <button
+            class="mini-button"
+            disabled={busy}
+            onclick={() => onDeleteSelected()}
+          >
+            {t("notes.deleteSelected")}
           </button>
         </div>
       {/if}

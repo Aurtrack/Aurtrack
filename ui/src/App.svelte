@@ -62,10 +62,7 @@
     } else if (modifier && key === "d") {
       event.preventDefault();
       void session.duplicateSelected();
-    } else if (
-      (key === "delete" || key === "backspace") &&
-      !isButtonTarget(event.target)
-    ) {
+    } else if (key === "delete" || key === "backspace") {
       event.preventDefault();
       void session.deleteSelected();
     } else if (key === " " && !isButtonTarget(event.target)) {
