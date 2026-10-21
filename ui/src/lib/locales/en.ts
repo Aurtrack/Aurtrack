@@ -133,12 +133,18 @@ export const en: Record<MessageKey, Message> = {
   "inspector.none": "NONE",
   "inspector.empty": "NO TRACK SELECTED",
   "inspector.addGain": "+ GAIN",
+  "inspector.addAdsr": "+ ADSR",
   "inspector.removeDeviceTitle": "Remove device",
   "inspector.source.sine": (params) =>
     `SINE DRONE ${params.frequency} HZ`,
   "inspector.source.silence": "NOTE TRACK",
 
   "device.kind.gain": "GAIN",
+  "device.kind.adsr": "ADSR",
+  "device.adsr.attack": "ATTACK s",
+  "device.adsr.decay": "DECAY s",
+  "device.adsr.sustain": "SUSTAIN %",
+  "device.adsr.release": "RELEASE s",
 
   "transport.title": "TRANSPORT",
   "transport.commands": (params) => `${params.count} COMMANDS`,
@@ -197,6 +203,11 @@ export const en: Record<MessageKey, Message> = {
     `Remove track failed: ${params.message}`,
   "status.gainAdded": "Gain added",
   "status.gainAddFailed": (params) => `Add device failed: ${params.message}`,
+  "status.adsrAdded": "ADSR added",
+  "status.adsrAddFailed": (params) =>
+    `Add ADSR failed: ${params.message}`,
+  "status.deviceParamFailed": (params) =>
+    `Set device parameter failed: ${params.message}`,
   "status.deviceRemoved": "Device removed",
   "status.deviceRemoveFailed": (params) =>
     `Remove device failed: ${params.message}`,

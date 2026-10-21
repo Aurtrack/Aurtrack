@@ -128,12 +128,18 @@ export const zhCN = {
   "inspector.none": "无",
   "inspector.empty": "未选择轨道",
   "inspector.addGain": "+ 增益",
+  "inspector.addAdsr": "+ ADSR",
   "inspector.removeDeviceTitle": "删除设备",
   "inspector.source.sine": (params) =>
     `正弦持续音 ${params.frequency} Hz`,
   "inspector.source.silence": "音符轨",
 
   "device.kind.gain": "增益",
+  "device.kind.adsr": "ADSR",
+  "device.adsr.attack": "起音 s",
+  "device.adsr.decay": "衰减 s",
+  "device.adsr.sustain": "延音 %",
+  "device.adsr.release": "释音 s",
 
   "transport.title": "走带",
   "transport.commands": (params) => `${params.count} 条命令`,
@@ -187,6 +193,9 @@ export const zhCN = {
   "status.trackRemoved": (params) => `已删除 ${params.id}`,
   "status.trackRemoveFailed": (params) => `删除轨道失败：${params.message}`,
   "status.gainAdded": "已添加增益",
+  "status.adsrAdded": "已添加 ADSR 包络",
+  "status.adsrAddFailed": (params) => `添加 ADSR 失败：${params.message}`,
+  "status.deviceParamFailed": (params) => `设置设备参数失败：${params.message}`,
   "status.gainAddFailed": (params) => `添加设备失败：${params.message}`,
   "status.deviceRemoved": "已删除设备",
   "status.deviceRemoveFailed": (params) => `删除设备失败：${params.message}`,

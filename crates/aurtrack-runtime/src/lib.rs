@@ -20,7 +20,7 @@
 use std::sync::Arc;
 
 use aurtrack_command::{CommandError, CommandRequest, CommandResponse};
-use aurtrack_engine::{NotePlan, Playback, PlaybackPlan, TrackPlan, midi_to_hz};
+use aurtrack_engine::{AdsrPlan, NotePlan, Playback, PlaybackPlan, TrackPlan, midi_to_hz};
 use aurtrack_io::AudioHandle;
 use aurtrack_session::{Project, Session, Source, TICKS_PER_QUARTER};
 use serde::de::DeserializeOwned;
@@ -170,6 +170,36 @@ impl Runtime {
     }
 }
 
+fn track_adsr(track: &aurtrack_session::Track) -> Option<AdsrPlan> {
+    let device = track
+        .devices
+        .iter()
+        .find(|device| device.kind == "amp.adsr")?;
+    let defaults = AdsrPlan::default();
+    Some(AdsrPlan {
+        attack: device
+            .params
+            .get("attack")
+            .copied()
+            .unwrap_or(defaults.attack),
+        decay: device
+            .params
+            .get("decay")
+            .copied()
+            .unwrap_or(defaults.decay),
+        sustain: device
+            .params
+            .get("sustain")
+            .copied()
+            .unwrap_or(defaults.sustain),
+        release: device
+            .params
+            .get("release")
+            .copied()
+            .unwrap_or(defaults.release),
+    })
+}
+
 fn build_plan(project: &Project, sample_rate: u32, metronome: bool) -> PlaybackPlan {
     let mut tracks: Vec<TrackPlan> = project
         .tracks
@@ -185,6 +215,7 @@ fn build_plan(project: &Project, sample_rate: u32, metronome: bool) -> PlaybackP
                 Source::Sine { frequency } => Some(*frequency),
                 Source::Silence => None,
             };
+            let adsr = track_adsr(track);
             let notes = track
                 .clips
                 .iter()
@@ -200,6 +231,7 @@ fn build_plan(project: &Project, sample_rate: u32, metronome: bool) -> PlaybackP
             TrackPlan {
                 frequency,
                 gain,
+                adsr,
                 notes,
             }
         })
@@ -224,6 +256,7 @@ fn build_plan(project: &Project, sample_rate: u32, metronome: bool) -> PlaybackP
         tracks.push(TrackPlan {
             frequency: None,
             gain: 0.8,
+            adsr: None,
             notes,
         });
     }

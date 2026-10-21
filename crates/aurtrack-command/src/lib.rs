@@ -217,11 +217,15 @@ fn device_add_schema() -> Value {
     object_schema(
         json!({
             "track_id": { "type": "string" },
-            "kind": { "type": "string", "enum": ["gain"] },
+            "kind": { "type": "string", "enum": ["gain", "amp.adsr"] },
             "params": {
                 "type": "object",
                 "properties": {
-                    "gain": { "type": "number", "minimum": 0, "maximum": 4 }
+                    "gain": { "type": "number", "minimum": 0, "maximum": 4 },
+                    "attack": { "type": "number", "minimum": 0.001, "maximum": 10 },
+                    "decay": { "type": "number", "minimum": 0, "maximum": 10 },
+                    "sustain": { "type": "number", "minimum": 0, "maximum": 1 },
+                    "release": { "type": "number", "minimum": 0.001, "maximum": 10 }
                 },
                 "additionalProperties": false
             }

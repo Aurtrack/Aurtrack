@@ -28,7 +28,10 @@ use std::io;
 use std::path::Path;
 
 use aurtrack_command::{CommandError, CommandRequest, CommandResponse, registry};
-use aurtrack_engine::{midi_to_hz, note_envelope};
+use aurtrack_engine::{
+    AdsrPlan, DEFAULT_ATTACK, DEFAULT_DECAY, DEFAULT_RELEASE, DEFAULT_SUSTAIN, adsr_envelope,
+    midi_to_hz, note_envelope,
+};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -159,6 +162,7 @@ const MAX_BATCH_NOTES: usize = 512;
 const MIN_BPM: f64 = 20.0;
 const MAX_BPM: f64 = 300.0;
 const MAX_LENGTH_BARS: u32 = 512;
+const ADSR_PARAMS: [&str; 4] = ["attack", "decay", "sustain", "release"];
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -390,28 +394,57 @@ impl Session {
 
     fn cmd_device_add(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
         let args: DeviceAddArgs = parse_args(args)?;
-        if args.kind != "gain" {
-            return Err(CommandError::invalid_args(format!(
-                "不支持的 kind：{}",
-                args.kind
-            )));
+        let mut params = args.params.unwrap_or_default();
+        match args.kind.as_str() {
+            "gain" => {
+                for (name, value) in &params {
+                    if name != "gain" {
+                        return Err(CommandError::invalid_args(format!("不支持的参数：{name}")));
+                    }
+                    validate_gain(*value)?;
+                }
+                params.entry("gain".to_string()).or_insert(1.0);
+            },
+            "amp.adsr" => {
+                for (name, value) in &params {
+                    if !ADSR_PARAMS.contains(&name.as_str()) {
+                        return Err(CommandError::invalid_args(format!("不支持的参数：{name}")));
+                    }
+                    validate_adsr_param(name, *value)?;
+                }
+                params.entry("attack".to_string()).or_insert(DEFAULT_ATTACK);
+                params.entry("decay".to_string()).or_insert(DEFAULT_DECAY);
+                params
+                    .entry("sustain".to_string())
+                    .or_insert(DEFAULT_SUSTAIN);
+                params
+                    .entry("release".to_string())
+                    .or_insert(DEFAULT_RELEASE);
+            },
+            other => {
+                return Err(CommandError::invalid_args(format!(
+                    "不支持的 kind：{other}"
+                )));
+            },
         }
-        let params = args.params.unwrap_or_default();
-        for (name, value) in &params {
-            if name != "gain" {
-                return Err(CommandError::invalid_args(format!("不支持的参数：{name}")));
-            }
-            validate_gain(*value)?;
-        }
-        let exists = self
+        let track_devices = self
             .project
             .as_ref()
-            .is_some_and(|project| project.tracks.iter().any(|track| track.id == args.track_id));
-        if !exists {
+            .and_then(|project| {
+                project
+                    .tracks
+                    .iter()
+                    .find(|track| track.id == args.track_id)
+            })
+            .map(|track| &track.devices);
+        let Some(track_devices) = track_devices else {
             return Err(CommandError::not_found(format!(
                 "找不到轨道：{}",
                 args.track_id
             )));
+        };
+        if args.kind == "amp.adsr" && track_devices.iter().any(|device| device.kind == "amp.adsr") {
+            return Err(CommandError::invalid_args("一条轨道暂时只能有一个 ADSR"));
         }
         let token = self.snapshot("device.add");
         self.next_device += 1;
@@ -427,8 +460,6 @@ impl Session {
             .iter_mut()
             .find(|track| track.id == args.track_id)
             .ok_or_else(|| CommandError::not_found(format!("找不到轨道：{}", args.track_id)))?;
-        let mut params = params;
-        params.entry("gain".to_string()).or_insert(1.0);
         track.devices.push(Device {
             id: device_id.clone(),
             kind: args.kind,
@@ -439,23 +470,21 @@ impl Session {
 
     fn cmd_param_set(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
         let args: ParamSetArgs = parse_args(args)?;
-        validate_gain(args.value)?;
         let path = args.path.clone();
         let (track_id, device_id, name) = parse_param_path(&path)?;
-        if name != "gain" {
-            return Err(CommandError::invalid_args(format!("不支持的参数：{name}")));
-        }
-        let exists = self.project.as_ref().is_some_and(|project| {
-            project.tracks.iter().any(|track| {
-                track.id == track_id
-                    && track
-                        .devices
-                        .iter()
-                        .any(|device| device.id == device_id && device.kind == "gain")
-            })
-        });
-        if !exists {
-            return Err(CommandError::not_found(format!("找不到参数：{path}")));
+        let kind = self
+            .project
+            .as_ref()
+            .and_then(|project| project.tracks.iter().find(|track| track.id == track_id))
+            .and_then(|track| track.devices.iter().find(|device| device.id == device_id))
+            .map(|device| device.kind.clone())
+            .ok_or_else(|| CommandError::not_found(format!("找不到参数：{path}")))?;
+        match kind.as_str() {
+            "gain" if name == "gain" => validate_gain(args.value)?,
+            "amp.adsr" if ADSR_PARAMS.contains(&name) => validate_adsr_param(name, args.value)?,
+            _ => {
+                return Err(CommandError::invalid_args(format!("不支持的参数：{name}")));
+            },
         }
         let token = self.snapshot("param.set");
         let project = self
@@ -473,7 +502,7 @@ impl Session {
                     .find(|device| device.id == device_id)
             })
             .ok_or_else(|| CommandError::not_found(format!("找不到参数：{path}")))?;
-        device.params.insert("gain".to_string(), args.value);
+        device.params.insert(name.to_string(), args.value);
         Ok(CommandResponse::ok(json!({ "path": path, "value": args.value })).with_undo(token))
     }
 
@@ -1900,8 +1929,24 @@ fn validate_project(project: &Project) -> Result<(u64, u64, u64, u64), CommandEr
                         "设备参数不是有限数：{name}"
                     )));
                 }
-                if device.kind == "gain" && name == "gain" {
-                    validate_gain(*value)?;
+                match device.kind.as_str() {
+                    "gain" => {
+                        if name != "gain" {
+                            return Err(CommandError::invalid_args(format!(
+                                "gain 设备不支持参数：{name}"
+                            )));
+                        }
+                        validate_gain(*value)?;
+                    },
+                    "amp.adsr" => {
+                        if !ADSR_PARAMS.contains(&name.as_str()) {
+                            return Err(CommandError::invalid_args(format!(
+                                "amp.adsr 设备不支持参数：{name}"
+                            )));
+                        }
+                        validate_adsr_param(name, *value)?;
+                    },
+                    _ => {},
                 }
             }
         }
@@ -1998,6 +2043,22 @@ fn validate_loop_range(start: u64, end: u64, length: u64) -> Result<(), CommandE
     Ok(())
 }
 
+fn validate_adsr_param(name: &str, value: f64) -> Result<(), CommandError> {
+    if !value.is_finite() {
+        return Err(CommandError::invalid_args(format!("{name} 必须是有限数")));
+    }
+    let valid = match name {
+        "attack" | "release" => (0.001..=10.0).contains(&value),
+        "decay" => (0.0..=10.0).contains(&value),
+        "sustain" => (0.0..=1.0).contains(&value),
+        _ => false,
+    };
+    if !valid {
+        return Err(CommandError::invalid_args(format!("{name} 超出允许范围")));
+    }
+    Ok(())
+}
+
 fn validate_gain(value: f64) -> Result<(), CommandError> {
     if !value.is_finite() || !(0.0..=4.0).contains(&value) {
         return Err(CommandError::invalid_args(
@@ -2016,6 +2077,36 @@ fn track_gain(track: &Track) -> f64 {
         .product::<f64>()
 }
 
+fn track_adsr(track: &Track) -> Option<AdsrPlan> {
+    let device = track
+        .devices
+        .iter()
+        .find(|device| device.kind == "amp.adsr")?;
+    let defaults = AdsrPlan::default();
+    Some(AdsrPlan {
+        attack: device
+            .params
+            .get("attack")
+            .copied()
+            .unwrap_or(defaults.attack),
+        decay: device
+            .params
+            .get("decay")
+            .copied()
+            .unwrap_or(defaults.decay),
+        sustain: device
+            .params
+            .get("sustain")
+            .copied()
+            .unwrap_or(defaults.sustain),
+        release: device
+            .params
+            .get("release")
+            .copied()
+            .unwrap_or(defaults.release),
+    })
+}
+
 fn render_project(
     project: &Project,
     start_seconds: f64,
@@ -2028,6 +2119,8 @@ fn render_project(
     let mut mix = vec![0.0_f32; frames];
     for track in &project.tracks {
         let gain = track_gain(track);
+        let adsr = track_adsr(track);
+        let release = adsr.map_or(0.0, |envelope| envelope.release.max(0.001));
         for (index, slot) in mix.iter_mut().enumerate() {
             let time = start_seconds + index as f64 / sample_rate_f64;
             let mut sample = match &track.source {
@@ -2041,11 +2134,15 @@ fn render_project(
                     let note_start = project.ticks_to_seconds(clip.start_tick + note.start_tick);
                     let note_duration = project.ticks_to_seconds(note.duration_tick);
                     let note_end = note_start + note_duration;
-                    if time >= note_start && time < note_end {
+                    if time >= note_start && time < note_end + release {
                         let local = time - note_start;
+                        let envelope = adsr.map_or_else(
+                            || note_envelope(local, note_duration),
+                            |envelope| adsr_envelope(local, note_duration, envelope),
+                        );
                         sample += (std::f64::consts::TAU * midi_to_hz(note.pitch) * local).sin()
                             * note.velocity
-                            * note_envelope(local, note_duration)
+                            * envelope
                             * 0.25;
                     }
                 }

@@ -38,8 +38,35 @@ pub struct TrackPlan {
     /// `None` 表示静音轨道。
     pub frequency: Option<f64>,
     pub gain: f64,
+    pub adsr: Option<AdsrPlan>,
     pub notes: Vec<NotePlan>,
 }
+
+/// 每个音符可用的 ADSR 包络参数，时间单位秒。
+#[derive(Debug, Clone, Copy)]
+pub struct AdsrPlan {
+    pub attack: f64,
+    pub decay: f64,
+    pub sustain: f64,
+    pub release: f64,
+}
+
+impl Default for AdsrPlan {
+    fn default() -> Self {
+        Self {
+            attack: DEFAULT_ATTACK,
+            decay: DEFAULT_DECAY,
+            sustain: DEFAULT_SUSTAIN,
+            release: DEFAULT_RELEASE,
+        }
+    }
+}
+
+pub const DEFAULT_ATTACK: f64 = 0.01;
+pub const DEFAULT_DECAY: f64 = 0.12;
+pub const DEFAULT_SUSTAIN: f64 = 0.75;
+pub const DEFAULT_RELEASE: f64 = 0.18;
+const MIN_ENVELOPE_SECONDS: f64 = 0.001;
 
 /// 一个已排入时间线的音符。
 #[derive(Debug, Clone)]
@@ -60,6 +87,37 @@ pub fn note_envelope(local: f64, duration: f64) -> f64 {
     let attack = (local / NOTE_FADE_SECONDS).clamp(0.0, 1.0);
     let release = ((duration - local) / NOTE_FADE_SECONDS).clamp(0.0, 1.0);
     attack.min(release)
+}
+
+/// ADSR：gate 从 0 开始，`duration` 是按键时长，release 从 gate 结束处开始。
+pub fn adsr_envelope(gate: f64, duration: f64, adsr: AdsrPlan) -> f64 {
+    if !gate.is_finite() || gate < 0.0 {
+        return 0.0;
+    }
+    let attack = adsr.attack.max(MIN_ENVELOPE_SECONDS);
+    let decay = adsr.decay.max(0.0);
+    let sustain = adsr.sustain.clamp(0.0, 1.0);
+    let release = adsr.release.max(MIN_ENVELOPE_SECONDS);
+    let peak_at_gate_off = if duration < attack {
+        duration / attack
+    } else if duration < attack + decay {
+        1.0 - (1.0 - sustain) * ((duration - attack) / decay)
+    } else {
+        sustain
+    };
+    if gate < duration {
+        if gate < attack {
+            gate / attack
+        } else if gate < attack + decay {
+            1.0 - (1.0 - sustain) * ((gate - attack) / decay)
+        } else {
+            sustain
+        }
+    } else if gate < duration + release {
+        peak_at_gate_off * (1.0 - (gate - duration) / release)
+    } else {
+        0.0
+    }
 }
 
 /// 一次播放使用的不可变计划。
@@ -333,12 +391,19 @@ impl Playback {
             if let Some(frequency) = track.frequency {
                 voice += (std::f64::consts::TAU * frequency * time).sin() * 0.25;
             }
+            let release = track
+                .adsr
+                .map_or(0.0, |adsr| adsr.release.max(MIN_ENVELOPE_SECONDS));
             for note in &track.notes {
-                if time >= note.start && time < note.start + note.duration {
+                if time >= note.start && time < note.start + note.duration + release {
                     let local = time - note.start;
+                    let envelope = track.adsr.map_or_else(
+                        || note_envelope(local, note.duration),
+                        |adsr| adsr_envelope(local, note.duration, adsr),
+                    );
                     voice += (std::f64::consts::TAU * note.frequency * local).sin()
                         * note.velocity
-                        * note_envelope(local, note.duration)
+                        * envelope
                         * 0.25;
                 }
             }
@@ -370,6 +435,7 @@ mod tests {
             tracks: vec![TrackPlan {
                 frequency: Some(440.0),
                 gain: 1.0,
+                adsr: None,
                 notes: Vec::new(),
             }],
         }
@@ -424,6 +490,7 @@ mod tests {
             tracks: vec![TrackPlan {
                 frequency: Some(331.0),
                 gain: 1.0,
+                adsr: None,
                 notes: Vec::new(),
             }],
         });
@@ -469,6 +536,7 @@ mod tests {
             tracks: vec![TrackPlan {
                 frequency: None,
                 gain: 1.0,
+                adsr: None,
                 notes: vec![NotePlan {
                     start: 0.0,
                     duration: 1.0,
@@ -493,6 +561,52 @@ mod tests {
     }
 
     #[test]
+    fn adsr_has_sustain_and_release_tail() {
+        let adsr = AdsrPlan {
+            attack: 0.01,
+            decay: 0.01,
+            sustain: 0.5,
+            release: 0.1,
+        };
+        assert!(adsr_envelope(0.0, 0.1, adsr).abs() < 1e-12);
+        assert!((adsr_envelope(0.005, 0.1, adsr) - 0.5).abs() < 1e-9);
+        assert!((adsr_envelope(0.02, 0.1, adsr) - 0.5).abs() < 1e-9);
+        assert!((adsr_envelope(0.15, 0.1, adsr) - 0.25).abs() < 1e-9);
+        assert!(adsr_envelope(0.21, 0.1, adsr).abs() < 1e-12);
+    }
+
+    #[test]
+    fn adsr_release_tail_is_rendered() {
+        let playback = Playback::new(48_000);
+        playback.set_plan(PlaybackPlan {
+            sample_rate: 48_000,
+            loop_start_seconds: 0.0,
+            loop_seconds: 1.0,
+            length_seconds: 1.0,
+            tracks: vec![TrackPlan {
+                frequency: None,
+                gain: 1.0,
+                adsr: Some(AdsrPlan {
+                    attack: 0.005,
+                    decay: 0.005,
+                    sustain: 0.8,
+                    release: 0.2,
+                }),
+                notes: vec![NotePlan {
+                    start: 0.0,
+                    duration: 0.05,
+                    frequency: 440.0,
+                    velocity: 1.0,
+                }],
+            }],
+        });
+        playback.play();
+        let mut buffer = vec![0.0_f32; 9_600];
+        playback.render(&mut buffer);
+        assert!(buffer[3_000].abs() > 0.0);
+    }
+
+    #[test]
     fn note_tail_is_declicked() {
         let playback = Playback::new(48_000);
         playback.set_plan(PlaybackPlan {
@@ -503,6 +617,7 @@ mod tests {
             tracks: vec![TrackPlan {
                 frequency: None,
                 gain: 1.0,
+                adsr: None,
                 notes: vec![NotePlan {
                     start: 0.0,
                     duration: 0.25,
@@ -565,6 +680,7 @@ mod tests {
             tracks: vec![TrackPlan {
                 frequency: Some(331.0),
                 gain: 1.0,
+                adsr: None,
                 notes: Vec::new(),
             }],
         });
@@ -590,6 +706,7 @@ mod tests {
                 .map(|_| TrackPlan {
                     frequency: Some(440.0),
                     gain: 1.0,
+                    adsr: None,
                     notes: Vec::new(),
                 })
                 .collect(),
@@ -611,6 +728,7 @@ mod tests {
             tracks: vec![TrackPlan {
                 frequency: None,
                 gain: 1.0,
+                adsr: None,
                 notes: vec![NotePlan {
                     start: 2.0,
                     duration: 1.0,

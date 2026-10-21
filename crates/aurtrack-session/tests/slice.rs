@@ -576,6 +576,62 @@ fn clip_and_note_commands_validate_and_undo() {
 }
 
 #[test]
+fn adsr_device_params_are_validated_and_undoable() {
+    let mut session = Session::default();
+    run(&mut session, "project.create", json!({}));
+    run(&mut session, "track.create", json!({ "name": "lead" }));
+
+    let device = run(
+        &mut session,
+        "device.add",
+        json!({ "track_id": "track-1", "kind": "amp.adsr" }),
+    );
+    let device_id = device["device_id"].as_str().unwrap();
+    let path = format!("/tracks/track-1/devices/{device_id}/params/attack");
+    run(
+        &mut session,
+        "param.set",
+        json!({ "path": path, "value": 0.2 }),
+    );
+
+    let duplicate = session
+        .execute(&CommandRequest {
+            cmd: "device.add".to_string(),
+            args: json!({ "track_id": "track-1", "kind": "amp.adsr" }),
+        })
+        .unwrap_err();
+    assert_eq!(duplicate.code, "invalid_args");
+
+    let state = run(&mut session, "project.state", json!({}));
+    let device = &state["project"]["tracks"][0]["devices"][0];
+    assert_eq!(device["kind"], "amp.adsr");
+    assert!((device["params"]["attack"].as_f64().unwrap() - 0.2).abs() < 1e-9);
+    assert!(device["params"]["release"].as_f64().unwrap() > 0.0);
+
+    let error = session
+        .execute(&CommandRequest {
+            cmd: "param.set".to_string(),
+            args: json!({
+                "path": format!("/tracks/track-1/devices/{device_id}/params/sustain"),
+                "value": 1.5
+            }),
+        })
+        .unwrap_err();
+    assert_eq!(error.code, "invalid_args");
+
+    run(&mut session, "undo", json!({}));
+    let state = run(&mut session, "project.state", json!({}));
+    assert!(
+        (state["project"]["tracks"][0]["devices"][0]["params"]["attack"]
+            .as_f64()
+            .unwrap()
+            - 0.01)
+            .abs()
+            < 1e-9
+    );
+}
+
+#[test]
 fn tempo_change_keeps_musical_positions() {
     let mut session = Session::default();
     run(&mut session, "project.create", json!({ "name": "tempo" }));

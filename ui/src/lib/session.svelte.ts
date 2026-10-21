@@ -722,6 +722,39 @@ export class SessionStore {
     }
   }
 
+  async addAdsr(trackId: string) {
+    if (this.busy) return;
+    this.busy = true;
+    try {
+      await this.run("device.add", { track_id: trackId, kind: "amp.adsr" });
+      await this.refreshProject();
+      await this.reloadIfPlaying();
+      this.setStatus("status.adsrAdded");
+    } catch (error) {
+      this.fail("status.adsrAddFailed", error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  async changeDeviceParam(
+    trackId: string,
+    deviceId: string,
+    name: string,
+    value: number,
+  ) {
+    try {
+      await this.run("param.set", {
+        path: `/tracks/${trackId}/devices/${deviceId}/params/${name}`,
+        value,
+      });
+      await this.reloadIfPlaying();
+      await this.refreshProject();
+    } catch (error) {
+      this.fail("status.deviceParamFailed", error);
+    }
+  }
+
   async deleteDevice(path: string) {
     if (this.busy) return;
     this.busy = true;

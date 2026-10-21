@@ -80,8 +80,8 @@
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 | --- | --- | --- | --- | --- |
 | `track_id` | string | 是 | | 目标轨道 |
-| `kind` | string | 是 | | 当前只支持 `gain` |
-| `params` | object | 否 | `{"gain":1.0}` | 当前只接受 `gain`，范围 0 到 4 |
+| `kind` | string | 是 | | `gain` 或 `amp.adsr` |
+| `params` | object | 否 | | `gain` 范围 0 到 4；ADSR 参数见下表 |
 
 返回：
 
@@ -89,12 +89,21 @@
 { "device_id": "device-1", "path": "/tracks/track-1/devices/device-1" }
 ```
 
+`amp.adsr` 默认参数：
+
+| 参数 | 默认 | 范围 |
+| --- | --- | --- |
+| `attack` | `0.01` | 0.001 到 10 秒 |
+| `decay` | `0.12` | 0 到 10 秒 |
+| `sustain` | `0.75` | 0 到 1 |
+| `release` | `0.18` | 0.001 到 10 秒 |
+
 ### 4. `param.set`
 
 | 参数 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `path` | string | 是 | 参数路径 |
-| `value` | number | 是 | 必须是有限数；`gain` 范围 0 到 4 |
+| `value` | number | 是 | `gain` 范围 0 到 4；`amp.adsr` 参数见上表 |
 
 返回：
 

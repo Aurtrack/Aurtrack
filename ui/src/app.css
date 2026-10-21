@@ -728,12 +728,44 @@ body {
   border-bottom: 1px solid var(--line);
 }
 
+.device-block {
+  border-bottom: 1px solid var(--line);
+}
+
 .device-row {
   display: flex;
   align-items: center;
   gap: 10px;
   padding: 6px 12px 6px 22px;
-  border-bottom: 1px solid var(--line);
+}
+
+.device-row .readout {
+  flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.adsr-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px 10px;
+  padding: 0 22px 8px 22px;
+  background: #eef0ef;
+}
+
+.adsr-grid .field {
+  padding: 0;
+}
+
+.device-add-row {
+  display: flex;
+  gap: 8px;
+  padding: 8px 22px;
+}
+
+.device-add-row .ghost.small {
+  margin: 0;
 }
 
 .device-id {

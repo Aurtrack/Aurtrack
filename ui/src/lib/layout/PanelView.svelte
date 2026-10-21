@@ -90,9 +90,12 @@
     track={session.selectedTrack}
     busy={session.busy}
     onAddGain={(trackId: string) => void session.addGain(trackId)}
+    onAddAdsr={(trackId: string) => void session.addAdsr(trackId)}
     onRemoveDevice={(path: string) => void session.deleteDevice(path)}
     onGainChange={(trackId, deviceId, value) =>
       void session.changeDeviceGain(trackId, deviceId, value)}
+    onParamChange={(trackId, deviceId, name, value) =>
+      void session.changeDeviceParam(trackId, deviceId, name, value)}
   />
 {:else if kind === "transport"}
   <TransportPanel
