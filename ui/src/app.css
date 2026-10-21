@@ -809,6 +809,28 @@ body {
   border-color: var(--blue);
 }
 
+.graph-node.drop-target {
+  outline: 2px solid var(--blue);
+  outline-offset: 3px;
+}
+
+.graph-node.device .graph-node-head {
+  cursor: grab;
+  touch-action: none;
+  user-select: none;
+}
+
+.graph-node.device .graph-node-head:active {
+  cursor: grabbing;
+}
+
+.graph-drag {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  line-height: 1;
+}
+
 .graph-node.instrument {
   width: 154px;
 }
@@ -841,12 +863,19 @@ body {
   align-items: baseline;
   justify-content: space-between;
   gap: 6px;
+  width: 100%;
   padding: 6px 8px;
+  border: 0;
   border-bottom: 1px solid var(--line);
   background: #eef0ef;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  text-transform: none;
 }
 
 .graph-node-kind {
+  flex: 1;
   color: var(--blue);
   font-family: var(--mono);
   font-size: 9px;

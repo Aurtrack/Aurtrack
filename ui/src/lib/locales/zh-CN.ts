@@ -141,7 +141,7 @@ export const zhCN = {
   "graph.title": "节点图",
   "graph.nodes": "个节点",
   "graph.noTrack": "先选择一条轨道",
-  "graph.hint": "线性信号链，点击箭头调整节点顺序",
+  "graph.hint": "拖动节点标题排序，或用箭头微调",
   "graph.addAdsr": "+ ADSR",
   "graph.addGain": "+ 增益",
   "graph.sine": "SINE",

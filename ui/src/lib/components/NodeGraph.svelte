@@ -51,6 +51,59 @@
   let hasAdsr = $derived(
     chain.some((node) => node.kind === "amp.adsr"),
   );
+  type DragState = {
+    id: string;
+    startX: number;
+    startY: number;
+    active: boolean;
+  };
+
+  let dragState = $state<DragState | null>(null);
+  let dropTarget = $state<string | null>(null);
+
+  function isDeviceNode(node: GraphNode): boolean {
+    return node.kind === "amp.adsr" || node.kind === "gain";
+  }
+
+  function handleMouseDown(event: MouseEvent, node: GraphNode) {
+    if (event.button !== 0 || !isDeviceNode(node) || busy) return;
+    event.preventDefault();
+    dragState = {
+      id: node.id,
+      startX: event.clientX,
+      startY: event.clientY,
+      active: false,
+    };
+  }
+
+  function handleMouseMove(event: MouseEvent) {
+    const state = dragState;
+    if (!state) return;
+    const distance = Math.hypot(
+      event.clientX - state.startX,
+      event.clientY - state.startY,
+    );
+    if (!state.active && distance < 5) return;
+    state.active = true;
+    const element = document.elementFromPoint(event.clientX, event.clientY);
+    const card = element?.closest<HTMLElement>(".graph-node");
+    const id = card?.dataset.nodeId;
+    const kind = card?.dataset.nodeKind;
+    dropTarget =
+      id && id !== state.id && kind && !kind.startsWith("instrument.")
+        ? id
+        : null;
+    event.preventDefault();
+  }
+
+  function handleMouseUp() {
+    const state = dragState;
+    const target = dropTarget;
+    dragState = null;
+    dropTarget = null;
+    if (!state?.active || !target || !track) return;
+    onMove(track.id, state.id, target);
+  }
 
   function nodeLabel(node: GraphNode): string {
     if (node.kind === "instrument.sine") return t("graph.sine");
@@ -73,6 +126,11 @@
     return target;
   }
 </script>
+
+<svelte:window
+  onmousemove={handleMouseMove}
+  onmouseup={handleMouseUp}
+/>
 
 <section class="section graph-section">
   <div class="section-head graph-head">
@@ -111,14 +169,27 @@
           {@const isDevice = node.kind === "amp.adsr" || node.kind === "gain"}
           <div
             class="graph-node"
+            role="group"
+            aria-label={nodeLabel(node)}
+            data-node-id={node.id}
+            data-node-kind={node.kind}
             class:device={isDevice}
             class:instrument={node.kind.startsWith("instrument.")}
             class:output={node.kind === "output"}
+            class:drop-target={dropTarget === node.id}
           >
-            <div class="graph-node-head">
+            <button
+              type="button"
+              class="graph-node-head"
+              aria-label={nodeLabel(node)}
+              onmousedown={(event) => handleMouseDown(event, node)}
+            >
+              {#if isDevice}
+                <span class="graph-drag">⠿</span>
+              {/if}
               <span class="graph-node-kind">{nodeLabel(node)}</span>
               <span class="graph-node-id">{node.id}</span>
-            </div>
+            </button>
 
             {#if node.kind === "instrument.sine"}
               <div class="graph-param-row">

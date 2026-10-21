@@ -146,7 +146,7 @@ export const en: Record<MessageKey, Message> = {
   "graph.title": "NODE GRAPH",
   "graph.nodes": "NODES",
   "graph.noTrack": "Select a track first",
-  "graph.hint": "Linear signal chain; use arrows to reorder",
+  "graph.hint": "Drag a node header to reorder, or use the arrows",
   "graph.addAdsr": "+ ADSR",
   "graph.addGain": "+ GAIN",
   "graph.sine": "SINE",
