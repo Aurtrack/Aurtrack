@@ -625,6 +625,8 @@ body {
   height: 26px;
   border: 1px solid var(--line);
   background: #fff;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
 .number-field:focus-within {
@@ -675,9 +677,22 @@ body {
   white-space: nowrap;
   padding: 0 3px;
   cursor: ew-resize;
+  user-select: none;
+  -webkit-user-select: none;
 }
 
-.number-value:hover:not(:disabled) {
+.number-value::selection {
+  background: transparent;
+  color: var(--ink);
+}
+
+button.number-value:hover:not(:disabled) {
+  background: transparent;
+  color: var(--blue);
+}
+
+button.number-step:hover:not(:disabled) {
+  background: transparent;
   color: var(--blue);
 }
 
@@ -694,6 +709,8 @@ body {
   text-align: center;
   padding: 0 3px;
   outline: none;
+  user-select: text;
+  -webkit-user-select: text;
 }
 
 .number-suffix {
