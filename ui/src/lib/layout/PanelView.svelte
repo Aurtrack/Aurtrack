@@ -1,6 +1,7 @@
 <script lang="ts">
   import ClipEditor from "../components/ClipEditor.svelte";
   import CommandLog from "../components/CommandLog.svelte";
+  import NodeGraph from "../components/NodeGraph.svelte";
   import PianoRoll from "../components/PianoRoll.svelte";
   import Timeline from "../components/Timeline.svelte";
   import TrackInspector from "../components/TrackInspector.svelte";
@@ -91,11 +92,25 @@
     busy={session.busy}
     onAddGain={(trackId: string) => void session.addGain(trackId)}
     onAddAdsr={(trackId: string) => void session.addAdsr(trackId)}
+    onMoveDevice={(trackId, nodeId, beforeNodeId) =>
+      void session.moveDevice(trackId, nodeId, beforeNodeId)}
     onRemoveDevice={(path: string) => void session.deleteDevice(path)}
     onGainChange={(trackId, deviceId, value) =>
       void session.changeDeviceGain(trackId, deviceId, value)}
     onParamChange={(trackId, deviceId, name, value) =>
       void session.changeDeviceParam(trackId, deviceId, name, value)}
+  />
+{:else if kind === "graph"}
+  <NodeGraph
+    track={session.selectedTrack}
+    busy={session.busy}
+    onAddGain={(trackId: string) => void session.addGain(trackId)}
+    onAddAdsr={(trackId: string) => void session.addAdsr(trackId)}
+    onMove={(trackId, nodeId, beforeNodeId) =>
+      void session.moveDevice(trackId, nodeId, beforeNodeId)}
+    onRemove={(path: string) => void session.deleteDevice(path)}
+    onParamChange={(trackId, nodeId, name, value) =>
+      void session.changeDeviceParam(trackId, nodeId, name, value)}
   />
 {:else if kind === "transport"}
   <TransportPanel

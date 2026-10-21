@@ -7,6 +7,11 @@
     busy: boolean;
     onAddGain: (trackId: string) => void;
     onAddAdsr: (trackId: string) => void;
+    onMoveDevice: (
+      trackId: string,
+      nodeId: string,
+      beforeNodeId: string,
+    ) => void;
     onRemoveDevice: (path: string) => void;
     onGainChange: (trackId: string, deviceId: string, value: number) => void;
     onParamChange: (
@@ -22,6 +27,7 @@
     busy,
     onAddGain,
     onAddAdsr,
+    onMoveDevice,
     onRemoveDevice,
     onGainChange,
     onParamChange,
@@ -55,6 +61,14 @@
     }
     return result;
   });
+
+  function moveTarget(deviceId: string, offset: number): GraphNode | null {
+    const index = chain.findIndex((node) => node.id === deviceId);
+    if (index < 0) return null;
+    const target = chain[index + offset];
+    if (!target || target.kind.startsWith("instrument.")) return null;
+    return target;
+  }
 
   function nodeLabel(node: GraphNode): string {
     if (node.kind === "instrument.sine") return "SINE";
@@ -135,6 +149,28 @@
                 R {formatNumber(paramOf(device, "release", 0.18), 2)}
               </span>
             {/if}
+            <button
+              class="node-move"
+              title={t("inspector.moveUp")}
+              disabled={busy || !moveTarget(device.id, -1)}
+              onclick={() => {
+                const up = moveTarget(device.id, -1);
+                if (up) onMoveDevice(current.id, device.id, up.id);
+              }}
+            >
+              ↑
+            </button>
+            <button
+              class="node-move"
+              title={t("inspector.moveDown")}
+              disabled={busy || !moveTarget(device.id, 2)}
+              onclick={() => {
+                const down = moveTarget(device.id, 2);
+                if (down) onMoveDevice(current.id, device.id, down.id);
+              }}
+            >
+              ↓
+            </button>
             <button
               class="track-remove"
               title={t("inspector.removeDeviceTitle")}

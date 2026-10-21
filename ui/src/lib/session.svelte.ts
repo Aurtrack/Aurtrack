@@ -755,6 +755,24 @@ export class SessionStore {
     }
   }
 
+  async moveDevice(
+    trackId: string,
+    nodeId: string,
+    beforeNodeId: string,
+  ) {
+    try {
+      await this.run("node.move", {
+        path: `/tracks/${trackId}/nodes/${nodeId}`,
+        before: `/tracks/${trackId}/nodes/${beforeNodeId}`,
+      });
+      await this.reloadIfPlaying();
+      await this.refreshProject();
+      this.setStatus("status.nodeMoved");
+    } catch (error) {
+      this.fail("status.nodeMoveFailed", error);
+    }
+  }
+
   async deleteDevice(path: string) {
     if (this.busy) return;
     this.busy = true;

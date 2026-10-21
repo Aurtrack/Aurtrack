@@ -100,6 +100,7 @@ export const en: Record<MessageKey, Message> = {
   "panel.tracks": "TRACKS",
   "panel.clips": "CLIPS",
   "panel.inspector": "INSPECTOR",
+  "panel.graph": "NODE GRAPH",
   "panel.transport": "TRANSPORT",
   "panel.log": "COMMAND LOG",
 
@@ -113,6 +114,7 @@ export const en: Record<MessageKey, Message> = {
 
   "workspace.layout": "LAYOUT",
   "workspace.edit": "EDIT",
+  "workspace.graph": "NODES",
 
   "tracks.title": "TRACKS",
   "tracks.total": (params) => `${params.count} TOTAL`,
@@ -135,10 +137,28 @@ export const en: Record<MessageKey, Message> = {
   "inspector.empty": "NO TRACK SELECTED",
   "inspector.addGain": "+ GAIN",
   "inspector.addAdsr": "+ ADSR",
+  "inspector.moveUp": "Move node up",
+  "inspector.moveDown": "Move node down",
   "inspector.removeDeviceTitle": "Remove device",
   "inspector.source.sine": (params) =>
     `SINE DRONE ${params.frequency} HZ`,
   "inspector.source.silence": "NOTE TRACK",
+  "graph.title": "NODE GRAPH",
+  "graph.nodes": "NODES",
+  "graph.noTrack": "Select a track first",
+  "graph.hint": "Linear signal chain; use arrows to reorder",
+  "graph.addAdsr": "+ ADSR",
+  "graph.addGain": "+ GAIN",
+  "graph.sine": "SINE",
+  "graph.silence": "SILENCE",
+  "graph.silenceSource": "SILENT SOURCE",
+  "graph.adsr": "ADSR",
+  "graph.gain": "GAIN",
+  "graph.output": "OUTPUT",
+  "graph.frequency": "FREQ",
+  "graph.terminal": "TRACK OUT",
+  "graph.foot": "Node params write to the project and support undo",
+  "graph.direction": "IN → OUT",
 
   "device.kind.gain": "GAIN",
   "device.kind.adsr": "ADSR",
@@ -209,6 +229,9 @@ export const en: Record<MessageKey, Message> = {
     `Add ADSR failed: ${params.message}`,
   "status.deviceParamFailed": (params) =>
     `Set device parameter failed: ${params.message}`,
+  "status.nodeMoved": "Node order updated",
+  "status.nodeMoveFailed": (params) =>
+    `Move node failed: ${params.message}`,
   "status.deviceRemoved": "Device removed",
   "status.deviceRemoveFailed": (params) =>
     `Remove device failed: ${params.message}`,

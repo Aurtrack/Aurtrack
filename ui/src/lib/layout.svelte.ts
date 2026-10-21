@@ -6,6 +6,7 @@ export const PANEL_KINDS = [
   "tracks",
   "clips",
   "inspector",
+  "graph",
   "transport",
   "log",
 ] as const;
@@ -13,12 +14,13 @@ export const PANEL_KINDS = [
 export type PanelKind = (typeof PANEL_KINDS)[number];
 export type SplitDirection = "row" | "column";
 
-export const WORKSPACE_IDS = ["layout", "edit"] as const;
+export const WORKSPACE_IDS = ["layout", "edit", "graph"] as const;
 export type WorkspaceId = (typeof WORKSPACE_IDS)[number];
 
 export const WORKSPACES: { id: WorkspaceId; label: MessageKey }[] = [
   { id: "layout", label: "workspace.layout" },
   { id: "edit", label: "workspace.edit" },
+  { id: "graph", label: "workspace.graph" },
 ];
 
 export const PANEL_LABEL_KEYS: Record<PanelKind, MessageKey> = {
@@ -27,6 +29,7 @@ export const PANEL_LABEL_KEYS: Record<PanelKind, MessageKey> = {
   tracks: "panel.tracks",
   clips: "panel.clips",
   inspector: "panel.inspector",
+  graph: "panel.graph",
   transport: "panel.transport",
   log: "panel.log",
 };
@@ -128,14 +131,21 @@ function editWorkspace(): LayoutNode {
   return makeSplit("row", 0.7, left, right);
 }
 
+function graphWorkspace(): LayoutNode {
+  return makeLeaf("graph");
+}
+
 function defaultWorkspace(id: WorkspaceId): LayoutNode {
-  return id === "edit" ? editWorkspace() : layoutWorkspace();
+  if (id === "edit") return editWorkspace();
+  if (id === "graph") return graphWorkspace();
+  return layoutWorkspace();
 }
 
 function defaultWorkspaceRoots(): Record<WorkspaceId, LayoutNode> {
   return {
     layout: defaultWorkspace("layout"),
     edit: defaultWorkspace("edit"),
+    graph: defaultWorkspace("graph"),
   };
 }
 
@@ -202,10 +212,12 @@ function parseWorkspaceRoots(
   const raw = value as Record<string, unknown>;
   const layout = parseLayout(raw.layout);
   const edit = parseLayout(raw.edit);
-  if (!layout && !edit) return null;
+  const graph = parseLayout(raw.graph);
+  if (!layout && !edit && !graph) return null;
   const roots = defaultWorkspaceRoots();
   if (layout) roots.layout = layout;
   if (edit) roots.edit = edit;
+  if (graph) roots.graph = graph;
   return roots;
 }
 
