@@ -439,24 +439,39 @@ impl Graph {
 
     /// 把设备节点插到 `output` 之前。
     pub fn insert_before_output(&mut self, node: Node) -> Result<(), GraphError> {
-        if !node.kind().is_device() {
-            return Err(GraphError::NotDevice(node.kind()));
-        }
-        if self.nodes.contains_key(node.id()) {
-            return Err(GraphError::DuplicateNode(node.id().clone()));
-        }
         let output_id = self
             .nodes
             .values()
             .find(|candidate| candidate.kind() == NodeKind::Output)
             .map(|candidate| candidate.id().clone())
             .ok_or(GraphError::OutputCount(0))?;
+        self.insert_before(node, &output_id)
+    }
+
+    /// 把设备节点插到目标节点之前。
+    pub fn insert_before(&mut self, node: Node, target: &NodeId) -> Result<(), GraphError> {
+        if !node.kind().is_device() {
+            return Err(GraphError::NotDevice(node.kind()));
+        }
+        if self.nodes.contains_key(node.id()) {
+            return Err(GraphError::DuplicateNode(node.id().clone()));
+        }
+        let target_node = self
+            .nodes
+            .get(target)
+            .ok_or_else(|| GraphError::UnknownNode(target.clone()))?;
+        if !target_node.kind().has_input(PORT_IN) {
+            return Err(GraphError::UnknownPort {
+                node: target.clone(),
+                port: PORT_IN.to_string(),
+            });
+        }
         let incoming = self
             .connections
             .iter()
-            .find(|connection| connection.to.node == output_id && connection.to.port == PORT_IN)
+            .find(|connection| connection.to.node == *target && connection.to.port == PORT_IN)
             .cloned()
-            .ok_or_else(|| GraphError::MissingOutput(output_id.clone()))?;
+            .ok_or_else(|| GraphError::MissingInput(target.clone()))?;
         let predecessor = incoming.from.node.clone();
         let node_id = node.id().clone();
         self.nodes.insert(node_id.clone(), node);
@@ -468,9 +483,33 @@ impl Graph {
         )?;
         self.connect(
             PortRef::fixed(node_id, PORT_OUT),
-            PortRef::fixed(output_id, PORT_IN),
+            PortRef::fixed(target.clone(), PORT_IN),
         )?;
         Ok(())
+    }
+
+    /// 把设备节点移动到目标节点之前。
+    pub fn move_before(&mut self, id: &NodeId, target: &NodeId) -> Result<(), GraphError> {
+        if id == target {
+            return Ok(());
+        }
+        let target_node = self
+            .nodes
+            .get(target)
+            .ok_or_else(|| GraphError::UnknownNode(target.clone()))?;
+        if !target_node.kind().has_input(PORT_IN) {
+            return Err(GraphError::UnknownPort {
+                node: target.clone(),
+                port: PORT_IN.to_string(),
+            });
+        }
+        let node = self
+            .nodes
+            .get(id)
+            .cloned()
+            .ok_or_else(|| GraphError::UnknownNode(id.clone()))?;
+        self.remove_chain_node(id)?;
+        self.insert_before(node, target)
     }
 
     /// 从链中删掉一个设备节点，并把前驱直接接到后继。

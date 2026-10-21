@@ -330,10 +330,10 @@ fn batch_note_edits_and_cross_track_clip_move_share_snapshots() {
 }
 
 #[test]
-fn describe_lists_thirty_four_commands() {
+fn describe_lists_thirty_seven_commands() {
     let mut session = Session::default();
     let out = run(&mut session, "describe", json!({}));
-    assert_eq!(out["commands"].as_array().unwrap().len(), 34);
+    assert_eq!(out["commands"].as_array().unwrap().len(), 37);
     assert!(out["project"].is_null());
 }
 
@@ -639,6 +639,79 @@ fn adsr_device_params_are_validated_and_undoable() {
             - 0.01)
             .abs()
             < 1e-9
+    );
+}
+
+#[test]
+fn node_commands_add_move_and_remove() {
+    let mut session = Session::default();
+    run(&mut session, "project.create", json!({}));
+    run(&mut session, "track.create", json!({ "name": "lead" }));
+
+    let adsr = run(
+        &mut session,
+        "node.add",
+        json!({ "track_id": "track-1", "kind": "amp.adsr" }),
+    );
+    let gain = run(
+        &mut session,
+        "node.add",
+        json!({ "track_id": "track-1", "kind": "gain" }),
+    );
+    assert_eq!(adsr["node_id"], "device-1");
+    assert_eq!(gain["node_id"], "device-2");
+
+    let state = run(&mut session, "project.state", json!({}));
+    assert_eq!(
+        state["project"]["tracks"][0]["devices"][0]["kind"],
+        "amp.adsr"
+    );
+    assert_eq!(state["project"]["tracks"][0]["devices"][1]["kind"], "gain");
+
+    run(
+        &mut session,
+        "node.move",
+        json!({
+            "path": "/tracks/track-1/nodes/device-2",
+            "before": "/tracks/track-1/nodes/device-1"
+        }),
+    );
+    let state = run(&mut session, "project.state", json!({}));
+    assert_eq!(state["project"]["tracks"][0]["devices"][0]["kind"], "gain");
+    assert_eq!(
+        state["project"]["tracks"][0]["devices"][1]["kind"],
+        "amp.adsr"
+    );
+    assert_eq!(
+        state["project"]["tracks"][0]["graph"]["connections"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+
+    run(
+        &mut session,
+        "node.remove",
+        json!({ "path": "/tracks/track-1/nodes/device-2" }),
+    );
+    let state = run(&mut session, "project.state", json!({}));
+    assert_eq!(
+        state["project"]["tracks"][0]["devices"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    run(&mut session, "undo", json!({}));
+    let state = run(&mut session, "project.state", json!({}));
+    assert_eq!(
+        state["project"]["tracks"][0]["devices"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
     );
 }
 

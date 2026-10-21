@@ -521,9 +521,19 @@ fn note_update_schema() -> Value {
 fn device_remove_schema() -> Value {
     object_schema(
         json!({
-            "path": { "type": "string", "description": "/tracks/{id}/devices/{id}" }
+            "path": { "type": "string", "description": "/tracks/{id}/devices/{id} 或 /nodes/{id}" }
         }),
         &["path"],
+    )
+}
+
+fn node_move_schema() -> Value {
+    object_schema(
+        json!({
+            "path": { "type": "string", "description": "要移动的设备节点" },
+            "before": { "type": "string", "description": "目标节点，移动到它之前" }
+        }),
+        &["path", "before"],
     )
 }
 
@@ -566,7 +576,7 @@ fn transport_metronome_schema() -> Value {
     )
 }
 
-static COMMANDS: [CommandSpec; 34] = [
+static COMMANDS: [CommandSpec; 37] = [
     CommandSpec {
         id: "project.create",
         summary: "创建或替换当前工程",
@@ -704,6 +714,24 @@ static COMMANDS: [CommandSpec; 34] = [
         summary: "从轨道删除一个设备",
         undo: UndoKind::Snapshot,
         input_schema: device_remove_schema,
+    },
+    CommandSpec {
+        id: "node.add",
+        summary: "向轨道节点图添加设备节点",
+        undo: UndoKind::Snapshot,
+        input_schema: device_add_schema,
+    },
+    CommandSpec {
+        id: "node.remove",
+        summary: "从轨道节点图删除设备节点",
+        undo: UndoKind::Snapshot,
+        input_schema: device_remove_schema,
+    },
+    CommandSpec {
+        id: "node.move",
+        summary: "把设备节点移动到另一个节点之前",
+        undo: UndoKind::Snapshot,
+        input_schema: node_move_schema,
     },
     CommandSpec {
         id: "param.set",

@@ -1,6 +1,6 @@
-# 命令规范 v1.2
+# 命令规范 v1.3
 
-这份文档定义 Aurtrack 的可运行命令面：34 条命令、统一的返回结构、寻址规则，以及 MCP 的映射方式。代码必须与本文一致。
+这份文档定义 Aurtrack 的可运行命令面：37 条命令、统一的返回结构、寻址规则，以及 MCP 的映射方式。代码必须与本文一致。
 
 工程格式 v4 用 music tick 存储位置（960 PPQ），轨道保存 `aurtrack-graph` 节点图。命令边界仍用秒，避免 UI 和 CLI 直接操作 tick。旧 v3 工程会被拒绝。
 
@@ -37,6 +37,7 @@
 /tracks/{track_id}
 /tracks/{track_id}/devices/{device_id}
 /tracks/{track_id}/devices/{device_id}/params/{param_name}
+/tracks/{track_id}/nodes/{node_id}
 ```
 
 `devices` 是轨道节点图中设备节点的投影，节点 ID 即 `device_id`；当前支持 `gain` 和 `amp.adsr` 两种设备。
@@ -582,6 +583,43 @@
 { "metronome": true }
 ```
 
+### 35. `node.add`
+
+向轨道节点图插入一个设备节点，位置在 `output` 之前。参数与 `device.add` 相同，节点 ID 仍生成 `device-{n}`。
+
+```json
+{ "track_id": "track-1", "kind": "gain", "params": { "gain": 0.5 } }
+```
+
+返回：
+
+```json
+{ "device_id": "device-2", "node_id": "device-2", "path": "/tracks/track-1/nodes/device-2" }
+```
+
+### 36. `node.remove`
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `path` | string | 是 | `/tracks/{id}/nodes/{node_id}` 或 `/devices/{node_id}` |
+
+删除设备节点，并把前驱直接接到后继；乐器和 `output` 不能删除。
+
+### 37. `node.move`
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `path` | string | 是 | 要移动的设备节点 |
+| `before` | string | 是 | 目标节点路径，移动到它之前；可以是 `output` |
+
+返回：
+
+```json
+{ "path": "/tracks/track-1/nodes/device-2", "before": "/tracks/track-1/nodes/output" }
+```
+
+线性链暂时不提供通用 `node.connect` / `node.disconnect`；它们要等分支编译器。
+
 ## MCP 映射
 
 工具名是命令 ID 把 `.` 换成 `_`：
@@ -592,6 +630,9 @@
 | `project.update` | `project_update` |
 | `track.create` | `track_create` |
 | `device.add` | `device_add` |
+| `node.add` | `node_add` |
+| `node.remove` | `node_remove` |
+| `node.move` | `node_move` |
 | `param.set` | `param_set` |
 | `render.segment` | `render_segment` |
 | `transport.play` | `transport_play` |

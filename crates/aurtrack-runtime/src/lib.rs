@@ -371,11 +371,11 @@ mod tests {
     }
 
     #[test]
-    fn describe_lists_thirty_four_commands() {
+    fn describe_lists_thirty_seven_commands() {
         let mut runtime = Runtime::new();
         let response = run(&mut runtime, "describe", json!({})).unwrap();
         let commands = response.data["commands"].as_array().unwrap();
-        assert_eq!(commands.len(), 34);
+        assert_eq!(commands.len(), 37);
         assert!(
             commands
                 .iter()

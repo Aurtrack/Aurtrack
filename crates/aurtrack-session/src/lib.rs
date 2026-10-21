@@ -29,7 +29,7 @@ use std::path::Path;
 
 use aurtrack_command::{CommandError, CommandRequest, CommandResponse, registry};
 use aurtrack_engine::{AdsrPlan, adsr_envelope, midi_to_hz, note_envelope};
-use aurtrack_graph::{Graph, GraphError, Node, NodeId, NodeKind};
+use aurtrack_graph::{Graph, GraphError, Node, NodeId, NodeKind, PORT_IN};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -250,6 +250,9 @@ impl Session {
             "clip.paste" => self.cmd_clip_paste(&request.args),
             "device.add" => self.cmd_device_add(&request.args),
             "device.remove" => self.cmd_device_remove(&request.args),
+            "node.add" => self.cmd_node_add(&request.args),
+            "node.remove" => self.cmd_node_remove(&request.args),
+            "node.move" => self.cmd_node_move(&request.args),
             "param.set" => self.cmd_param_set(&request.args),
             "render.segment" => self.cmd_render_segment(&request.args),
             "describe" => Ok(self.cmd_describe()),
@@ -430,6 +433,19 @@ impl Session {
     }
 
     fn cmd_device_add(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        self.cmd_add_node(args, "device.add", "devices")
+    }
+
+    fn cmd_node_add(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        self.cmd_add_node(args, "node.add", "nodes")
+    }
+
+    fn cmd_add_node(
+        &mut self,
+        args: &Value,
+        command: &str,
+        segment: &str,
+    ) -> Result<CommandResponse, CommandError> {
         let args: DeviceAddArgs = parse_args(args)?;
         let kind = match args.kind.as_str() {
             "gain" => NodeKind::Gain,
@@ -465,11 +481,11 @@ impl Session {
         {
             return Err(CommandError::invalid_args("一条轨道暂时只能有一个 ADSR"));
         }
-        let token = self.snapshot("device.add");
+        let token = self.snapshot(command);
         self.next_device += 1;
         let number = self.next_device;
         let device_id = format!("device-{number}");
-        let path = format!("/tracks/{}/devices/{device_id}", args.track_id);
+        let path = format!("/tracks/{}/{segment}/{device_id}", args.track_id);
         let mut node = Node::new(NodeId::new(device_id.clone()).map_err(graph_error)?, kind);
         for (name, value) in args.params.unwrap_or_default() {
             node.set_param(&name, value).map_err(graph_error)?;
@@ -487,7 +503,12 @@ impl Session {
             .graph
             .insert_before_output(node)
             .map_err(graph_error)?;
-        Ok(CommandResponse::ok(json!({ "device_id": device_id, "path": path })).with_undo(token))
+        Ok(CommandResponse::ok(json!({
+            "device_id": device_id,
+            "node_id": device_id,
+            "path": path,
+        }))
+        .with_undo(token))
     }
 
     fn cmd_param_set(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
@@ -1609,9 +1630,21 @@ impl Session {
     }
 
     fn cmd_device_remove(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        self.cmd_remove_node(args, "device.remove")
+    }
+
+    fn cmd_node_remove(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        self.cmd_remove_node(args, "node.remove")
+    }
+
+    fn cmd_remove_node(
+        &mut self,
+        args: &Value,
+        command: &str,
+    ) -> Result<CommandResponse, CommandError> {
         let args: DeviceRemoveArgs = parse_args(args)?;
         let path = args.path;
-        let (track_id, device_id) = parse_device_path(&path)?;
+        let (track_id, device_id) = parse_node_path(&path)?;
         let node_id = NodeId::new(device_id).map_err(graph_error)?;
         let exists = self.project.as_ref().is_some_and(|project| {
             project.tracks.iter().any(|track| {
@@ -1625,7 +1658,7 @@ impl Session {
         if !exists {
             return Err(CommandError::not_found(format!("找不到设备：{path}")));
         }
-        let token = self.snapshot("device.remove");
+        let token = self.snapshot(command);
         let project = self
             .project
             .as_mut()
@@ -1634,12 +1667,61 @@ impl Session {
             .tracks
             .iter_mut()
             .find(|track| track.id == track_id)
-            .ok_or_else(|| CommandError::not_found(format!("找不到设备：{path}")))?;
+            .ok_or_else(|| CommandError::not_found(format!("找不到节点：{path}")))?;
         track
             .graph
             .remove_chain_node(&node_id)
             .map_err(graph_error)?;
         Ok(CommandResponse::ok(json!({ "path": path })).with_undo(token))
+    }
+
+    fn cmd_node_move(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        let args: NodeMoveArgs = parse_args(args)?;
+        let (track_id, node) = parse_node_path(&args.path)?;
+        let (before_track, before) = parse_node_path(&args.before)?;
+        if track_id != before_track {
+            return Err(CommandError::invalid_args("节点必须属于同一条轨道"));
+        }
+        let node_id = NodeId::new(node).map_err(graph_error)?;
+        let before_id = NodeId::new(before).map_err(graph_error)?;
+        let track = self
+            .project
+            .as_ref()
+            .and_then(|project| project.tracks.iter().find(|track| track.id == track_id))
+            .ok_or_else(|| CommandError::not_found(format!("找不到轨道：{track_id}")))?;
+        let node = track
+            .graph
+            .node(&node_id)
+            .ok_or_else(|| CommandError::not_found(format!("找不到节点：{}", args.path)))?;
+        if !node.kind().is_device() {
+            return Err(CommandError::invalid_args("只有设备节点可以移动"));
+        }
+        let target = track
+            .graph
+            .node(&before_id)
+            .ok_or_else(|| CommandError::not_found(format!("找不到节点：{}", args.before)))?;
+        if !target.kind().has_input(PORT_IN) {
+            return Err(CommandError::invalid_args("目标节点没有输入端口"));
+        }
+        let token = self.snapshot("node.move");
+        let project = self
+            .project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let track = project
+            .tracks
+            .iter_mut()
+            .find(|track| track.id == track_id)
+            .ok_or_else(|| CommandError::not_found(format!("找不到轨道：{track_id}")))?;
+        track
+            .graph
+            .move_before(&node_id, &before_id)
+            .map_err(graph_error)?;
+        Ok(CommandResponse::ok(json!({
+            "path": args.path,
+            "before": args.before,
+        }))
+        .with_undo(token))
     }
 
     fn cmd_redo(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
@@ -1768,7 +1850,7 @@ fn parse_param_path(path: &str) -> Result<(&str, &str, &str), CommandError> {
         (
             Some("tracks"),
             Some(track),
-            Some("devices"),
+            Some("devices" | "nodes"),
             Some(device),
             Some("params"),
             Some(name),
@@ -1780,7 +1862,7 @@ fn parse_param_path(path: &str) -> Result<(&str, &str, &str), CommandError> {
     }
 }
 
-fn parse_device_path(path: &str) -> Result<(&str, &str), CommandError> {
+fn parse_node_path(path: &str) -> Result<(&str, &str), CommandError> {
     let mut parts = path.split('/').filter(|part| !part.is_empty());
     match (
         parts.next(),
@@ -1789,9 +1871,11 @@ fn parse_device_path(path: &str) -> Result<(&str, &str), CommandError> {
         parts.next(),
         parts.next(),
     ) {
-        (Some("tracks"), Some(track), Some("devices"), Some(device), None) => Ok((track, device)),
+        (Some("tracks"), Some(track), Some("devices" | "nodes"), Some(node), None) => {
+            Ok((track, node))
+        },
         _ => Err(CommandError::invalid_args(format!(
-            "设备路径不合法：{path}"
+            "节点路径不合法：{path}"
         ))),
     }
 }
@@ -2256,6 +2340,13 @@ struct TrackRemoveArgs {
 #[serde(deny_unknown_fields)]
 struct DeviceRemoveArgs {
     path: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NodeMoveArgs {
+    path: String,
+    before: String,
 }
 
 #[derive(Debug, Deserialize)]
