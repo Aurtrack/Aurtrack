@@ -9,6 +9,7 @@ repository.workspace = true
 [dependencies]
 aurtrack-command = { path = "../aurtrack-command" }
 aurtrack-engine = { path = "../aurtrack-engine" }
+aurtrack-graph = { path = "../aurtrack-graph" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 

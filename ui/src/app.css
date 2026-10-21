@@ -728,6 +728,30 @@ body {
   border-bottom: 1px solid var(--line);
 }
 
+.node-chain {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 3px;
+  padding: 7px 22px;
+  border-bottom: 1px solid var(--line);
+  background: #f4f5f4;
+}
+
+.node-chip {
+  border: 1px solid var(--line-strong);
+  padding: 2px 5px;
+  color: var(--blue);
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 8px;
+  letter-spacing: 0.06em;
+}
+
+.node-arrow {
+  color: var(--muted);
+  font-size: 10px;
+}
+
 .device-block {
   border-bottom: 1px solid var(--line);
 }

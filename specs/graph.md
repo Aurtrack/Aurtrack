@@ -1,6 +1,6 @@
-# 节点图规范 v0.1
+# 节点图规范 v0.2
 
-这份文档定义 `aurtrack-graph` 的第一版线性节点图。当前只做骨架，尚未接入工程文件；工程格式接入时升到 v4。
+这份文档定义 `aurtrack-graph` 的第一版线性节点图。已接入工程格式 v4；只支持线性链。
 
 ## 节点
 
@@ -9,6 +9,7 @@
 | kind | 输入 | 输出 | 参数 |
 | --- | --- | --- | --- |
 | `instrument.sine` | 无 | `out` | `frequency` 20–20000，默认 440 |
+| `instrument.silence` | 无 | `out` | 无 |
 | `amp.adsr` | `in` | `out` | `attack` 0.001–10，`decay` 0–10，`sustain` 0–1，`release` 0.001–10 |
 | `gain` | `in` | `out` | `gain` 0–4，默认 1 |
 | `output` | `in` | 无 | 无 |
@@ -17,6 +18,12 @@
 
 ```text
 instrument.sine -> amp.adsr -> gain -> output
+```
+
+空轨道链：
+
+```text
+instrument.silence -> output
 ```
 
 ADSR 默认值：

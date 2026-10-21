@@ -362,6 +362,7 @@ version = "0.0.0"
 dependencies = [
  "aurtrack-command",
  "aurtrack-engine",
+ "aurtrack-graph",
  "aurtrack-io",
  "aurtrack-session",
  "serde",
@@ -374,6 +375,7 @@ version = "0.0.0"
 dependencies = [
  "aurtrack-command",
  "aurtrack-engine",
+ "aurtrack-graph",
  "serde",
  "serde_json",
 ]

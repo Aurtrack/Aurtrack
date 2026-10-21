@@ -125,6 +125,7 @@ export const zhCN = {
   "tracks.meta.silence": (params) => `音符轨 · ${params.devices} 设备`,
 
   "inspector.title": "检查器",
+  "inspector.chain": "信号链",
   "inspector.none": "无",
   "inspector.empty": "未选择轨道",
   "inspector.addGain": "+ 增益",

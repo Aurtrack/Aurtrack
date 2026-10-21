@@ -130,6 +130,7 @@ export const en: Record<MessageKey, Message> = {
   "tracks.meta.silence": (params) => `NOTE TRACK · ${params.devices} DEV`,
 
   "inspector.title": "INSPECTOR",
+  "inspector.chain": "SIGNAL CHAIN",
   "inspector.none": "NONE",
   "inspector.empty": "NO TRACK SELECTED",
   "inspector.addGain": "+ GAIN",

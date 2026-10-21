@@ -28,10 +28,8 @@ use std::io;
 use std::path::Path;
 
 use aurtrack_command::{CommandError, CommandRequest, CommandResponse, registry};
-use aurtrack_engine::{
-    AdsrPlan, DEFAULT_ATTACK, DEFAULT_DECAY, DEFAULT_RELEASE, DEFAULT_SUSTAIN, adsr_envelope,
-    midi_to_hz, note_envelope,
-};
+use aurtrack_engine::{AdsrPlan, adsr_envelope, midi_to_hz, note_envelope};
+use aurtrack_graph::{Graph, GraphError, Node, NodeId, NodeKind};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -116,9 +114,39 @@ impl Project {
 pub struct Track {
     pub id: String,
     pub name: String,
-    pub source: Source,
-    pub devices: Vec<Device>,
+    pub graph: Graph,
     pub clips: Vec<Clip>,
+}
+
+impl Track {
+    pub fn source(&self) -> Source {
+        let instrument = self.graph.nodes().find(|node| node.kind().is_instrument());
+        match instrument.map(Node::kind) {
+            Some(NodeKind::InstrumentSine) => Source::Sine {
+                frequency: instrument
+                    .and_then(|node| node.param("frequency"))
+                    .unwrap_or(440.0),
+            },
+            _ => Source::Silence,
+        }
+    }
+
+    pub fn devices(&self) -> Vec<Device> {
+        self.graph
+            .device_nodes()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|node| Device {
+                id: node.id().to_string(),
+                kind: node.kind().as_str().to_string(),
+                params: node.params().clone(),
+            })
+            .collect()
+    }
+
+    pub fn compiled(&self) -> Result<aurtrack_graph::CompiledChain, GraphError> {
+        self.graph.compile_linear()
+    }
 }
 
 /// 轨道上的一个片段。
@@ -157,7 +185,7 @@ pub struct Device {
     pub params: BTreeMap<String, f64>,
 }
 
-const PROJECT_FORMAT_VERSION: u32 = 3;
+const PROJECT_FORMAT_VERSION: u32 = 4;
 const MAX_BATCH_NOTES: usize = 512;
 const MIN_BPM: f64 = 20.0;
 const MAX_BPM: f64 = 300.0;
@@ -353,8 +381,8 @@ impl Session {
             .as_ref()
             .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?
             .sample_rate;
-        let source = match args.source.as_deref().unwrap_or("silence") {
-            "silence" => Source::Silence,
+        let (instrument, frequency) = match args.source.as_deref().unwrap_or("silence") {
+            "silence" => (NodeKind::InstrumentSilence, None),
             "sine" => {
                 let frequency = args.frequency.unwrap_or(440.0);
                 if !frequency.is_finite() || !(20.0..=20_000.0).contains(&frequency) {
@@ -365,7 +393,7 @@ impl Session {
                 if frequency >= f64::from(sample_rate) / 2.0 {
                     return Err(CommandError::invalid_args("frequency 必须小于采样率的一半"));
                 }
-                Source::Sine { frequency }
+                (NodeKind::InstrumentSine, Some(frequency))
             },
             other => {
                 return Err(CommandError::invalid_args(format!(
@@ -373,6 +401,16 @@ impl Session {
                 )));
             },
         };
+        let mut graph = Graph::empty_track(instrument).map_err(graph_error)?;
+        if let Some(frequency) = frequency {
+            graph
+                .set_param(
+                    &NodeId::new("instrument").map_err(graph_error)?,
+                    "frequency",
+                    frequency,
+                )
+                .map_err(graph_error)?;
+        }
         let token = self.snapshot("track.create");
         self.next_track += 1;
         let number = self.next_track;
@@ -385,8 +423,7 @@ impl Session {
         project.tracks.push(Track {
             id: track_id.clone(),
             name: args.name,
-            source,
-            devices: Vec::new(),
+            graph,
             clips: Vec::new(),
         });
         Ok(CommandResponse::ok(json!({ "track_id": track_id, "path": path })).with_undo(token))
@@ -394,40 +431,16 @@ impl Session {
 
     fn cmd_device_add(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
         let args: DeviceAddArgs = parse_args(args)?;
-        let mut params = args.params.unwrap_or_default();
-        match args.kind.as_str() {
-            "gain" => {
-                for (name, value) in &params {
-                    if name != "gain" {
-                        return Err(CommandError::invalid_args(format!("不支持的参数：{name}")));
-                    }
-                    validate_gain(*value)?;
-                }
-                params.entry("gain".to_string()).or_insert(1.0);
-            },
-            "amp.adsr" => {
-                for (name, value) in &params {
-                    if !ADSR_PARAMS.contains(&name.as_str()) {
-                        return Err(CommandError::invalid_args(format!("不支持的参数：{name}")));
-                    }
-                    validate_adsr_param(name, *value)?;
-                }
-                params.entry("attack".to_string()).or_insert(DEFAULT_ATTACK);
-                params.entry("decay".to_string()).or_insert(DEFAULT_DECAY);
-                params
-                    .entry("sustain".to_string())
-                    .or_insert(DEFAULT_SUSTAIN);
-                params
-                    .entry("release".to_string())
-                    .or_insert(DEFAULT_RELEASE);
-            },
+        let kind = match args.kind.as_str() {
+            "gain" => NodeKind::Gain,
+            "amp.adsr" => NodeKind::AmpAdsr,
             other => {
                 return Err(CommandError::invalid_args(format!(
                     "不支持的 kind：{other}"
                 )));
             },
-        }
-        let track_devices = self
+        };
+        let track_graph = self
             .project
             .as_ref()
             .and_then(|project| {
@@ -436,14 +449,20 @@ impl Session {
                     .iter()
                     .find(|track| track.id == args.track_id)
             })
-            .map(|track| &track.devices);
-        let Some(track_devices) = track_devices else {
+            .map(|track| &track.graph);
+        let Some(track_graph) = track_graph else {
             return Err(CommandError::not_found(format!(
                 "找不到轨道：{}",
                 args.track_id
             )));
         };
-        if args.kind == "amp.adsr" && track_devices.iter().any(|device| device.kind == "amp.adsr") {
+        if kind == NodeKind::AmpAdsr
+            && track_graph
+                .device_nodes()
+                .map_err(graph_error)?
+                .iter()
+                .any(|node| node.kind() == NodeKind::AmpAdsr)
+        {
             return Err(CommandError::invalid_args("一条轨道暂时只能有一个 ADSR"));
         }
         let token = self.snapshot("device.add");
@@ -451,6 +470,10 @@ impl Session {
         let number = self.next_device;
         let device_id = format!("device-{number}");
         let path = format!("/tracks/{}/devices/{device_id}", args.track_id);
+        let mut node = Node::new(NodeId::new(device_id.clone()).map_err(graph_error)?, kind);
+        for (name, value) in args.params.unwrap_or_default() {
+            node.set_param(&name, value).map_err(graph_error)?;
+        }
         let project = self
             .project
             .as_mut()
@@ -460,11 +483,10 @@ impl Session {
             .iter_mut()
             .find(|track| track.id == args.track_id)
             .ok_or_else(|| CommandError::not_found(format!("找不到轨道：{}", args.track_id)))?;
-        track.devices.push(Device {
-            id: device_id.clone(),
-            kind: args.kind,
-            params,
-        });
+        track
+            .graph
+            .insert_before_output(node)
+            .map_err(graph_error)?;
         Ok(CommandResponse::ok(json!({ "device_id": device_id, "path": path })).with_undo(token))
     }
 
@@ -472,16 +494,21 @@ impl Session {
         let args: ParamSetArgs = parse_args(args)?;
         let path = args.path.clone();
         let (track_id, device_id, name) = parse_param_path(&path)?;
-        let kind = self
+        let node_id = NodeId::new(device_id).map_err(graph_error)?;
+        let node = self
             .project
             .as_ref()
             .and_then(|project| project.tracks.iter().find(|track| track.id == track_id))
-            .and_then(|track| track.devices.iter().find(|device| device.id == device_id))
-            .map(|device| device.kind.clone())
+            .and_then(|track| track.graph.node(&node_id))
             .ok_or_else(|| CommandError::not_found(format!("找不到参数：{path}")))?;
-        match kind.as_str() {
-            "gain" if name == "gain" => validate_gain(args.value)?,
-            "amp.adsr" if ADSR_PARAMS.contains(&name) => validate_adsr_param(name, args.value)?,
+        if !node.kind().is_device() {
+            return Err(CommandError::not_found(format!("找不到参数：{path}")));
+        }
+        match node.kind() {
+            NodeKind::Gain if name == "gain" => validate_gain(args.value)?,
+            NodeKind::AmpAdsr if ADSR_PARAMS.contains(&name) => {
+                validate_adsr_param(name, args.value)?;
+            },
             _ => {
                 return Err(CommandError::invalid_args(format!("不支持的参数：{name}")));
             },
@@ -491,18 +518,15 @@ impl Session {
             .project
             .as_mut()
             .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
-        let device = project
+        let track = project
             .tracks
             .iter_mut()
             .find(|track| track.id == track_id)
-            .and_then(|track| {
-                track
-                    .devices
-                    .iter_mut()
-                    .find(|device| device.id == device_id)
-            })
             .ok_or_else(|| CommandError::not_found(format!("找不到参数：{path}")))?;
-        device.params.insert(name.to_string(), args.value);
+        track
+            .graph
+            .set_param(&node_id, name, args.value)
+            .map_err(graph_error)?;
         Ok(CommandResponse::ok(json!({ "path": path, "value": args.value })).with_undo(token))
     }
 
@@ -1588,9 +1612,14 @@ impl Session {
         let args: DeviceRemoveArgs = parse_args(args)?;
         let path = args.path;
         let (track_id, device_id) = parse_device_path(&path)?;
+        let node_id = NodeId::new(device_id).map_err(graph_error)?;
         let exists = self.project.as_ref().is_some_and(|project| {
             project.tracks.iter().any(|track| {
-                track.id == track_id && track.devices.iter().any(|device| device.id == device_id)
+                track.id == track_id
+                    && track
+                        .graph
+                        .node(&node_id)
+                        .is_some_and(|node| node.kind().is_device())
             })
         });
         if !exists {
@@ -1606,7 +1635,10 @@ impl Session {
             .iter_mut()
             .find(|track| track.id == track_id)
             .ok_or_else(|| CommandError::not_found(format!("找不到设备：{path}")))?;
-        track.devices.retain(|device| device.id != device_id);
+        track
+            .graph
+            .remove_chain_node(&node_id)
+            .map_err(graph_error)?;
         Ok(CommandResponse::ok(json!({ "path": path })).with_undo(token))
     }
 
@@ -1652,8 +1684,8 @@ impl Session {
             "tracks": project.tracks.iter().map(|track| json!({
                 "id": &track.id,
                 "name": &track.name,
-                "source": &track.source,
-                "device_count": track.devices.len(),
+                "source": track.source(),
+                "device_count": track.devices().len(),
             })).collect::<Vec<_>>(),
         })
     }
@@ -1676,8 +1708,9 @@ fn project_view(project: &Project) -> Value {
         "tracks": project.tracks.iter().map(|track| json!({
             "id": &track.id,
             "name": &track.name,
-            "source": &track.source,
-            "devices": &track.devices,
+            "source": track.source(),
+            "devices": track.devices(),
+            "graph": &track.graph,
             "clips": track.clips.iter().map(|clip| clip_view(project, clip)).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
     })
@@ -1705,6 +1738,10 @@ fn note_view(project: &Project, note: &Note) -> Value {
         "duration_tick": note.duration_tick,
         "velocity": note.velocity,
     })
+}
+
+fn graph_error(error: GraphError) -> CommandError {
+    CommandError::invalid_args(format!("节点图错误：{error}"))
 }
 
 fn parse_args<T: DeserializeOwned>(args: &Value) -> Result<T, CommandError> {
@@ -1890,10 +1927,11 @@ fn validate_project(project: &Project) -> Result<(u64, u64, u64, u64), CommandEr
                 track.id
             )));
         }
-        if let Source::Sine { frequency } = &track.source {
+        track.graph.validate().map_err(graph_error)?;
+        if let Source::Sine { frequency } = track.source() {
             if !frequency.is_finite()
-                || *frequency <= 0.0
-                || *frequency >= f64::from(project.sample_rate) / 2.0
+                || frequency <= 0.0
+                || frequency >= f64::from(project.sample_rate) / 2.0
             {
                 return Err(CommandError::invalid_args(format!(
                     "轨道频率不合法：{}",
@@ -1902,52 +1940,18 @@ fn validate_project(project: &Project) -> Result<(u64, u64, u64, u64), CommandEr
             }
         }
 
-        for device in &track.devices {
-            let Some(number) = parse_id(&device.id, "device-") else {
+        for device in track.graph.device_nodes().map_err(graph_error)? {
+            let device_id = device.id().as_str();
+            let Some(number) = parse_id(device_id, "device-") else {
                 return Err(CommandError::invalid_args(format!(
-                    "设备 ID 不合法：{}",
-                    device.id
+                    "设备 ID 不合法：{device_id}"
                 )));
             };
             max_device = max_device.max(number);
-
-            if !device_ids.insert(device.id.as_str()) {
+            if !device_ids.insert(device_id) {
                 return Err(CommandError::invalid_args(format!(
-                    "设备 ID 重复：{}",
-                    device.id
+                    "设备 ID 重复：{device_id}"
                 )));
-            }
-            if device.kind.trim().is_empty() {
-                return Err(CommandError::invalid_args(format!(
-                    "设备类型不能为空：{}",
-                    device.id
-                )));
-            }
-            for (name, value) in &device.params {
-                if !value.is_finite() {
-                    return Err(CommandError::invalid_args(format!(
-                        "设备参数不是有限数：{name}"
-                    )));
-                }
-                match device.kind.as_str() {
-                    "gain" => {
-                        if name != "gain" {
-                            return Err(CommandError::invalid_args(format!(
-                                "gain 设备不支持参数：{name}"
-                            )));
-                        }
-                        validate_gain(*value)?;
-                    },
-                    "amp.adsr" => {
-                        if !ADSR_PARAMS.contains(&name.as_str()) {
-                            return Err(CommandError::invalid_args(format!(
-                                "amp.adsr 设备不支持参数：{name}"
-                            )));
-                        }
-                        validate_adsr_param(name, *value)?;
-                    },
-                    _ => {},
-                }
             }
         }
 
@@ -2068,45 +2072,6 @@ fn validate_gain(value: f64) -> Result<(), CommandError> {
     Ok(())
 }
 
-fn track_gain(track: &Track) -> f64 {
-    track
-        .devices
-        .iter()
-        .filter(|device| device.kind == "gain")
-        .filter_map(|device| device.params.get("gain").copied())
-        .product::<f64>()
-}
-
-fn track_adsr(track: &Track) -> Option<AdsrPlan> {
-    let device = track
-        .devices
-        .iter()
-        .find(|device| device.kind == "amp.adsr")?;
-    let defaults = AdsrPlan::default();
-    Some(AdsrPlan {
-        attack: device
-            .params
-            .get("attack")
-            .copied()
-            .unwrap_or(defaults.attack),
-        decay: device
-            .params
-            .get("decay")
-            .copied()
-            .unwrap_or(defaults.decay),
-        sustain: device
-            .params
-            .get("sustain")
-            .copied()
-            .unwrap_or(defaults.sustain),
-        release: device
-            .params
-            .get("release")
-            .copied()
-            .unwrap_or(defaults.release),
-    })
-}
-
 fn render_project(
     project: &Project,
     start_seconds: f64,
@@ -2118,17 +2083,20 @@ fn render_project(
     let frames = (duration_seconds * sample_rate_f64).round() as usize;
     let mut mix = vec![0.0_f32; frames];
     for track in &project.tracks {
-        let gain = track_gain(track);
-        let adsr = track_adsr(track);
+        let compiled = track.compiled().map_err(graph_error)?;
+        let gain = compiled.gain;
+        let adsr = compiled.adsr.map(|settings| AdsrPlan {
+            attack: settings.attack,
+            decay: settings.decay,
+            sustain: settings.sustain,
+            release: settings.release,
+        });
         let release = adsr.map_or(0.0, |envelope| envelope.release.max(0.001));
         for (index, slot) in mix.iter_mut().enumerate() {
             let time = start_seconds + index as f64 / sample_rate_f64;
-            let mut sample = match &track.source {
-                Source::Silence => 0.0,
-                Source::Sine { frequency } => {
-                    (std::f64::consts::TAU * *frequency * time).sin() * 0.25
-                },
-            };
+            let mut sample = compiled.source_frequency.map_or(0.0, |frequency| {
+                (std::f64::consts::TAU * frequency * time).sin() * 0.25
+            });
             for clip in &track.clips {
                 for note in &clip.notes {
                     let note_start = project.ticks_to_seconds(clip.start_tick + note.start_tick);

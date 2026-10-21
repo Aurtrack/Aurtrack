@@ -68,6 +68,8 @@ impl fmt::Display for NodeId {
 pub enum NodeKind {
     #[serde(rename = "instrument.sine")]
     InstrumentSine,
+    #[serde(rename = "instrument.silence")]
+    InstrumentSilence,
     #[serde(rename = "amp.adsr")]
     AmpAdsr,
     #[serde(rename = "gain")]
@@ -80,15 +82,24 @@ impl NodeKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::InstrumentSine => "instrument.sine",
+            Self::InstrumentSilence => "instrument.silence",
             Self::AmpAdsr => "amp.adsr",
             Self::Gain => "gain",
             Self::Output => "output",
         }
     }
 
+    pub const fn is_instrument(self) -> bool {
+        matches!(self, Self::InstrumentSine | Self::InstrumentSilence)
+    }
+
+    pub const fn is_device(self) -> bool {
+        matches!(self, Self::AmpAdsr | Self::Gain)
+    }
+
     pub const fn inputs(self) -> &'static [&'static str] {
         match self {
-            Self::InstrumentSine => &[],
+            Self::InstrumentSine | Self::InstrumentSilence => &[],
             Self::AmpAdsr | Self::Gain | Self::Output => &[PORT_IN],
         }
     }
@@ -96,7 +107,9 @@ impl NodeKind {
     pub const fn outputs(self) -> &'static [&'static str] {
         match self {
             Self::Output => &[],
-            Self::InstrumentSine | Self::AmpAdsr | Self::Gain => &[PORT_OUT],
+            Self::InstrumentSine | Self::InstrumentSilence | Self::AmpAdsr | Self::Gain => {
+                &[PORT_OUT]
+            },
         }
     }
 
@@ -111,9 +124,9 @@ impl NodeKind {
     pub fn param_specs(self) -> &'static [ParamSpec] {
         match self {
             Self::InstrumentSine => &SINE_PARAMS,
+            Self::InstrumentSilence | Self::Output => &[],
             Self::AmpAdsr => &ADSR_PARAMS,
             Self::Gain => &GAIN_PARAMS,
-            Self::Output => &[],
         }
     }
 
@@ -359,8 +372,35 @@ impl Graph {
         Self { nodes, connections }
     }
 
+    /// 空轨道链：一个乐器节点直接接 `output`。
+    pub fn empty_track(instrument: NodeKind) -> Result<Self, GraphError> {
+        if !instrument.is_instrument() {
+            return Err(GraphError::NotInstrument(instrument));
+        }
+        let instrument = Node::new(NodeId::fixed("instrument"), instrument);
+        let output = Node::new(NodeId::fixed("output"), NodeKind::Output);
+        let mut nodes = BTreeMap::new();
+        nodes.insert(instrument.id().clone(), instrument);
+        nodes.insert(output.id().clone(), output);
+        let connections = vec![Connection::new(
+            PortRef::fixed(NodeId::fixed("instrument"), PORT_OUT),
+            PortRef::fixed(NodeId::fixed("output"), PORT_IN),
+        )];
+        Ok(Self { nodes, connections })
+    }
+
     pub fn nodes(&self) -> impl Iterator<Item = &Node> {
         self.nodes.values()
+    }
+
+    /// 按链顺序返回设备节点，不含乐器和输出。
+    pub fn device_nodes(&self) -> Result<Vec<&Node>, GraphError> {
+        let order = self.topological_order()?;
+        Ok(order
+            .iter()
+            .filter_map(|id| self.nodes.get(id))
+            .filter(|node| node.kind().is_device())
+            .collect())
     }
 
     pub fn node(&self, id: &NodeId) -> Option<&Node> {
@@ -397,6 +437,75 @@ impl Graph {
         Ok(())
     }
 
+    /// 把设备节点插到 `output` 之前。
+    pub fn insert_before_output(&mut self, node: Node) -> Result<(), GraphError> {
+        if !node.kind().is_device() {
+            return Err(GraphError::NotDevice(node.kind()));
+        }
+        if self.nodes.contains_key(node.id()) {
+            return Err(GraphError::DuplicateNode(node.id().clone()));
+        }
+        let output_id = self
+            .nodes
+            .values()
+            .find(|candidate| candidate.kind() == NodeKind::Output)
+            .map(|candidate| candidate.id().clone())
+            .ok_or(GraphError::OutputCount(0))?;
+        let incoming = self
+            .connections
+            .iter()
+            .find(|connection| connection.to.node == output_id && connection.to.port == PORT_IN)
+            .cloned()
+            .ok_or_else(|| GraphError::MissingOutput(output_id.clone()))?;
+        let predecessor = incoming.from.node.clone();
+        let node_id = node.id().clone();
+        self.nodes.insert(node_id.clone(), node);
+        self.connections
+            .retain(|connection| connection != &incoming);
+        self.connect(
+            PortRef::fixed(predecessor, PORT_OUT),
+            PortRef::fixed(node_id.clone(), PORT_IN),
+        )?;
+        self.connect(
+            PortRef::fixed(node_id, PORT_OUT),
+            PortRef::fixed(output_id, PORT_IN),
+        )?;
+        Ok(())
+    }
+
+    /// 从链中删掉一个设备节点，并把前驱直接接到后继。
+    pub fn remove_chain_node(&mut self, id: &NodeId) -> Result<(), GraphError> {
+        let node = self
+            .nodes
+            .get(id)
+            .ok_or_else(|| GraphError::UnknownNode(id.clone()))?;
+        if !node.kind().is_device() {
+            return Err(GraphError::NotDevice(node.kind()));
+        }
+        let incoming = self
+            .connections
+            .iter()
+            .find(|connection| connection.to.node == *id && connection.to.port == PORT_IN)
+            .cloned()
+            .ok_or_else(|| GraphError::MissingInput(id.clone()))?;
+        let outgoing = self
+            .connections
+            .iter()
+            .find(|connection| connection.from.node == *id && connection.from.port == PORT_OUT)
+            .cloned()
+            .ok_or_else(|| GraphError::MissingOutput(id.clone()))?;
+        let predecessor = incoming.from.node.clone();
+        let successor = outgoing.to.node.clone();
+        self.connections
+            .retain(|connection| connection != &incoming && connection != &outgoing);
+        self.nodes.remove(id);
+        self.connect(
+            PortRef::fixed(predecessor, PORT_OUT),
+            PortRef::fixed(successor, PORT_IN),
+        )?;
+        Ok(())
+    }
+
     /// 校验节点参数、端口方向、扇入扇出和环。
     pub fn validate(&self) -> Result<(), GraphError> {
         if self.nodes.is_empty() {
@@ -408,7 +517,7 @@ impl Graph {
         let instruments = self
             .nodes
             .values()
-            .filter(|node| node.kind() == NodeKind::InstrumentSine)
+            .filter(|node| node.kind().is_instrument())
             .count();
         if instruments != 1 {
             return Err(GraphError::InstrumentCount(instruments));
@@ -506,7 +615,7 @@ impl Graph {
         let instrument = self
             .nodes
             .values()
-            .find(|node| node.kind() == NodeKind::InstrumentSine)
+            .find(|node| node.kind().is_instrument())
             .ok_or(GraphError::InstrumentCount(0))?;
         let mut current = instrument.id().clone();
         let mut visited = BTreeSet::new();
@@ -524,6 +633,9 @@ impl Graph {
             match node.kind() {
                 NodeKind::InstrumentSine => {
                     source_frequency = node.param("frequency");
+                },
+                NodeKind::InstrumentSilence => {
+                    source_frequency = None;
                 },
                 NodeKind::AmpAdsr => {
                     adsr = Some(AdsrSettings {
@@ -618,6 +730,12 @@ pub enum GraphError {
     Cycle,
     #[error("节点没有接上输出：{0}")]
     MissingOutput(NodeId),
+    #[error("节点没有输入：{0}")]
+    MissingInput(NodeId),
+    #[error("节点不是乐器：{0:?}")]
+    NotInstrument(NodeKind),
+    #[error("节点不是设备：{0:?}")]
+    NotDevice(NodeKind),
 }
 
 #[cfg(test)]
@@ -683,6 +801,36 @@ mod tests {
             .set_param(&NodeId::new("gain").unwrap(), "unknown", 1.0)
             .unwrap_err();
         assert!(matches!(error, GraphError::UnknownParam(_)));
+    }
+
+    #[test]
+    fn empty_track_and_insert_remove_chain() {
+        let mut graph = Graph::empty_track(NodeKind::InstrumentSilence).unwrap();
+        graph.validate().unwrap();
+        assert!(graph.compile_linear().unwrap().source_frequency.is_none());
+
+        graph
+            .insert_before_output(Node::new(
+                NodeId::new("device-1").unwrap(),
+                NodeKind::AmpAdsr,
+            ))
+            .unwrap();
+        graph
+            .insert_before_output(Node::new(NodeId::new("device-2").unwrap(), NodeKind::Gain))
+            .unwrap();
+        let devices = graph.device_nodes().unwrap();
+        assert_eq!(devices.len(), 2);
+        assert_eq!(devices[0].kind(), NodeKind::AmpAdsr);
+        assert_eq!(devices[1].kind(), NodeKind::Gain);
+        let compiled = graph.compile_linear().unwrap();
+        assert!(compiled.adsr.is_some());
+
+        graph
+            .remove_chain_node(&NodeId::new("device-1").unwrap())
+            .unwrap();
+        graph.validate().unwrap();
+        assert_eq!(graph.device_nodes().unwrap().len(), 1);
+        assert!(graph.compile_linear().unwrap().adsr.is_none());
     }
 
     #[test]

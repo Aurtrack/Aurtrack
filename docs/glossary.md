@@ -31,6 +31,8 @@
 | node | 节点 | |
 | node group | 节点组 | |
 | graph | 图 | |
+| port | 端口 | |
+| connection | 连接 | |
 | patch | 音色 | 与 preset 区分 |
 | preset | 预设 | |
 | parameter | 参数 | |

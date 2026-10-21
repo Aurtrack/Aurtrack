@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { Device, Track } from "../api";
+  import type { Device, GraphNode, Track } from "../api";
   import { formatNumber, t } from "../i18n.svelte";
 
   interface Props {
@@ -35,6 +35,36 @@
     return device.params[name] ?? fallback;
   }
 
+  let chain = $derived.by(() => {
+    const graph = track?.graph;
+    if (!graph) return [] as GraphNode[];
+    const start = Object.values(graph.nodes).find((node) =>
+      node.kind.startsWith("instrument."),
+    );
+    if (!start) return [] as GraphNode[];
+    const result: GraphNode[] = [];
+    const visited = new Set<string>();
+    let current: GraphNode | undefined = start;
+    while (current && !visited.has(current.id) && result.length < 32) {
+      result.push(current);
+      visited.add(current.id);
+      const connection = graph.connections.find(
+        (item) => item.from.node === current?.id && item.from.port === "out",
+      );
+      current = connection ? graph.nodes[connection.to.node] : undefined;
+    }
+    return result;
+  });
+
+  function nodeLabel(node: GraphNode): string {
+    if (node.kind === "instrument.sine") return "SINE";
+    if (node.kind === "instrument.silence") return "SILENCE";
+    if (node.kind === "amp.adsr") return "ADSR";
+    if (node.kind === "gain") return "GAIN";
+    if (node.kind === "output") return "OUT";
+    return node.kind.toUpperCase();
+  }
+
   function sourceLabel(track: Track): string {
     return track.source.kind === "sine"
       ? t("inspector.source.sine", {
@@ -64,6 +94,16 @@
       <span class="track-name">{current.name}</span>
       <span class="track-meta">{sourceLabel(current)}</span>
     </div>
+    {#if chain.length > 0}
+      <div class="node-chain" title={t("inspector.chain")}>
+        {#each chain as node, index (node.id)}
+          <span class="node-chip" title={node.id}>{nodeLabel(node)}</span>
+          {#if index < chain.length - 1}
+            <span class="node-arrow">›</span>
+          {/if}
+        {/each}
+      </div>
+    {/if}
     <div class="device-list">
       {#each current.devices as device (device.id)}
         <div class="device-block">

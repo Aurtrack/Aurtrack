@@ -418,6 +418,17 @@ fn project_save_and_open_round_trip() {
         state["project"]["tracks"][0]["devices"][0]["params"]["gain"],
         0.5
     );
+    assert_eq!(
+        state["project"]["tracks"][0]["graph"]["nodes"]["instrument"]["params"]["frequency"],
+        110.0
+    );
+    assert_eq!(
+        state["project"]["tracks"][0]["graph"]["connections"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
     assert_eq!(state["project"]["tracks"][0]["clips"][0]["id"], "clip-1");
     assert_eq!(
         state["project"]["tracks"][0]["clips"][0]["notes"][0]["pitch"],
@@ -697,11 +708,11 @@ fn tempo_change_keeps_musical_positions() {
 }
 
 #[test]
-fn project_open_rejects_old_format_version() {
+fn project_open_rejects_v3_format_version() {
     let path = project_temp_path("bad-version");
     std::fs::write(
         &path,
-        r#"{"format_version":2,"project":{"name":"x","sample_rate":48000,"tracks":[]}}"#,
+        r#"{"format_version":3,"project":{"name":"x","sample_rate":48000,"tracks":[]}}"#,
     )
     .unwrap();
 

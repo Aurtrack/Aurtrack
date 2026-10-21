@@ -45,11 +45,28 @@ export type Source =
   | { kind: "silence" }
   | { kind: "sine"; frequency: number };
 
+export type GraphNode = {
+  id: string;
+  kind: string;
+  params: Record<string, number>;
+};
+
+export type GraphConnection = {
+  from: { node: string; port: string };
+  to: { node: string; port: string };
+};
+
+export type TrackGraph = {
+  nodes: Record<string, GraphNode>;
+  connections: GraphConnection[];
+};
+
 export type Track = {
   id: string;
   name: string;
   source: Source;
   devices: Device[];
+  graph?: TrackGraph;
   clips: Clip[];
 };
 

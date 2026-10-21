@@ -22,7 +22,7 @@ use std::sync::Arc;
 use aurtrack_command::{CommandError, CommandRequest, CommandResponse};
 use aurtrack_engine::{AdsrPlan, NotePlan, Playback, PlaybackPlan, TrackPlan, midi_to_hz};
 use aurtrack_io::AudioHandle;
-use aurtrack_session::{Project, Session, Source, TICKS_PER_QUARTER};
+use aurtrack_session::{Project, Session, TICKS_PER_QUARTER};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -113,7 +113,7 @@ impl Runtime {
             .session
             .project()
             .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
-        let plan = build_plan(project, self.sample_rate, self.metronome);
+        let plan = build_plan(project, self.sample_rate, self.metronome)?;
         self.playback.set_plan(plan);
         self.playback.play();
         Ok(CommandResponse::ok(json!({
@@ -170,52 +170,24 @@ impl Runtime {
     }
 }
 
-fn track_adsr(track: &aurtrack_session::Track) -> Option<AdsrPlan> {
-    let device = track
-        .devices
-        .iter()
-        .find(|device| device.kind == "amp.adsr")?;
-    let defaults = AdsrPlan::default();
-    Some(AdsrPlan {
-        attack: device
-            .params
-            .get("attack")
-            .copied()
-            .unwrap_or(defaults.attack),
-        decay: device
-            .params
-            .get("decay")
-            .copied()
-            .unwrap_or(defaults.decay),
-        sustain: device
-            .params
-            .get("sustain")
-            .copied()
-            .unwrap_or(defaults.sustain),
-        release: device
-            .params
-            .get("release")
-            .copied()
-            .unwrap_or(defaults.release),
-    })
-}
-
-fn build_plan(project: &Project, sample_rate: u32, metronome: bool) -> PlaybackPlan {
+fn build_plan(
+    project: &Project,
+    sample_rate: u32,
+    metronome: bool,
+) -> Result<PlaybackPlan, CommandError> {
     let mut tracks: Vec<TrackPlan> = project
         .tracks
         .iter()
         .map(|track| {
-            let gain = track
-                .devices
-                .iter()
-                .filter(|device| device.kind == "gain")
-                .filter_map(|device| device.params.get("gain").copied())
-                .product::<f64>();
-            let frequency = match &track.source {
-                Source::Sine { frequency } => Some(*frequency),
-                Source::Silence => None,
-            };
-            let adsr = track_adsr(track);
+            let compiled = track
+                .compiled()
+                .map_err(|error| CommandError::invalid_args(format!("节点图错误：{error}")))?;
+            let adsr = compiled.adsr.map(|settings| AdsrPlan {
+                attack: settings.attack,
+                decay: settings.decay,
+                sustain: settings.sustain,
+                release: settings.release,
+            });
             let notes = track
                 .clips
                 .iter()
@@ -228,14 +200,14 @@ fn build_plan(project: &Project, sample_rate: u32, metronome: bool) -> PlaybackP
                     })
                 })
                 .collect();
-            TrackPlan {
-                frequency,
-                gain,
+            Ok(TrackPlan {
+                frequency: compiled.source_frequency,
+                gain: compiled.gain,
                 adsr,
                 notes,
-            }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, CommandError>>()?;
     if metronome {
         let length_ticks = project.length_ticks();
         let bar_ticks = project.ticks_per_bar().max(1);
@@ -260,13 +232,13 @@ fn build_plan(project: &Project, sample_rate: u32, metronome: bool) -> PlaybackP
             notes,
         });
     }
-    PlaybackPlan {
+    Ok(PlaybackPlan {
         sample_rate,
         loop_start_seconds: project.loop_start_seconds(),
         loop_seconds: project.loop_end_seconds(),
         length_seconds: project.length_seconds(),
         tracks,
-    }
+    })
 }
 
 fn parse_args<T: DeserializeOwned>(args: &Value) -> Result<T, CommandError> {
@@ -362,8 +334,10 @@ mod tests {
             tracks: vec![Track {
                 id: "track-1".to_string(),
                 name: "lead".to_string(),
-                source: Source::Silence,
-                devices: Vec::new(),
+                graph: aurtrack_graph::Graph::empty_track(
+                    aurtrack_graph::NodeKind::InstrumentSilence,
+                )
+                .unwrap(),
                 clips: vec![Clip {
                     id: "clip-1".to_string(),
                     name: "verse".to_string(),
@@ -380,9 +354,9 @@ mod tests {
             }],
         };
 
-        let plan = build_plan(&project, 48_000, false);
+        let plan = build_plan(&project, 48_000, false).unwrap();
         assert_eq!(plan.tracks.len(), 1);
-        let metronome_plan = build_plan(&project, 48_000, true);
+        let metronome_plan = build_plan(&project, 48_000, true).unwrap();
         assert_eq!(metronome_plan.tracks.len(), 2);
         assert_eq!(metronome_plan.tracks[1].notes.len(), 8);
         assert!((metronome_plan.tracks[1].notes[0].frequency - 1760.0).abs() < 1e-9);

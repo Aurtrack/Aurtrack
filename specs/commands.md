@@ -1,8 +1,8 @@
-# 命令规范 v1.1
+# 命令规范 v1.2
 
 这份文档定义 Aurtrack 的可运行命令面：34 条命令、统一的返回结构、寻址规则，以及 MCP 的映射方式。代码必须与本文一致。
 
-工程格式 v3 用 music tick 存储位置（960 PPQ），命令边界仍用秒，避免 UI 和 CLI 直接操作 tick。旧 v2 工程会被拒绝。
+工程格式 v4 用 music tick 存储位置（960 PPQ），轨道保存 `aurtrack-graph` 节点图。命令边界仍用秒，避免 UI 和 CLI 直接操作 tick。旧 v3 工程会被拒绝。
 
 ## 信封
 
@@ -39,7 +39,7 @@
 /tracks/{track_id}/devices/{device_id}/params/{param_name}
 ```
 
-当前阶段只支持 `gain` 设备的 `gain` 参数。
+`devices` 是轨道节点图中设备节点的投影，节点 ID 即 `device_id`；当前支持 `gain` 和 `amp.adsr` 两种设备。
 
 ## 命令
 
@@ -134,8 +134,9 @@
 
 渲染规则：
 
-- 每条轨道按 `source` 生成信号，正弦幅度固定为 `0.25`；
-- 轨道的所有 `gain` 设备依次相乘；
+- 每条轨道先用 `aurtrack-graph` 编译节点链，得到信号源、ADSR 和总增益；
+- 正弦幅度固定为 `0.25`；
+- 链上的 `gain` 节点依次相乘；
 - 所有轨道求和后钳制到 `[-1, 1]`；
 - 输出 16 位单声道 PCM WAV。
 
@@ -246,7 +247,7 @@
 
 ### 14. `project.state`
 
-无参数。返回完整工程，包括每条轨道的设备与参数：
+无参数。返回完整工程，包括每条轨道的节点图、设备投影与参数：
 
 ```json
 {
@@ -268,7 +269,7 @@
 }
 ```
 
-没有工程时 `project` 为 `null`。这是 UI 轮询同步与会话视图的主要读取命令。
+`source` 和 `devices` 是 `graph` 的投影，节点 ID 就是设备 ID。没有工程时 `project` 为 `null`。这是 UI 轮询同步与会话视图的主要读取命令。
 
 ### 15. `track.remove`
 
@@ -298,7 +299,7 @@
 
 ## 工程文件
 
-工程文件格式见 `docs/adr/0002-project-file.md` 与 `docs/adr/0003-clip-note.md`：UTF-8 JSON，当前 `format_version: 2`；只接受当前版本，旧文件直接拒绝，不做兼容迁移。
+工程文件格式见 `docs/adr/0002-project-file.md`、`docs/adr/0003-clip-note.md` 与 `specs/graph.md`：UTF-8 JSON，当前 `format_version: 4`；只接受当前版本，旧文件直接拒绝，不做兼容迁移。
 
 ### 17. `project.save`
 
@@ -312,7 +313,7 @@
 { "path": "...", "bytes": 1234 }
 ```
 
-保存不产生撤销快照；父目录不存在时会创建。保存统一写入 `format_version: 2`。
+保存不产生撤销快照；父目录不存在时会创建。保存统一写入 `format_version: 4`。
 
 ### 18. `project.open`
 
