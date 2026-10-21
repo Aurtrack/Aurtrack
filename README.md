@@ -9,6 +9,7 @@
 - AI 协作规则：[AGENTS.md](AGENTS.md)
 - 术语表：[docs/glossary.md](docs/glossary.md)
 - 命令规范：[specs/commands.md](specs/commands.md)
+- 节点图规范：[specs/graph.md](specs/graph.md)
 
 ## 现在能跑什么
 
@@ -50,7 +51,7 @@
 ## 仓库结构
 
 ```text
-crates/     Rust workspace 成员（命令、会话、引擎、音频、运行时、CLI、MCP）
+crates/     Rust workspace 成员（命令、会话、图、引擎、音频、运行时、CLI、MCP）
 shells/     桌面与移动外壳
 ui/         桌面前端（Svelte 5 + Vite）
 specs/      命令规范、协议与图 IR 语义
@@ -60,4 +61,4 @@ docs/       架构决策记录与设计笔记
 
 ## 下一步
 
-音符复制/量化、自动化、节点图、CLAP 插件宿主。
+节点图接入工程 v4、自动化、CLAP 插件宿主。

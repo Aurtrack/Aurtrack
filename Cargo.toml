@@ -9,6 +9,7 @@ members = [
     "crates/aurtrack-command",
     "crates/aurtrack-session",
     "crates/aurtrack-engine",
+    "crates/aurtrack-graph",
     "crates/aurtrack-io",
     "crates/aurtrack-runtime",
     "crates/aurtrack-ipc",
