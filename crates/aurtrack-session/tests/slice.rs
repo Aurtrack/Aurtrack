@@ -117,14 +117,14 @@ fn duplicate_and_quantize_notes_and_clips() {
 
     let duplicate = run(&mut session, "note.duplicate", json!({ "path": note_path }));
     assert_ne!(duplicate["note_id"], "note-1");
-    assert!((duplicate["note"]["start"].as_f64().unwrap() - 0.77).abs() < 1e-9);
+    assert!((duplicate["note"]["start"].as_f64().unwrap() - 0.77).abs() < 1e-3);
 
     let quantized = run(
         &mut session,
         "note.quantize",
         json!({ "path": note_path, "grid": 0.25 }),
     );
-    assert!((quantized["note"]["start"].as_f64().unwrap() - 0.25).abs() < 1e-9);
+    assert!((quantized["note"]["start"].as_f64().unwrap() - 0.25).abs() < 1e-3);
 
     let clip = run(
         &mut session,
@@ -132,7 +132,7 @@ fn duplicate_and_quantize_notes_and_clips() {
         json!({ "path": "/tracks/track-1/clips/clip-1" }),
     );
     assert_eq!(clip["clip_id"], "clip-2");
-    assert!((clip["clip"]["start"].as_f64().unwrap() - 2.0).abs() < 1e-9);
+    assert!((clip["clip"]["start"].as_f64().unwrap() - 2.0).abs() < 1e-3);
     assert_eq!(clip["clip"]["notes"].as_array().unwrap().len(), 2);
 
     let state = run(&mut session, "project.state", json!({}));
@@ -244,8 +244,8 @@ fn batch_note_edits_and_cross_track_clip_move_share_snapshots() {
         .iter()
         .map(|note| note["start"].as_f64().unwrap())
         .collect::<Vec<_>>();
-    assert!((starts[0] - 0.25).abs() < 1e-9);
-    assert!((starts[1] - 0.5).abs() < 1e-9);
+    assert!((starts[0] - 0.25).abs() < 1e-3);
+    assert!((starts[1] - 0.5).abs() < 1e-3);
 
     run(&mut session, "undo", json!({}));
     let error = session
@@ -292,7 +292,7 @@ fn batch_note_edits_and_cross_track_clip_move_share_snapshots() {
         }),
     );
     assert_eq!(moved["path"], "/tracks/track-2/clips/clip-1");
-    assert!((moved["clip"]["start"].as_f64().unwrap() - 1.0).abs() < 1e-9);
+    assert!((moved["clip"]["start"].as_f64().unwrap() - 1.0).abs() < 1e-3);
     assert_eq!(moved["clip"]["notes"].as_array().unwrap().len(), 3);
 
     let state = run(&mut session, "project.state", json!({}));
@@ -330,10 +330,10 @@ fn batch_note_edits_and_cross_track_clip_move_share_snapshots() {
 }
 
 #[test]
-fn describe_lists_thirty_two_commands() {
+fn describe_lists_thirty_three_commands() {
     let mut session = Session::default();
     let out = run(&mut session, "describe", json!({}));
-    assert_eq!(out["commands"].as_array().unwrap().len(), 32);
+    assert_eq!(out["commands"].as_array().unwrap().len(), 33);
     assert!(out["project"].is_null());
 }
 
@@ -576,11 +576,76 @@ fn clip_and_note_commands_validate_and_undo() {
 }
 
 #[test]
+fn tempo_change_keeps_musical_positions() {
+    let mut session = Session::default();
+    run(&mut session, "project.create", json!({ "name": "tempo" }));
+    run(&mut session, "track.create", json!({ "name": "lead" }));
+    run(
+        &mut session,
+        "clip.create",
+        json!({ "track_id": "track-1", "start": 0.0, "duration": 2.0 }),
+    );
+    run(
+        &mut session,
+        "note.add",
+        json!({
+            "path": "/tracks/track-1/clips/clip-1",
+            "pitch": 60,
+            "start": 1.0,
+            "duration": 0.5,
+        }),
+    );
+
+    let before = run(&mut session, "project.state", json!({}));
+    assert_eq!(before["project"]["tempo_bpm"], 120.0);
+    assert!(
+        before["project"]["tracks"][0]["clips"][0]["start"]
+            .as_f64()
+            .unwrap()
+            .abs()
+            < 1e-3
+    );
+    assert!(
+        (before["project"]["tracks"][0]["clips"][0]["notes"][0]["start"]
+            .as_f64()
+            .unwrap()
+            - 1.0)
+            .abs()
+            < 1e-3
+    );
+
+    let updated = run(
+        &mut session,
+        "project.update",
+        json!({ "tempo_bpm": 60.0, "time_signature": { "numerator": 3, "denominator": 4 }, "length_bars": 2 }),
+    );
+    assert_eq!(updated["project"]["tempo_bpm"], 60.0);
+    assert_eq!(updated["project"]["length_bars"], 2);
+
+    let after = run(&mut session, "project.state", json!({}));
+    let note = &after["project"]["tracks"][0]["clips"][0]["notes"][0];
+    assert!((note["start"].as_f64().unwrap() - 2.0).abs() < 1e-3);
+    assert!((after["project"]["loop_end"].as_f64().unwrap() - 6.0).abs() < 1e-3);
+
+    run(&mut session, "undo", json!({}));
+    let restored = run(&mut session, "project.state", json!({}));
+    assert_eq!(restored["project"]["tempo_bpm"], 120.0);
+    assert!(
+        (restored["project"]["tracks"][0]["clips"][0]["notes"][0]["start"]
+            .as_f64()
+            .unwrap()
+            - 1.0)
+            .abs()
+            < 1e-3
+    );
+}
+
+#[test]
 fn project_open_rejects_old_format_version() {
     let path = project_temp_path("bad-version");
     std::fs::write(
         &path,
-        r#"{"format_version":1,"project":{"name":"x","sample_rate":48000,"tracks":[]}}"#,
+        r#"{"format_version":2,"project":{"name":"x","sample_rate":48000,"tracks":[]}}"#,
     )
     .unwrap();
 

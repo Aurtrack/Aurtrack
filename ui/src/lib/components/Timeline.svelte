@@ -15,6 +15,10 @@
     tracks: TimelineTrack[];
     duration: number;
     playhead: number;
+    barSeconds: number;
+    beatsPerBar: number;
+    loopStart: number;
+    loopEnd: number;
     onSeek?: (seconds: number) => void;
     onSelectClip?: (trackId: string, clipId: string) => void;
     onUpdateClip?: (
@@ -32,6 +36,10 @@
     tracks,
     duration,
     playhead,
+    barSeconds,
+    beatsPerBar,
+    loopStart,
+    loopEnd,
     onSeek,
     onSelectClip,
     onUpdateClip,
@@ -78,6 +86,10 @@
       duration,
       playhead,
       empty: t("timeline.empty"),
+      barSeconds,
+      beatsPerBar,
+      loopStart,
+      loopEnd,
     });
   });
 
@@ -90,6 +102,10 @@
         duration,
         playhead,
         empty: t("timeline.empty"),
+        barSeconds,
+        beatsPerBar,
+        loopStart,
+        loopEnd,
       });
     });
     observer.observe(canvas);
@@ -171,7 +187,16 @@
     if (!canvas) return;
     const hit = hitTestTimeline(
       canvas,
-      { tracks, duration, playhead, empty: t("timeline.empty") },
+      {
+        tracks,
+        duration,
+        playhead,
+        empty: t("timeline.empty"),
+        barSeconds,
+        beatsPerBar,
+        loopStart,
+        loopEnd,
+      },
       event.clientX,
       event.clientY,
     );
@@ -318,7 +343,16 @@
 
     const hover = hitTestTimeline(
       canvas,
-      { tracks, duration, playhead, empty: t("timeline.empty") },
+      {
+        tracks,
+        duration,
+        playhead,
+        empty: t("timeline.empty"),
+        barSeconds,
+        beatsPerBar,
+        loopStart,
+        loopEnd,
+      },
       event.clientX,
       event.clientY,
     );

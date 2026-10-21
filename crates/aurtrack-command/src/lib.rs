@@ -164,7 +164,39 @@ fn project_create_schema() -> Value {
     object_schema(
         json!({
             "name": { "type": "string", "description": "工程名，不能为空" },
-            "sample_rate": { "type": "integer", "minimum": 8000, "maximum": 192_000 }
+            "sample_rate": { "type": "integer", "minimum": 8000, "maximum": 192_000 },
+            "tempo_bpm": { "type": "number", "minimum": 20, "maximum": 300, "default": 120 },
+            "time_signature": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "numerator": { "type": "integer", "minimum": 1, "maximum": 32 },
+                    "denominator": { "type": "integer", "enum": [1, 2, 4, 8, 16, 32] }
+                },
+                "required": ["numerator", "denominator"]
+            },
+            "length_bars": { "type": "integer", "minimum": 1, "maximum": 512, "default": 4 }
+        }),
+        &[],
+    )
+}
+
+fn project_update_schema() -> Value {
+    object_schema(
+        json!({
+            "tempo_bpm": { "type": "number", "minimum": 20, "maximum": 300 },
+            "time_signature": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                    "numerator": { "type": "integer", "minimum": 1, "maximum": 32 },
+                    "denominator": { "type": "integer", "enum": [1, 2, 4, 8, 16, 32] }
+                },
+                "required": ["numerator", "denominator"]
+            },
+            "length_bars": { "type": "integer", "minimum": 1, "maximum": 512 },
+            "loop_start": { "type": "number", "minimum": 0, "description": "循环起点，单位秒" },
+            "loop_end": { "type": "number", "minimum": 0, "description": "循环终点，单位秒" }
         }),
         &[],
     )
@@ -269,8 +301,8 @@ fn clip_create_schema() -> Value {
         json!({
             "track_id": { "type": "string" },
             "name": { "type": "string", "description": "片段名，省略时自动生成" },
-            "start": { "type": "number", "minimum": 0, "maximum": 5 },
-            "duration": { "type": "number", "exclusiveMinimum": 0, "maximum": 5 }
+            "start": { "type": "number", "minimum": 0, "description": "片段起点，单位秒，必须在工程长度内" },
+            "duration": { "type": "number", "exclusiveMinimum": 0, "description": "片段长度，单位秒" }
         }),
         &["track_id", "start", "duration"],
     )
@@ -290,8 +322,8 @@ fn clip_update_schema() -> Value {
         json!({
             "path": { "type": "string", "description": "/tracks/{id}/clips/{id}" },
             "name": { "type": "string" },
-            "start": { "type": "number", "minimum": 0, "maximum": 5 },
-            "duration": { "type": "number", "exclusiveMinimum": 0, "maximum": 5 }
+            "start": { "type": "number", "minimum": 0, "description": "片段起点，单位秒" },
+            "duration": { "type": "number", "exclusiveMinimum": 0, "description": "片段长度，单位秒" }
         }),
         &["path"],
     )
@@ -314,8 +346,7 @@ fn clip_move_schema() -> Value {
             "start": {
                 "type": "number",
                 "minimum": 0,
-                "maximum": 5,
-                "description": "新起点；省略时保持原起点"
+                "description": "新起点，单位秒；省略时保持原起点"
             }
         }),
         &["path", "track_id"],
@@ -344,8 +375,7 @@ fn note_quantize_schema() -> Value {
             "grid": {
                 "type": "number",
                 "exclusiveMinimum": 0,
-                "maximum": 5,
-                "description": "量化网格，单位秒，例如 0.125 表示 1/16"
+                "description": "量化网格，单位秒，例如 120 BPM 下 0.125 表示 1/16"
             }
         }),
         &["path", "grid"],
@@ -381,8 +411,8 @@ fn clip_paste_schema() -> Value {
         json!({
             "track_id": { "type": "string" },
             "name": { "type": "string" },
-            "start": { "type": "number", "minimum": 0, "maximum": 5 },
-            "duration": { "type": "number", "exclusiveMinimum": 0, "maximum": 5 },
+            "start": { "type": "number", "minimum": 0, "description": "片段起点，单位秒" },
+            "duration": { "type": "number", "exclusiveMinimum": 0, "description": "片段长度，单位秒" },
             "notes": {
                 "type": "array",
                 "items": {
@@ -461,8 +491,7 @@ fn note_quantize_many_schema() -> Value {
             "grid": {
                 "type": "number",
                 "exclusiveMinimum": 0,
-                "maximum": 5,
-                "description": "量化网格，单位秒，例如 0.125 表示 1/16"
+                "description": "量化网格，单位秒，例如 120 BPM 下 0.125 表示 1/16"
             }
         }),
         &["paths", "grid"],
@@ -524,12 +553,18 @@ fn transport_gain_schema() -> Value {
     )
 }
 
-static COMMANDS: [CommandSpec; 32] = [
+static COMMANDS: [CommandSpec; 33] = [
     CommandSpec {
         id: "project.create",
         summary: "创建或替换当前工程",
         undo: UndoKind::Snapshot,
         input_schema: project_create_schema,
+    },
+    CommandSpec {
+        id: "project.update",
+        summary: "修改速度、拍号、长度或循环区间",
+        undo: UndoKind::Snapshot,
+        input_schema: project_update_schema,
     },
     CommandSpec {
         id: "project.state",

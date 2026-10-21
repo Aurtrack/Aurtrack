@@ -26,6 +26,10 @@ export type TimelineView = {
   duration: number;
   playhead: number;
   empty: string;
+  barSeconds: number;
+  beatsPerBar: number;
+  loopStart: number;
+  loopEnd: number;
 };
 
 export type TimelineDragMode = "move" | "resize-start" | "resize-end";
@@ -128,20 +132,52 @@ export function drawTimeline(
   context.lineTo(PADDING + usableWidth, PADDING + RULER_HEIGHT);
   context.stroke();
 
+  const barSeconds = Math.max(0.0625, view.barSeconds);
+  const beatsPerBar = Math.max(1, view.beatsPerBar);
+  const beatSeconds = barSeconds / beatsPerBar;
+  const barCount = Math.ceil(view.duration / barSeconds - 1e-9);
+  const showBeats = (beatSeconds * pixelsPerSecond) >= 10;
   context.font = `10px ${MONO_FONT}`;
-  for (let index = 0; index <= view.duration * 2; index += 1) {
-    const second = index / 2;
-    const x = PADDING + second * pixelsPerSecond;
-    const major = index % 2 === 0;
-    context.strokeStyle = major ? COLORS.line : COLORS.grid;
+  for (let bar = 0; bar <= barCount; bar += 1) {
+    const barTime = bar * barSeconds;
+    const x = PADDING + barTime * pixelsPerSecond;
+    context.strokeStyle = COLORS.line;
     context.beginPath();
-    context.moveTo(x, PADDING + (major ? 14 : 20));
+    context.moveTo(x, PADDING + 12);
     context.lineTo(x, PADDING + RULER_HEIGHT);
     context.stroke();
-    if (major) {
-      context.fillStyle = COLORS.muted;
-      context.fillText(`${second}s`, x + 4, PADDING + 10);
+    context.fillStyle = COLORS.muted;
+    context.fillText(`${bar + 1}`, x + 4, PADDING + 10);
+
+    if (showBeats) {
+      for (let beat = 1; beat < beatsPerBar; beat += 1) {
+        const beatTime = barTime + beat * beatSeconds;
+        if (beatTime > view.duration + 1e-9) break;
+        const beatX = PADDING + beatTime * pixelsPerSecond;
+        context.strokeStyle = COLORS.grid;
+        context.beginPath();
+        context.moveTo(beatX, PADDING + 20);
+        context.lineTo(beatX, PADDING + RULER_HEIGHT);
+        context.stroke();
+      }
     }
+  }
+
+  if (view.loopEnd > view.loopStart) {
+    const loopStartX = PADDING + view.loopStart * pixelsPerSecond;
+    const loopEndX = PADDING + view.loopEnd * pixelsPerSecond;
+    context.strokeStyle = COLORS.blue;
+    context.setLineDash([4, 3]);
+    context.beginPath();
+    context.moveTo(loopStartX, PADDING + RULER_HEIGHT + 2);
+    context.lineTo(loopStartX, laneTop + laneArea);
+    context.moveTo(loopEndX, PADDING + RULER_HEIGHT + 2);
+    context.lineTo(loopEndX, laneTop + laneArea);
+    context.stroke();
+    context.setLineDash([]);
+    context.fillStyle = COLORS.blue;
+    context.font = `8px ${MONO_FONT}`;
+    context.fillText("LOOP", loopStartX + 4, PADDING + RULER_HEIGHT + 10);
   }
 
   if (view.tracks.length === 0) {

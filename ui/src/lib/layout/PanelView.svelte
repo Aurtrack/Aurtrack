@@ -17,6 +17,13 @@
     tracks={session.timelineTracks}
     duration={session.duration}
     playhead={session.playhead}
+    barSeconds={session.barSeconds}
+    beatsPerBar={
+      (session.timeSignature.numerator * 4) /
+      session.timeSignature.denominator
+    }
+    loopStart={session.loopStart}
+    loopEnd={session.loopEnd}
     onSeek={(seconds: number) => session.seek(seconds)}
     onSelectClip={(trackId: string, clipId: string) =>
       session.selectClip(trackId, clipId)}
@@ -32,6 +39,11 @@
     trackId={session.selectedTrack?.id ?? null}
     clip={session.selectedClip}
     busy={session.busy}
+    barSeconds={session.barSeconds}
+    beatsPerBar={
+      (session.timeSignature.numerator * 4) /
+      session.timeSignature.denominator
+    }
     selectedNoteIds={session.selectedNoteIds}
     onSelectNote={(noteId, mode) => session.selectNote(noteId, mode)}
     onSelectNotes={(noteIds, additive) =>
@@ -53,6 +65,11 @@
   <ClipEditor
     track={session.selectedTrack}
     busy={session.busy}
+    barSeconds={session.barSeconds}
+    beatsPerBar={
+      (session.timeSignature.numerator * 4) /
+      session.timeSignature.denominator
+    }
     selectedClipId={session.selectedClipId}
     selectedNoteIds={session.selectedNoteIds}
     onSelectClip={(id: string) => session.selectClipId(id)}
@@ -63,7 +80,7 @@
     onAddNote={(path, input) => void session.addNote(path, input)}
     onRemoveNote={(path: string) => void session.deleteNote(path)}
     onDuplicateSelected={() => void session.duplicateSelected()}
-    onQuantizeSelected={(grid) => void session.quantizeSelected(grid)}
+    onQuantizeSelected={() => void session.quantizeSelected()}
     onDeleteSelected={() => void session.deleteSelected()}
   />
 {:else if kind === "inspector"}
@@ -84,9 +101,16 @@
     fileName={session.projectFile}
     dirty={session.dirty}
     commandCount={session.commandCount}
+    tempo={session.tempo}
+    timeSignature={session.timeSignature}
+    lengthBars={session.lengthBars}
+    loopStart={session.loopStart}
+    loopEnd={session.loopEnd}
+    barSeconds={session.barSeconds}
     onPlay={() => void session.play()}
     onStop={() => void session.stop()}
     onGainChange={(value: number) => session.onGainChange(value)}
+    onTimebaseChange={(patch) => void session.updateProject(patch)}
   />
 {:else}
   <CommandLog lines={session.logLines} />

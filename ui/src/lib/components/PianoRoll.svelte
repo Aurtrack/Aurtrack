@@ -2,7 +2,8 @@
   import { onMount } from "svelte";
 
   import type { Clip } from "../api";
-  import { t } from "../i18n.svelte";
+  import { formatNumber, t } from "../i18n.svelte";
+  import { secondsToBeats } from "../music";
   import {
     drawPiano,
     hitTestPiano,
@@ -21,6 +22,8 @@
     trackId: string | null;
     clip: Clip | null;
     busy: boolean;
+    barSeconds: number;
+    beatsPerBar: number;
     selectedNoteIds: string[];
     onSelectNote: (noteId: string, mode: NoteSelectMode) => void;
     onSelectNotes: (noteIds: string[], additive: boolean) => void;
@@ -44,6 +47,8 @@
     trackId,
     clip,
     busy,
+    barSeconds,
+    beatsPerBar,
     selectedNoteIds,
     onSelectNote,
     onSelectNotes,
@@ -105,6 +110,9 @@
     rowHeight,
     visibleDuration,
     viewStart,
+    barSeconds,
+    beatsPerBar,
+    clipStart: clip?.start ?? 0,
   });
   let canvasHeight = $derived(pianoHeight(rowHeight));
 
@@ -497,7 +505,14 @@
     </div>
     <div class="section-foot">
       <span>{t("piano.hint")}</span>
-      <span>{clip.id} · {clip.duration.toFixed(2)} s</span>
+      <span>
+        {clip.id} · {t("piano.length", {
+          beats: formatNumber(
+            secondsToBeats(clip.duration, barSeconds, beatsPerBar),
+            2,
+          ),
+        })}
+      </span>
     </div>
   {:else}
     <p class="empty">{t("piano.empty")}</p>

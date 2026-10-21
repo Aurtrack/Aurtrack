@@ -1,11 +1,18 @@
 <script lang="ts">
   import type { Track } from "../api";
   import { formatNumber, t } from "../i18n.svelte";
+  import {
+    beatsToSeconds,
+    formatBarBeat,
+    secondsToBeats,
+  } from "../music";
   import type { NoteSelectMode } from "../session.svelte";
 
   interface Props {
     track: Track | null;
     busy: boolean;
+    barSeconds: number;
+    beatsPerBar: number;
     selectedClipId: string;
     onSelectClip: (id: string) => void;
     onAddClip: (
@@ -27,13 +34,15 @@
     onSelectNote: (noteId: string, mode: NoteSelectMode) => void;
     onDuplicateClip: (path: string) => void;
     onDuplicateSelected: () => void;
-    onQuantizeSelected: (grid: number) => void;
+    onQuantizeSelected: () => void;
     onDeleteSelected: () => void;
   }
 
   let {
     track,
     busy,
+    barSeconds,
+    beatsPerBar,
     selectedClipId,
     onSelectClip,
     onAddClip,
@@ -50,10 +59,10 @@
 
   let clipName = $state("");
   let clipStart = $state(0);
-  let clipDuration = $state(1);
+  let clipDuration = $state(4);
   let notePitch = $state(60);
   let noteStart = $state(0);
-  let noteDuration = $state(0.5);
+  let noteDuration = $state(1);
   let noteVelocity = $state(80);
 
   let clips = $derived(track?.clips ?? []);
@@ -93,6 +102,14 @@
     return `${name}${Math.floor(pitch / 12) - 1}`;
   }
 
+  function position(seconds: number): string {
+    return formatBarBeat(seconds, barSeconds, beatsPerBar);
+  }
+
+  function beatCount(seconds: number): string {
+    return formatNumber(secondsToBeats(seconds, barSeconds, beatsPerBar), 2);
+  }
+
   function submitClip(trackId: string) {
     const trimmed = clipName.trim();
     onAddClip(trackId, {
@@ -100,8 +117,12 @@
         trimmed.length > 0
           ? trimmed
           : t("clips.defaultName", { index: clips.length + 1 }),
-      start: Number(clipStart),
-      duration: Number(clipDuration),
+      start: beatsToSeconds(Number(clipStart), barSeconds, beatsPerBar),
+      duration: beatsToSeconds(
+        Number(clipDuration),
+        barSeconds,
+        beatsPerBar,
+      ),
     });
     clipName = "";
   }
@@ -109,8 +130,12 @@
   function submitNote(trackId: string, clipId: string) {
     onAddNote(`/tracks/${trackId}/clips/${clipId}`, {
       pitch: Number(notePitch),
-      start: Number(noteStart),
-      duration: Number(noteDuration),
+      start: beatsToSeconds(Number(noteStart), barSeconds, beatsPerBar),
+      duration: beatsToSeconds(
+        Number(noteDuration),
+        barSeconds,
+        beatsPerBar,
+      ),
       velocity: Number(noteVelocity) / 100,
     });
   }
@@ -137,7 +162,6 @@
           class="text-input"
           type="number"
           min="0"
-          max="5"
           step="0.25"
           bind:value={clipStart}
         />
@@ -148,7 +172,6 @@
           class="text-input"
           type="number"
           min="0.25"
-          max="5"
           step="0.25"
           bind:value={clipDuration}
         />
@@ -172,8 +195,8 @@
             <span class="track-name">{clip.name}</span>
             <span class="track-meta">
               {t("clips.range", {
-                start: formatNumber(clip.start, 2),
-                end: formatNumber(clip.start + clip.duration, 2),
+                start: position(clip.start),
+                end: position(clip.start + clip.duration),
                 notes: clip.notes.length,
               })}
             </span>
@@ -226,8 +249,8 @@
               <span class="note-pitch">{noteName(note.pitch)}</span>
               <span class="track-meta">
                 {t("notes.meta", {
-                  start: formatNumber(note.start, 2),
-                  duration: formatNumber(note.duration, 2),
+                  start: beatCount(note.start),
+                  duration: beatCount(note.duration),
                   velocity: formatNumber(note.velocity * 100),
                 })}
               </span>
@@ -262,7 +285,7 @@
           <button
             class="mini-button"
             disabled={busy}
-            onclick={() => onQuantizeSelected(0.125)}
+            onclick={() => onQuantizeSelected()}
           >
             {t("notes.quantize16")}
           </button>
@@ -293,7 +316,7 @@
             class="text-input"
             type="number"
             min="0"
-            step="0.125"
+            step="0.25"
             bind:value={noteStart}
           />
         </label>
@@ -302,8 +325,8 @@
           <input
             class="text-input"
             type="number"
-            min="0.0625"
-            step="0.125"
+            min="0.25"
+            step="0.25"
             bind:value={noteDuration}
           />
         </label>

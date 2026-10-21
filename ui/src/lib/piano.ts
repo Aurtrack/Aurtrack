@@ -45,6 +45,9 @@ export type PianoView = {
   rowHeight: number;
   visibleDuration: number;
   viewStart: number;
+  barSeconds: number;
+  beatsPerBar: number;
+  clipStart: number;
 };
 
 export type PianoDragMode = "move" | "resize-start" | "resize-end";
@@ -77,6 +80,9 @@ function clampedView(clip: Clip, view: PianoView): PianoView {
     rowHeight: view.rowHeight,
     visibleDuration,
     viewStart: Math.min(maxStart, Math.max(0, view.viewStart)),
+    barSeconds: Math.max(0.0625, view.barSeconds),
+    beatsPerBar: Math.max(1, view.beatsPerBar),
+    clipStart: Math.max(0, view.clipStart),
   };
 }
 
@@ -142,23 +148,30 @@ export function drawPiano(
   context.lineTo(PIANO_LEFT, height - PIANO_PADDING);
   context.stroke();
 
-  const step = 0.25;
-  const first = Math.floor(viewStart / step) * step;
-  const end = viewStart + visibleDuration;
-  for (let time = first; time <= end + 1e-9; time += step) {
-    if (time < 0) continue;
-    const x = PIANO_LEFT + (time - viewStart) * pixelsPerSecond;
+  const beatSeconds = view.barSeconds / view.beatsPerBar;
+  const absoluteStart = view.clipStart + viewStart;
+  const absoluteEnd = absoluteStart + visibleDuration;
+  const firstBeat = Math.floor((absoluteStart + 1e-9) / beatSeconds) * beatSeconds;
+  for (
+    let absolute = firstBeat;
+    absolute <= absoluteEnd + 1e-9;
+    absolute += beatSeconds
+  ) {
+    if (absolute < 0) continue;
+    const local = absolute - viewStart - view.clipStart;
+    const x = PIANO_LEFT + local * pixelsPerSecond;
     if (x < PIANO_LEFT - 1 || x > width - PIANO_PADDING + 1) continue;
-    const major = Math.abs(time - Math.round(time)) < 1e-9;
-    context.strokeStyle = major ? COLORS.strong : COLORS.line;
+    const bar = Math.round(absolute / view.barSeconds);
+    const isBar = Math.abs(absolute - bar * view.barSeconds) < 1e-6;
+    context.strokeStyle = isBar ? COLORS.strong : COLORS.line;
     context.beginPath();
     context.moveTo(x, PIANO_HEADER);
     context.lineTo(x, height - PIANO_PADDING);
     context.stroke();
-    if (major) {
+    if (isBar) {
       context.fillStyle = COLORS.muted;
       context.font = `9px ${MONO_FONT}`;
-      context.fillText(`${time.toFixed(0)}s`, x + 2, PIANO_HEADER - 5);
+      context.fillText(`${bar + 1}`, x + 2, PIANO_HEADER - 5);
     }
   }
 

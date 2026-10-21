@@ -40,6 +40,8 @@
 | signal domain | 信号域 | |
 | voice | 声部 | 复音语境；人声语境用「人声」 |
 | block | 块 | 音频处理的基本单位 |
+| tick | tick | 音乐时间最小单位；不译作“滴答” |
+| PPQ | PPQ | 每四分音符的 tick 数；当前为 960 |
 | sample | 采样 | |
 | sample rate | 采样率 | 不译作“采样频率” |
 | buffer | 缓冲区 | |

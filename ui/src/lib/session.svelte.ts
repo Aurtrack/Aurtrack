@@ -122,8 +122,6 @@ function loadRecentProjects(): RecentProject[] {
 }
 
 export class SessionStore {
-  readonly duration = 5;
-
   private project = $state<Project | null>(null);
   selectedTrackId = $state("");
   selectedClipId = $state("");
@@ -167,6 +165,16 @@ export class SessionStore {
   private unlistenClose: (() => void) | null = null;
 
   tracks = $derived(this.project?.tracks ?? []);
+  duration = $derived(this.project?.length_seconds ?? 5);
+  tempo = $derived(this.project?.tempo_bpm ?? 120);
+  timeSignature = $derived(
+    this.project?.time_signature ?? { numerator: 4, denominator: 4 },
+  );
+  barSeconds = $derived(this.project?.bar_seconds ?? 2);
+  secondsPerBeat = $derived(60 / Math.max(1, this.tempo));
+  lengthBars = $derived(this.project?.length_bars ?? 4);
+  loopStart = $derived(this.project?.loop_start ?? 0);
+  loopEnd = $derived(this.project?.loop_end ?? this.duration);
   projectFile = $derived(fileName(this.projectPath));
   selectedTrack = $derived(
     this.tracks.find((track) => track.id === this.selectedTrackId) ??
@@ -370,9 +378,10 @@ export class SessionStore {
     }
   }
 
-  async quantizeSelected(grid: number) {
+  async quantizeSelected() {
     const paths = this.selectedNotePaths;
     if (paths.length === 0) return;
+    const grid = this.secondsPerBeat / 4;
     if (paths.length === 1) {
       await this.quantizeNote(paths[0] ?? "", grid);
       return;
@@ -619,6 +628,31 @@ export class SessionStore {
       this.setStatus("status.recoveryDiscarded");
     } catch (error) {
       this.fail("status.recoveryDiscardFailed", error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  async updateProject(patch: {
+    tempo_bpm?: number;
+    time_signature?: { numerator: number; denominator: number };
+    length_bars?: number;
+    loop_start?: number;
+    loop_end?: number;
+  }) {
+    if (this.busy) return;
+    this.busy = true;
+    try {
+      await this.run("project.update", patch);
+      await this.refreshProject();
+      await this.reloadIfPlaying();
+      if (this.playhead > this.duration) {
+        this.playhead = this.duration;
+        void transportSeek(this.playhead).catch(() => {});
+      }
+      this.setStatus("status.projectUpdated");
+    } catch (error) {
+      this.fail("status.projectUpdateFailed", error);
     } finally {
       this.busy = false;
     }

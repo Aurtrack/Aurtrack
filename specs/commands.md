@@ -1,6 +1,8 @@
-# 命令规范 v0.9
+# 命令规范 v1.0
 
-这份文档定义 Aurtrack 的可运行命令面：32 条命令、统一的返回结构、寻址规则，以及 MCP 的映射方式。代码必须与本文一致。
+这份文档定义 Aurtrack 的可运行命令面：33 条命令、统一的返回结构、寻址规则，以及 MCP 的映射方式。代码必须与本文一致。
+
+工程格式 v3 用 music tick 存储位置（960 PPQ），命令边界仍用秒，避免 UI 和 CLI 直接操作 tick。旧 v2 工程会被拒绝。
 
 ## 信封
 
@@ -49,11 +51,14 @@
 | --- | --- | --- | --- | --- |
 | `name` | string | 否 | `Untitled` | 工程名，不能为空 |
 | `sample_rate` | integer | 否 | `48000` | 8000 到 192000 |
+| `tempo_bpm` | number | 否 | `120` | 20 到 300 |
+| `time_signature` | object | 否 | `4/4` | `{ "numerator": 4, "denominator": 4 }` |
+| `length_bars` | integer | 否 | `4` | 1 到 512 |
 
 返回：
 
 ```json
-{ "project": { "name": "demo", "sample_rate": 48000, "track_count": 0, "tracks": [] } }
+{ "project": { "name": "demo", "sample_rate": 48000, "tempo_bpm": 120, "time_signature": { "numerator": 4, "denominator": 4 }, "length_bars": 4, "length_seconds": 8.0, "track_count": 0, "tracks": [] } }
 ```
 
 ### 2. `track.create`
@@ -184,7 +189,7 @@
 
 | 参数 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
-| `seconds` | number | 是 | 目标位置，按 5 秒循环取模 |
+| `seconds` | number | 是 | 目标位置，按工程长度取模 |
 
 返回：
 
@@ -316,7 +321,7 @@
 
 ## 片段与音符
 
-时间线固定 5 秒；片段和音符都以秒为单位，音符 `start` 相对片段起点。
+工程长度由 `length_bars`、拍号和速度决定；命令边界仍以秒为单位，内部按 960 PPQ 的 tick 存储。音符 `start` 相对片段起点。
 
 ### 19. `clip.create`
 
@@ -324,8 +329,8 @@
 | --- | --- | --- | --- |
 | `track_id` | string | 是 | 目标轨道 |
 | `name` | string | 否 | 省略时自动生成 |
-| `start` | number | 是 | 片段起点，0 到 5 |
-| `duration` | number | 是 | 片段长度，必须让终点不超过 5 |
+| `start` | number | 是 | 片段起点，单位秒，必须在工程长度内 |
+| `duration` | number | 是 | 片段长度，单位秒，终点不能超过工程长度 |
 
 返回：
 
@@ -416,7 +421,7 @@
 | --- | --- | --- | --- |
 | `path` | string | 是 | `/tracks/{id}/clips/{id}` |
 
-在原片段后面复制一份新片段，新起点为原片段终点；如果超出 5 秒时间线则拒绝。片段里的音符会分配新的 `note-*` ID。
+在原片段后面复制一份新片段，新起点为原片段终点；如果超出工程长度则拒绝。片段里的音符会分配新的 `note-*` ID。
 
 返回：
 
@@ -443,7 +448,7 @@
 | 参数 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `path` | string | 是 | `/tracks/{id}/clips/{id}/notes/{id}` |
-| `grid` | number | 是 | 量化网格，单位秒，必须大于 0 且不超过 5 |
+| `grid` | number | 是 | 量化网格，单位秒，必须大于 0 且落在工程长度内 |
 
 把音符起点吸附到最近的网格点，并夹在片段范围内；音符长度和力度不变。`grid: 0.125` 表示 1/16。
 
@@ -478,8 +483,8 @@
 | --- | --- | --- | --- |
 | `track_id` | string | 是 | 目标轨道 |
 | `name` | string | 否 | 片段名，省略时自动生成 |
-| `start` | number | 是 | 片段起点，0 到 5 |
-| `duration` | number | 是 | 片段长度，必须让终点不超过 5 |
+| `start` | number | 是 | 片段起点，单位秒，必须在工程长度内 |
+| `duration` | number | 是 | 片段长度，单位秒，终点不能超过工程长度 |
 | `notes` | array | 是 | 音符草稿数组，可为空 |
 
 一次批量写入片段和音符，只产生一个撤销快照。
@@ -509,7 +514,7 @@
 | 参数 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `paths` | array | 是 | 音符路径数组，1 到 512 个，不能重复 |
-| `grid` | number | 是 | 量化网格，单位秒，必须大于 0 且不超过 5 |
+| `grid` | number | 是 | 量化网格，单位秒，必须大于 0 且落在工程长度内 |
 
 先校验全部路径，再按与 `note.quantize` 相同的规则计算新起点；任意一个不存在就整批拒绝。只产生一个撤销快照。
 
@@ -527,12 +532,30 @@
 | `track_id` | string | 是 | 目标轨道 ID |
 | `start` | number | 否 | 新起点；省略时保持原起点 |
 
-把片段移到另一条轨道或新起点，片段 ID、名称、长度和全部音符保持不变。目标轨道必须存在，移动后片段仍须落在 5 秒时间线内。跨轨移动只产生一个撤销快照。
+把片段移到另一条轨道或新起点，片段 ID、名称、长度和全部音符保持不变。目标轨道必须存在，移动后片段仍须落在工程长度内。跨轨移动只产生一个撤销快照。
 
 返回：
 
 ```json
 { "path": "/tracks/track-2/clips/clip-1", "track_id": "track-2", "clip": { } }
+```
+
+### 33. `project.update`
+
+修改速度、拍号、工程长度或循环区间，至少提供一个字段。改变拍号或长度后，现有片段必须仍落在工程长度内，否则整条命令拒绝。循环区间使用工程秒数；起点必须早于终点，终点不能超过工程长度。
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `tempo_bpm` | number | 否 | 20 到 300 |
+| `time_signature` | object | 否 | `{ "numerator": 1..32, "denominator": 1/2/4/8/16/32 }` |
+| `length_bars` | integer | 否 | 1 到 512 |
+| `loop_start` | number | 否 | 循环起点，单位秒 |
+| `loop_end` | number | 否 | 循环终点，单位秒 |
+
+返回：
+
+```json
+{ "project": { "tempo_bpm": 90, "time_signature": { "numerator": 3, "denominator": 4 }, "length_bars": 8, "loop_start": 0.0, "loop_end": 16.0 } }
 ```
 
 ## MCP 映射
@@ -542,6 +565,7 @@
 | 命令 | 工具 |
 | --- | --- |
 | `project.create` | `project_create` |
+| `project.update` | `project_update` |
 | `track.create` | `track_create` |
 | `device.add` | `device_add` |
 | `param.set` | `param_set` |

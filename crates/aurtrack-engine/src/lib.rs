@@ -66,7 +66,9 @@ pub fn note_envelope(local: f64, duration: f64) -> f64 {
 #[derive(Debug, Clone)]
 pub struct PlaybackPlan {
     pub sample_rate: u32,
+    pub loop_start_seconds: f64,
     pub loop_seconds: f64,
+    pub length_seconds: f64,
     pub tracks: Vec<TrackPlan>,
 }
 
@@ -74,7 +76,9 @@ impl PlaybackPlan {
     pub fn silent(sample_rate: u32, loop_seconds: f64) -> Self {
         Self {
             sample_rate,
+            loop_start_seconds: 0.0,
             loop_seconds,
+            length_seconds: loop_seconds,
             tracks: Vec::new(),
         }
     }
@@ -140,8 +144,8 @@ impl Playback {
 
     pub fn seek(&self, seconds: f64) {
         let plan = self.plan.load();
-        let loop_seconds = plan.loop_seconds.max(0.001);
-        let wrapped = seconds.rem_euclid(loop_seconds);
+        let length_seconds = plan.length_seconds.max(plan.loop_seconds).max(0.001);
+        let wrapped = seconds.rem_euclid(length_seconds);
         let frames = (wrapped * f64::from(plan.sample_rate)).round() as u64;
         if !self.playing.load(Ordering::Acquire) {
             self.position.store(frames, Ordering::Release);
@@ -186,14 +190,17 @@ impl Playback {
 
         let plan = self.plan.load();
         let sample_rate = f64::from(plan.sample_rate).max(1.0);
-        let loop_frames = (plan.loop_seconds * sample_rate).round().max(1.0) as u64;
+        let loop_start_frames = (plan.loop_start_seconds * sample_rate).round() as u64;
+        let loop_end_frames = (plan.loop_seconds * sample_rate)
+            .round()
+            .max(loop_start_frames.saturating_add(1) as f64) as u64;
         let fade_frames = (DECLICK_FADE_SECONDS * sample_rate).round().max(1.0) as u64;
-        let loop_fade = if loop_frames > fade_frames * 2 {
+        let loop_fade = if loop_end_frames.saturating_sub(loop_start_frames) > fade_frames * 2 {
             fade_frames
         } else {
             0
         };
-        let loop_start = loop_fade;
+        let loop_advance_start = loop_start_frames + loop_fade;
         let master_gain = f64::from_bits(self.master_gain.load(Ordering::Relaxed));
         let stop_requested = self.stop_requested.load(Ordering::Acquire);
         let target_gain = if stop_requested { 0.0 } else { 1.0 };
@@ -231,8 +238,14 @@ impl Playback {
             } else {
                 None
             };
-            let sample =
-                Self::sample_with_loop(&plan, position, loop_frames, loop_fade, master_gain);
+            let sample = Self::sample_with_loop(
+                &plan,
+                position,
+                loop_start_frames,
+                loop_end_frames,
+                loop_fade,
+                master_gain,
+            );
             *slot = (sample * seek_gain.unwrap_or(1.0) * gain) as f32;
 
             if seek_gain.is_some() {
@@ -276,7 +289,7 @@ impl Playback {
             } else if gain < target_gain {
                 gain = (gain + gain_step).min(target_gain);
             }
-            position = advance(position, loop_frames, loop_start);
+            position = advance(position, loop_end_frames, loop_advance_start);
         }
 
         self.position.store(position, Ordering::Release);
@@ -292,21 +305,22 @@ impl Playback {
     fn sample_with_loop(
         plan: &PlaybackPlan,
         position: u64,
-        loop_frames: u64,
+        loop_start: u64,
+        loop_end: u64,
         loop_fade: u64,
         master_gain: f64,
     ) -> f64 {
         if loop_fade == 0 {
             return Self::sample_at(plan, position, master_gain);
         }
-        let start = loop_frames.saturating_sub(loop_fade);
-        if position < start {
+        let start = loop_end.saturating_sub(loop_fade);
+        if position < start || position >= loop_end {
             return Self::sample_at(plan, position, master_gain);
         }
         let offset = position - start;
         let blend = (offset + 1) as f64 / loop_fade as f64;
         let tail = Self::sample_at(plan, position, master_gain);
-        let head = Self::sample_at(plan, offset, master_gain);
+        let head = Self::sample_at(plan, loop_start + offset, master_gain);
         tail * (1.0 - blend) + head * blend
     }
 
@@ -350,7 +364,9 @@ mod tests {
     fn plan() -> PlaybackPlan {
         PlaybackPlan {
             sample_rate: 48_000,
+            loop_start_seconds: 0.0,
             loop_seconds: 5.0,
+            length_seconds: 5.0,
             tracks: vec![TrackPlan {
                 frequency: Some(440.0),
                 gain: 1.0,
@@ -402,7 +418,9 @@ mod tests {
         let playback = Playback::new(48_000);
         playback.set_plan(PlaybackPlan {
             sample_rate: 48_000,
+            loop_start_seconds: 0.0,
             loop_seconds: 0.1,
+            length_seconds: 0.1,
             tracks: vec![TrackPlan {
                 frequency: Some(331.0),
                 gain: 1.0,
@@ -445,7 +463,9 @@ mod tests {
         let playback = Playback::new(48_000);
         playback.set_plan(PlaybackPlan {
             sample_rate: 48_000,
+            loop_start_seconds: 0.0,
             loop_seconds: 5.0,
+            length_seconds: 5.0,
             tracks: vec![TrackPlan {
                 frequency: None,
                 gain: 1.0,
@@ -477,7 +497,9 @@ mod tests {
         let playback = Playback::new(48_000);
         playback.set_plan(PlaybackPlan {
             sample_rate: 48_000,
+            loop_start_seconds: 0.0,
             loop_seconds: 5.0,
+            length_seconds: 5.0,
             tracks: vec![TrackPlan {
                 frequency: None,
                 gain: 1.0,
@@ -533,11 +555,37 @@ mod tests {
     }
 
     #[test]
+    fn custom_loop_range_crossfades() {
+        let playback = Playback::new(48_000);
+        playback.set_plan(PlaybackPlan {
+            sample_rate: 48_000,
+            loop_start_seconds: 0.1,
+            loop_seconds: 0.2,
+            length_seconds: 0.3,
+            tracks: vec![TrackPlan {
+                frequency: Some(331.0),
+                gain: 1.0,
+                notes: Vec::new(),
+            }],
+        });
+        playback.play();
+        let mut buffer = vec![0.0_f32; 12_000];
+        playback.render(&mut buffer);
+        let max_delta = buffer
+            .windows(2)
+            .map(|pair| (pair[1] - pair[0]).abs())
+            .fold(0.0_f32, f32::max);
+        assert!(max_delta < 0.03, "custom loop step too large: {max_delta}");
+    }
+
+    #[test]
     fn output_is_clamped() {
         let playback = Playback::new(48_000);
         playback.set_plan(PlaybackPlan {
             sample_rate: 48_000,
+            loop_start_seconds: 0.0,
             loop_seconds: 5.0,
+            length_seconds: 5.0,
             tracks: (0..8)
                 .map(|_| TrackPlan {
                     frequency: Some(440.0),
@@ -557,7 +605,9 @@ mod tests {
         let playback = Playback::new(48_000);
         playback.set_plan(PlaybackPlan {
             sample_rate: 48_000,
+            loop_start_seconds: 0.0,
             loop_seconds: 5.0,
+            length_seconds: 5.0,
             tracks: vec![TrackPlan {
                 frequency: None,
                 gain: 1.0,

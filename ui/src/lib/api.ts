@@ -21,6 +21,8 @@ export type Note = {
   pitch: number;
   start: number;
   duration: number;
+  start_tick: number;
+  duration_tick: number;
   velocity: number;
 };
 
@@ -29,7 +31,14 @@ export type Clip = {
   name: string;
   start: number;
   duration: number;
+  start_tick: number;
+  duration_tick: number;
   notes: Note[];
+};
+
+export type TimeSignature = {
+  numerator: number;
+  denominator: number;
 };
 
 export type Source =
@@ -47,6 +56,15 @@ export type Track = {
 export type Project = {
   name: string;
   sample_rate: number;
+  tempo_bpm: number;
+  time_signature: TimeSignature;
+  length_bars: number;
+  length_seconds: number;
+  bar_seconds: number;
+  loop_start: number;
+  loop_end: number;
+  loop_start_tick: number;
+  loop_end_tick: number;
   tracks: Track[];
 };
 

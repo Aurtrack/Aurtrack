@@ -921,6 +921,18 @@ body {
   letter-spacing: 0.1em;
 }
 
+.timebase-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 10px 22px;
+  border-bottom: 1px solid var(--line);
+}
+
+.timebase-grid .field {
+  padding: 0;
+}
+
 .control-row {
   display: flex;
   align-items: center;

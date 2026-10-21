@@ -27,8 +27,6 @@ use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-const LOOP_SECONDS: f64 = 5.0;
-
 /// 音频设备状态，供 UI 与 MCP 查询。
 #[derive(Debug, Clone, Serialize)]
 pub struct AudioInfo {
@@ -175,8 +173,8 @@ fn build_plan(project: &Project, sample_rate: u32) -> PlaybackPlan {
                 .iter()
                 .flat_map(|clip| {
                     clip.notes.iter().map(move |note| NotePlan {
-                        start: clip.start + note.start,
-                        duration: note.duration,
+                        start: project.ticks_to_seconds(clip.start_tick + note.start_tick),
+                        duration: project.ticks_to_seconds(note.duration_tick),
                         frequency: midi_to_hz(note.pitch),
                         velocity: note.velocity,
                     })
@@ -191,7 +189,9 @@ fn build_plan(project: &Project, sample_rate: u32) -> PlaybackPlan {
         .collect();
     PlaybackPlan {
         sample_rate,
-        loop_seconds: LOOP_SECONDS,
+        loop_start_seconds: project.loop_start_seconds(),
+        loop_seconds: project.loop_end_seconds(),
+        length_seconds: project.length_seconds(),
         tracks,
     }
 }
@@ -221,7 +221,7 @@ struct GainArgs {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use aurtrack_session::{Clip, Note, Track};
+    use aurtrack_session::{Clip, Note, TICKS_PER_QUARTER, TimeSignature, Track};
 
     fn run(runtime: &mut Runtime, cmd: &str, args: Value) -> Result<CommandResponse, CommandError> {
         runtime.execute(&CommandRequest {
@@ -257,6 +257,14 @@ mod tests {
         let project = Project {
             name: "notes".to_string(),
             sample_rate: 48_000,
+            tempo_bpm: 120.0,
+            time_signature: TimeSignature {
+                numerator: 4,
+                denominator: 4,
+            },
+            length_bars: 2,
+            loop_start_tick: 0,
+            loop_end_tick: 8 * TICKS_PER_QUARTER,
             tracks: vec![Track {
                 id: "track-1".to_string(),
                 name: "lead".to_string(),
@@ -265,13 +273,13 @@ mod tests {
                 clips: vec![Clip {
                     id: "clip-1".to_string(),
                     name: "verse".to_string(),
-                    start: 0.5,
-                    duration: 1.0,
+                    start_tick: TICKS_PER_QUARTER,
+                    duration_tick: 2 * TICKS_PER_QUARTER,
                     notes: vec![Note {
                         id: "note-1".to_string(),
                         pitch: 69,
-                        start: 0.25,
-                        duration: 0.5,
+                        start_tick: TICKS_PER_QUARTER / 2,
+                        duration_tick: TICKS_PER_QUARTER,
                         velocity: 0.8,
                     }],
                 }],
@@ -279,17 +287,20 @@ mod tests {
         };
 
         let plan = build_plan(&project, 48_000);
+        assert!((plan.loop_start_seconds - 0.0).abs() < 1e-9);
+        assert!((plan.loop_seconds - 4.0).abs() < 1e-9);
+        assert!((plan.length_seconds - 4.0).abs() < 1e-9);
         assert_eq!(plan.tracks[0].notes.len(), 1);
         assert!((plan.tracks[0].notes[0].start - 0.75).abs() < 1e-9);
         assert!((plan.tracks[0].notes[0].frequency - 440.0).abs() < 0.01);
     }
 
     #[test]
-    fn describe_lists_thirty_two_commands() {
+    fn describe_lists_thirty_three_commands() {
         let mut runtime = Runtime::new();
         let response = run(&mut runtime, "describe", json!({})).unwrap();
         let commands = response.data["commands"].as_array().unwrap();
-        assert_eq!(commands.len(), 32);
+        assert_eq!(commands.len(), 33);
         assert!(
             commands
                 .iter()
