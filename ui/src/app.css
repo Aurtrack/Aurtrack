@@ -1462,7 +1462,8 @@ button {
   cursor: pointer;
 }
 
-button + button {
+.actions button + button,
+.note-actions .mini-button + .mini-button {
   border-left: 0;
 }
 
