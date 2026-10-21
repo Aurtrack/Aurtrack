@@ -176,6 +176,8 @@ export function drawTimeline(
     context.stroke();
     context.setLineDash([]);
     context.fillStyle = COLORS.blue;
+    context.fillRect(loopStartX - 2, PADDING + RULER_HEIGHT - 3, 4, 4);
+    context.fillRect(loopEndX - 2, PADDING + RULER_HEIGHT - 3, 4, 4);
     context.font = `8px ${MONO_FONT}`;
     context.fillText("LOOP", loopStartX + 4, PADDING + RULER_HEIGHT + 10);
   }
@@ -330,6 +332,29 @@ export function secondsAtX(
   if (usableWidth <= 0) return 0;
   const ratio = (clientX - rect.left - PADDING) / usableWidth;
   return Math.min(duration, Math.max(0, ratio * duration));
+}
+
+export type LoopEdge = "start" | "end";
+
+export function hitTestLoop(
+  canvas: HTMLCanvasElement,
+  view: TimelineView,
+  clientX: number,
+  clientY: number,
+): LoopEdge | null {
+  const rect = canvas.getBoundingClientRect();
+  if (rect.width === 0 || rect.height === 0 || view.duration <= 0) return null;
+  const x = clientX - rect.left;
+  const y = clientY - rect.top;
+  if (y < PADDING || y > PADDING + RULER_HEIGHT + 6) return null;
+  const usableWidth = rect.width - PADDING * 2;
+  const pixelsPerSecond = usableWidth / view.duration;
+  const startX = PADDING + view.loopStart * pixelsPerSecond;
+  const endX = PADDING + view.loopEnd * pixelsPerSecond;
+  const startDistance = Math.abs(x - startX);
+  const endDistance = Math.abs(x - endX);
+  if (Math.min(startDistance, endDistance) > 7) return null;
+  return startDistance <= endDistance ? "start" : "end";
 }
 
 export function trackAtY(

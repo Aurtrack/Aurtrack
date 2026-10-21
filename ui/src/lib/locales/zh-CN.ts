@@ -40,7 +40,8 @@ export const zhCN = {
   "timeline.title": "时间线",
   "timeline.meta": (params) => `${params.tracks} 轨 / ${params.duration} 秒`,
   "timeline.empty": "还没有轨道",
-  "timeline.hint": "点击定位 / 拖动编辑 / 片段上下拖到其他轨道",
+  "timeline.hint":
+    "点击定位 / 拖动编辑 / 片段上下拖到其他轨道 / 拖动 LOOP 虚线改循环",
   "timeline.playhead": (params) => `T+${params.seconds} 秒`,
   "timeline.trackMeta": (params) =>
     `正弦 ${params.frequency} Hz / ${params.devices} 设备`,
@@ -144,6 +145,7 @@ export const zhCN = {
   "transport.master": "主音量",
   "transport.play": "播放",
   "transport.stop": "停止",
+  "transport.metronome": "节拍器",
   "transport.render": "渲染 WAV",
   "transport.undo": "撤销",
   "transport.redo": "重做",
@@ -190,6 +192,8 @@ export const zhCN = {
   "status.deviceRemoveFailed": (params) => `删除设备失败：${params.message}`,
   "status.gainSetFailed": (params) => `设置增益失败：${params.message}`,
   "status.projectUpdated": "已更新速度与拍号",
+  "status.metronomeChanged": "节拍器状态已更新",
+  "status.metronomeFailed": (params) => `切换节拍器失败：${params.message}`,
   "status.projectUpdateFailed": (params) => `更新时间基准失败：${params.message}`,
   "status.undone": "已撤销",
   "status.undoFailed": (params) => `撤销失败：${params.message}`,

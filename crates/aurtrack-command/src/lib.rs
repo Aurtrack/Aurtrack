@@ -553,7 +553,16 @@ fn transport_gain_schema() -> Value {
     )
 }
 
-static COMMANDS: [CommandSpec; 33] = [
+fn transport_metronome_schema() -> Value {
+    object_schema(
+        json!({
+            "enabled": { "type": "boolean", "description": "是否启用节拍器" }
+        }),
+        &["enabled"],
+    )
+}
+
+static COMMANDS: [CommandSpec; 34] = [
     CommandSpec {
         id: "project.create",
         summary: "创建或替换当前工程",
@@ -733,6 +742,12 @@ static COMMANDS: [CommandSpec; 33] = [
         summary: "设置实时音量",
         undo: UndoKind::None,
         input_schema: transport_gain_schema,
+    },
+    CommandSpec {
+        id: "transport.metronome",
+        summary: "开关节拍器",
+        undo: UndoKind::None,
+        input_schema: transport_metronome_schema,
     },
     CommandSpec {
         id: "describe",

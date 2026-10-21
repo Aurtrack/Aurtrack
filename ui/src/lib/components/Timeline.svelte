@@ -4,9 +4,11 @@
   import { formatNumber, t } from "../i18n.svelte";
   import {
     drawTimeline,
+    hitTestLoop,
     hitTestTimeline,
     secondsAtX,
     trackAtY,
+    type LoopEdge,
     type TimelineHit,
     type TimelineTrack,
   } from "../timeline";
@@ -30,6 +32,7 @@
       patch: { start: number; duration: number },
     ) => void;
     onMoveClip?: (path: string, trackId: string, start: number) => void;
+    onUpdateLoop?: (start: number, end: number) => void;
   }
 
   let {
@@ -45,6 +48,7 @@
     onUpdateClip,
     onUpdateNote,
     onMoveClip,
+    onUpdateLoop,
   }: Props = $props();
 
   type Preview = {
@@ -67,6 +71,12 @@
     pixelsPerSecond: number;
   };
 
+  type LoopDrag = {
+    edge: LoopEdge;
+    start: number;
+    end: number;
+  };
+
   const SNAP = 0.125;
 
   let canvas = $state<HTMLCanvasElement>();
@@ -74,10 +84,18 @@
   let cursor = $state("crosshair");
   let preview = $state<Preview | null>(null);
   let drag: DragState | null = null;
+  let loopDrag: LoopDrag | null = null;
+  let loopPreview = $state<{ start: number; end: number } | null>(null);
   let height = $derived(
     Math.max(160, 54 + Math.max(1, tracks.length) * 56),
   );
   let displayTracks = $derived(applyPreview(tracks, preview));
+  let displayLoop = $derived(
+    loopPreview ?? { start: loopStart, end: loopEnd },
+  );
+  let loopSnap = $derived(
+    Math.max(0.001, barSeconds / Math.max(1, beatsPerBar) / 4),
+  );
 
   $effect(() => {
     if (!canvas) return;
@@ -88,8 +106,8 @@
       empty: t("timeline.empty"),
       barSeconds,
       beatsPerBar,
-      loopStart,
-      loopEnd,
+      loopStart: displayLoop.start,
+      loopEnd: displayLoop.end,
     });
   });
 
@@ -104,8 +122,8 @@
         empty: t("timeline.empty"),
         barSeconds,
         beatsPerBar,
-        loopStart,
-        loopEnd,
+        loopStart: displayLoop.start,
+        loopEnd: displayLoop.end,
       });
     });
     observer.observe(canvas);
@@ -179,24 +197,47 @@
     return Math.round(value / SNAP) * SNAP;
   }
 
+  function snapLoop(value: number): number {
+    return Math.round(value / loopSnap) * loopSnap;
+  }
+
   function clamp(value: number, minimum: number, maximum: number): number {
     return Math.min(maximum, Math.max(minimum, value));
   }
 
+  function timelineView() {
+    return {
+      tracks,
+      duration,
+      playhead,
+      empty: t("timeline.empty"),
+      barSeconds,
+      beatsPerBar,
+      loopStart,
+      loopEnd,
+    };
+  }
+
   function handlePointerDown(event: PointerEvent) {
     if (!canvas) return;
+    const loopEdge = hitTestLoop(
+      canvas,
+      timelineView(),
+      event.clientX,
+      event.clientY,
+    );
+    if (loopEdge) {
+      loopDrag = { edge: loopEdge, start: loopStart, end: loopEnd };
+      loopPreview = { start: loopStart, end: loopEnd };
+      cursor = "ew-resize";
+      canvas.setPointerCapture(event.pointerId);
+      event.preventDefault();
+      return;
+    }
+
     const hit = hitTestTimeline(
       canvas,
-      {
-        tracks,
-        duration,
-        playhead,
-        empty: t("timeline.empty"),
-        barSeconds,
-        beatsPerBar,
-        loopStart,
-        loopEnd,
-      },
+      timelineView(),
       event.clientX,
       event.clientY,
     );
@@ -258,6 +299,25 @@
 
   function handlePointerMove(event: PointerEvent) {
     if (!canvas) return;
+
+    if (loopDrag) {
+      const seconds = clamp(
+        snapLoop(secondsAtX(canvas, event.clientX, duration)),
+        0,
+        duration,
+      );
+      let start = loopDrag.start;
+      let end = loopDrag.end;
+      if (loopDrag.edge === "start") {
+        start = Math.min(seconds, end - loopSnap);
+      } else {
+        end = Math.max(seconds, start + loopSnap);
+      }
+      loopPreview = { start, end };
+      cursor = "ew-resize";
+      event.preventDefault();
+      return;
+    }
 
     if (drag) {
       const delta = (event.clientX - drag.startX) / drag.pixelsPerSecond;
@@ -341,18 +401,13 @@
       return;
     }
 
+    if (hitTestLoop(canvas, timelineView(), event.clientX, event.clientY)) {
+      cursor = "ew-resize";
+      return;
+    }
     const hover = hitTestTimeline(
       canvas,
-      {
-        tracks,
-        duration,
-        playhead,
-        empty: t("timeline.empty"),
-        barSeconds,
-        beatsPerBar,
-        loopStart,
-        loopEnd,
-      },
+      timelineView(),
       event.clientX,
       event.clientY,
     );
@@ -367,6 +422,19 @@
     if (!canvas) return;
     if (canvas.hasPointerCapture(event.pointerId)) {
       canvas.releasePointerCapture(event.pointerId);
+    }
+
+    if (loopDrag && loopPreview) {
+      const changed =
+        Math.abs(loopPreview.start - loopDrag.start) > 1e-9 ||
+        Math.abs(loopPreview.end - loopDrag.end) > 1e-9;
+      if (changed) {
+        onUpdateLoop?.(loopPreview.start, loopPreview.end);
+      }
+      loopDrag = null;
+      loopPreview = null;
+      cursor = "crosshair";
+      return;
     }
 
     const origin = drag;
@@ -409,12 +477,14 @@
   function handlePointerCancel() {
     drag = null;
     preview = null;
+    loopDrag = null;
+    loopPreview = null;
     dragging = false;
     cursor = "crosshair";
   }
 
   function handlePointerLeave() {
-    if (!drag) cursor = "crosshair";
+    if (!drag && !loopDrag) cursor = "crosshair";
   }
 </script>
 

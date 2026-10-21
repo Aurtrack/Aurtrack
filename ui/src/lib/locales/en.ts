@@ -44,7 +44,8 @@ export const en: Record<MessageKey, Message> = {
     return `${count} TRACK${count === 1 ? "" : "S"} / ${params.duration} S`;
   },
   "timeline.empty": "NO TRACKS",
-  "timeline.hint": "CLICK TO SEEK / DRAG TO EDIT / DRAG A CLIP ACROSS TRACKS",
+  "timeline.hint":
+    "CLICK TO SEEK / DRAG TO EDIT / DRAG CLIP ACROSS TRACKS / DRAG LOOP EDGES",
   "timeline.playhead": (params) => `T+${params.seconds} S`,
   "timeline.trackMeta": (params) =>
     `SINE ${params.frequency} HZ / ${params.devices} DEV`,
@@ -149,6 +150,7 @@ export const en: Record<MessageKey, Message> = {
   "transport.master": "MASTER",
   "transport.play": "PLAY",
   "transport.stop": "STOP",
+  "transport.metronome": "METRONOME",
   "transport.render": "RENDER WAV",
   "transport.undo": "UNDO",
   "transport.redo": "REDO",
@@ -200,6 +202,9 @@ export const en: Record<MessageKey, Message> = {
     `Remove device failed: ${params.message}`,
   "status.gainSetFailed": (params) => `Set gain failed: ${params.message}`,
   "status.projectUpdated": "Tempo and meter updated",
+  "status.metronomeChanged": "Metronome updated",
+  "status.metronomeFailed": (params) =>
+    `Metronome toggle failed: ${params.message}`,
   "status.projectUpdateFailed": (params) =>
     `Timebase update failed: ${params.message}`,
   "status.undone": "Undone",

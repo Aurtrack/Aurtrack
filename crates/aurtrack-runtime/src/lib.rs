@@ -22,7 +22,7 @@ use std::sync::Arc;
 use aurtrack_command::{CommandError, CommandRequest, CommandResponse};
 use aurtrack_engine::{NotePlan, Playback, PlaybackPlan, TrackPlan, midi_to_hz};
 use aurtrack_io::AudioHandle;
-use aurtrack_session::{Project, Session, Source};
+use aurtrack_session::{Project, Session, Source, TICKS_PER_QUARTER};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -42,6 +42,7 @@ pub struct Runtime {
     playback: Arc<Playback>,
     audio: Option<AudioHandle>,
     sample_rate: u32,
+    metronome: bool,
 }
 
 impl Default for Runtime {
@@ -57,6 +58,7 @@ impl Runtime {
             playback: Arc::new(Playback::new(48_000)),
             audio: None,
             sample_rate: 48_000,
+            metronome: false,
         }
     }
 
@@ -92,6 +94,7 @@ impl Runtime {
             "transport.seek" => self.transport_seek(&request.args),
             "transport.state" => Ok(self.transport_state()),
             "transport.gain" => self.transport_gain(&request.args),
+            "transport.metronome" => self.transport_metronome(&request.args),
             _ => self.session.execute(request),
         }
     }
@@ -110,12 +113,13 @@ impl Runtime {
             .session
             .project()
             .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
-        let plan = build_plan(project, self.sample_rate);
+        let plan = build_plan(project, self.sample_rate, self.metronome);
         self.playback.set_plan(plan);
         self.playback.play();
         Ok(CommandResponse::ok(json!({
             "playing": true,
-            "sample_rate": self.sample_rate
+            "sample_rate": self.sample_rate,
+            "metronome": self.metronome,
         })))
     }
 
@@ -139,7 +143,8 @@ impl Runtime {
         CommandResponse::ok(json!({
             "playing": self.playback.is_playing(),
             "position": self.playback.position_seconds(),
-            "sample_rate": self.sample_rate
+            "sample_rate": self.sample_rate,
+            "metronome": self.metronome,
         }))
     }
 
@@ -151,10 +156,22 @@ impl Runtime {
         self.playback.set_master_gain(args.gain);
         Ok(CommandResponse::ok(json!({ "gain": args.gain })))
     }
+
+    fn transport_metronome(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        let args: MetronomeArgs = parse_args(args)?;
+        if self.session.project().is_none() {
+            return Err(CommandError::not_found("还没有工程，先执行 project.create"));
+        }
+        self.metronome = args.enabled;
+        if self.playback.is_playing() {
+            return self.transport_play();
+        }
+        Ok(CommandResponse::ok(json!({ "metronome": self.metronome })))
+    }
 }
 
-fn build_plan(project: &Project, sample_rate: u32) -> PlaybackPlan {
-    let tracks = project
+fn build_plan(project: &Project, sample_rate: u32, metronome: bool) -> PlaybackPlan {
+    let mut tracks: Vec<TrackPlan> = project
         .tracks
         .iter()
         .map(|track| {
@@ -187,6 +204,29 @@ fn build_plan(project: &Project, sample_rate: u32) -> PlaybackPlan {
             }
         })
         .collect();
+    if metronome {
+        let length_ticks = project.length_ticks();
+        let bar_ticks = project.ticks_per_bar().max(1);
+        let beat_seconds = project.ticks_to_seconds(TICKS_PER_QUARTER);
+        let click_seconds = beat_seconds.clamp(0.008, 0.04);
+        let mut notes = Vec::new();
+        let mut tick = 0;
+        while tick < length_ticks {
+            let accent = tick % bar_ticks == 0;
+            notes.push(NotePlan {
+                start: project.ticks_to_seconds(tick),
+                duration: click_seconds,
+                frequency: if accent { 1760.0 } else { 1320.0 },
+                velocity: if accent { 0.7 } else { 0.45 },
+            });
+            tick += TICKS_PER_QUARTER;
+        }
+        tracks.push(TrackPlan {
+            frequency: None,
+            gain: 0.8,
+            notes,
+        });
+    }
     PlaybackPlan {
         sample_rate,
         loop_start_seconds: project.loop_start_seconds(),
@@ -218,6 +258,12 @@ struct GainArgs {
     gain: f64,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct MetronomeArgs {
+    enabled: bool,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -243,6 +289,21 @@ mod tests {
         let mut runtime = Runtime::new();
         let response = run(&mut runtime, "transport.seek", json!({ "seconds": 2.5 })).unwrap();
         assert!((response.data["position"].as_f64().unwrap() - 2.5).abs() < 0.001);
+    }
+
+    #[test]
+    fn metronome_toggles_and_is_reported() {
+        let mut runtime = Runtime::new();
+        run(&mut runtime, "project.create", json!({})).unwrap();
+        let response = run(
+            &mut runtime,
+            "transport.metronome",
+            json!({ "enabled": true }),
+        )
+        .unwrap();
+        assert_eq!(response.data["metronome"], true);
+        let state = run(&mut runtime, "transport.state", json!({})).unwrap();
+        assert_eq!(state.data["metronome"], true);
     }
 
     #[test]
@@ -286,7 +347,14 @@ mod tests {
             }],
         };
 
-        let plan = build_plan(&project, 48_000);
+        let plan = build_plan(&project, 48_000, false);
+        assert_eq!(plan.tracks.len(), 1);
+        let metronome_plan = build_plan(&project, 48_000, true);
+        assert_eq!(metronome_plan.tracks.len(), 2);
+        assert_eq!(metronome_plan.tracks[1].notes.len(), 8);
+        assert!((metronome_plan.tracks[1].notes[0].frequency - 1760.0).abs() < 1e-9);
+        assert!((metronome_plan.tracks[1].notes[1].frequency - 1320.0).abs() < 1e-9);
+        assert!((metronome_plan.tracks[1].notes[1].start - 0.5).abs() < 1e-9);
         assert!((plan.loop_start_seconds - 0.0).abs() < 1e-9);
         assert!((plan.loop_seconds - 4.0).abs() < 1e-9);
         assert!((plan.length_seconds - 4.0).abs() < 1e-9);
@@ -296,11 +364,11 @@ mod tests {
     }
 
     #[test]
-    fn describe_lists_thirty_three_commands() {
+    fn describe_lists_thirty_four_commands() {
         let mut runtime = Runtime::new();
         let response = run(&mut runtime, "describe", json!({})).unwrap();
         let commands = response.data["commands"].as_array().unwrap();
-        assert_eq!(commands.len(), 33);
+        assert_eq!(commands.len(), 34);
         assert!(
             commands
                 .iter()

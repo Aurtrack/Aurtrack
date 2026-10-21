@@ -135,6 +135,7 @@ export type TransportState = {
   playing: boolean;
   position: number;
   sample_rate: number;
+  metronome: boolean;
 };
 
 export type AudioInfo = {

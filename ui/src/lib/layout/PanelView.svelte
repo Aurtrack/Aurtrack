@@ -33,6 +33,8 @@
       void session.updateNote(path, patch)}
     onMoveClip={(path: string, trackId: string, start: number) =>
       void session.moveClip(path, trackId, start)}
+    onUpdateLoop={(start: number, end: number) =>
+      void session.updateProject({ loop_start: start, loop_end: end })}
   />
 {:else if kind === "piano"}
   <PianoRoll
@@ -96,6 +98,7 @@
   <TransportPanel
     playing={session.playing}
     busy={session.busy}
+    metronome={session.metronome}
     gain={session.gain}
     status={session.statusText}
     fileName={session.projectFile}
@@ -110,6 +113,7 @@
     onPlay={() => void session.play()}
     onStop={() => void session.stop()}
     onGainChange={(value: number) => session.onGainChange(value)}
+    onMetronomeChange={(enabled) => void session.setMetronome(enabled)}
     onTimebaseChange={(patch) => void session.updateProject(patch)}
   />
 {:else}

@@ -5,6 +5,7 @@
   interface Props {
     playing: boolean;
     busy: boolean;
+    metronome: boolean;
     gain: number;
     status: string;
     fileName: string;
@@ -19,6 +20,7 @@
     onPlay: () => void;
     onStop: () => void;
     onGainChange: (value: number) => void;
+    onMetronomeChange: (enabled: boolean) => void;
     onTimebaseChange: (patch: {
       tempo_bpm?: number;
       time_signature?: TimeSignature;
@@ -31,6 +33,7 @@
   let {
     playing,
     busy,
+    metronome,
     gain,
     status,
     fileName,
@@ -45,6 +48,7 @@
     onPlay,
     onStop,
     onGainChange,
+    onMetronomeChange,
     onTimebaseChange,
   }: Props = $props();
 
@@ -184,6 +188,18 @@
     <button disabled={busy || !playing} onclick={onStop}>
       {t("transport.stop")}
     </button>
+    <label class="metronome-toggle">
+      <input
+        type="checkbox"
+        checked={metronome}
+        disabled={busy}
+        onchange={(event) =>
+          onMetronomeChange(
+            (event.currentTarget as HTMLInputElement).checked,
+          )}
+      />
+      <span>{t("transport.metronome")}</span>
+    </label>
   </div>
 
   <p class="status">

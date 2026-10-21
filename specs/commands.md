@@ -1,6 +1,6 @@
-# 命令规范 v1.0
+# 命令规范 v1.1
 
-这份文档定义 Aurtrack 的可运行命令面：33 条命令、统一的返回结构、寻址规则，以及 MCP 的映射方式。代码必须与本文一致。
+这份文档定义 Aurtrack 的可运行命令面：34 条命令、统一的返回结构、寻址规则，以及 MCP 的映射方式。代码必须与本文一致。
 
 工程格式 v3 用 music tick 存储位置（960 PPQ），命令边界仍用秒，避免 UI 和 CLI 直接操作 tick。旧 v2 工程会被拒绝。
 
@@ -558,6 +558,20 @@
 { "project": { "tempo_bpm": 90, "time_signature": { "numerator": 3, "denominator": 4 }, "length_bars": 8, "loop_start": 0.0, "loop_end": 16.0 } }
 ```
 
+### 34. `transport.metronome`
+
+开关实时节拍器。节拍器不是工程数据，不进入撤销栈；播放中切换会重建播放计划。离线渲染不包含节拍器。
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `enabled` | boolean | 是 | 是否启用 |
+
+返回：
+
+```json
+{ "metronome": true }
+```
+
 ## MCP 映射
 
 工具名是命令 ID 把 `.` 换成 `_`：
@@ -575,6 +589,7 @@
 | `transport.seek` | `transport_seek` |
 | `transport.state` | `transport_state` |
 | `transport.gain` | `transport_gain` |
+| `transport.metronome` | `transport_metronome` |
 | `describe` | `describe` |
 | `undo` | `undo` |
 | `redo` | `redo` |

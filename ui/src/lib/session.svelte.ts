@@ -131,6 +131,7 @@ export class SessionStore {
   gain = $state(50);
   busy = $state(false);
   playing = $state(false);
+  metronome = $state(false);
   audioState = $state<"ok" | "none" | "unknown">("unknown");
   sampleRate = $state(48_000);
   private status = $state<Status>({ key: "status.connecting" });
@@ -641,14 +642,22 @@ export class SessionStore {
     loop_end?: number;
   }) {
     if (this.busy) return;
+    const oldTempo = this.tempo;
+    const oldBeat = this.playhead / Math.max(0.001, 60 / oldTempo);
     this.busy = true;
     try {
       await this.run("project.update", patch);
       await this.refreshProject();
       await this.reloadIfPlaying();
-      if (this.playhead > this.duration) {
-        this.playhead = this.duration;
-        void transportSeek(this.playhead).catch(() => {});
+      const tempoChanged =
+        patch.tempo_bpm !== undefined && Math.abs(this.tempo - oldTempo) > 1e-9;
+      const nextPlayhead = tempoChanged
+        ? Math.min(this.duration, oldBeat * (60 / this.tempo))
+        : Math.min(this.playhead, this.duration);
+      if (Math.abs(nextPlayhead - this.playhead) > 1e-9) {
+        this.playhead = nextPlayhead;
+        this.lastSeekAt = performance.now();
+        void transportSeek(nextPlayhead).catch(() => {});
       }
       this.setStatus("status.projectUpdated");
     } catch (error) {
@@ -1008,6 +1017,16 @@ export class SessionStore {
       this.setStatus("status.playing");
     } catch (error) {
       this.fail("status.playFailed", error);
+    }
+  }
+
+  async setMetronome(enabled: boolean) {
+    try {
+      await this.run("transport.metronome", { enabled });
+      this.metronome = enabled;
+      this.setStatus("status.metronomeChanged");
+    } catch (error) {
+      this.fail("status.metronomeFailed", error);
     }
   }
 
@@ -1480,6 +1499,7 @@ export class SessionStore {
     try {
       const snapshot = await transportState();
       this.playing = snapshot.playing;
+      this.metronome = snapshot.metronome;
       if (snapshot.playing) {
         const now = performance.now();
         if (
