@@ -146,6 +146,10 @@ export class SessionStore {
   clipboard = $state<Clipboard | null>(null);
   recentProjects = $state<RecentProject[]>(loadRecentProjects());
   private lastSeekAt = 0;
+  private lastTransportPosition = -1;
+  private lastTransportProgressAt = 0;
+  private audioRecoveryAttempts = 0;
+  private recoveringAudio = false;
   private lastProjectSnapshot = "";
   private polling = false;
   private projectPolling = false;
@@ -960,6 +964,9 @@ export class SessionStore {
       await setMasterGain(this.gain / 100);
       await transportPlay();
       this.playing = true;
+      this.lastTransportPosition = -1;
+      this.lastTransportProgressAt = performance.now();
+      this.audioRecoveryAttempts = 0;
       this.setStatus("status.playing");
     } catch (error) {
       this.fail("status.playFailed", error);
@@ -970,9 +977,31 @@ export class SessionStore {
     try {
       await transportStop();
       this.playing = false;
+      this.lastTransportPosition = -1;
+      this.audioRecoveryAttempts = 0;
       this.setStatus("status.stopped");
     } catch (error) {
       this.fail("status.stopFailed", error);
+    }
+  }
+
+  private async recoverAudio() {
+    if (this.recoveringAudio) return;
+    this.recoveringAudio = true;
+    this.audioRecoveryAttempts += 1;
+    this.setStatus("status.audioRecovering");
+    try {
+      await transportStop();
+      await setMasterGain(this.gain / 100);
+      await transportPlay();
+      this.playing = true;
+      this.lastTransportPosition = -1;
+      this.lastTransportProgressAt = performance.now();
+      this.setStatus("status.audioRecovered");
+    } catch (error) {
+      this.fail("status.audioLost", error);
+    } finally {
+      this.recoveringAudio = false;
     }
   }
 
@@ -988,6 +1017,8 @@ export class SessionStore {
     try {
       await transportStop();
       this.playing = false;
+      this.lastTransportPosition = -1;
+      this.audioRecoveryAttempts = 0;
       this.setStatus("status.rendering");
       const path = await renderPath();
       const data = await this.run<RenderResult>("render.segment", {
@@ -1375,11 +1406,28 @@ export class SessionStore {
     try {
       const snapshot = await transportState();
       this.playing = snapshot.playing;
-      if (
-        snapshot.playing &&
-        performance.now() - this.lastSeekAt > 200
-      ) {
-        this.playhead = snapshot.position;
+      if (snapshot.playing) {
+        const now = performance.now();
+        if (
+          this.lastTransportPosition < 0 ||
+          Math.abs(snapshot.position - this.lastTransportPosition) > 1e-9
+        ) {
+          this.lastTransportPosition = snapshot.position;
+          this.lastTransportProgressAt = now;
+          this.audioRecoveryAttempts = 0;
+        } else if (
+          now - this.lastTransportProgressAt > 1500 &&
+          !this.recoveringAudio &&
+          this.audioRecoveryAttempts < 2
+        ) {
+          void this.recoverAudio();
+        }
+        if (now - this.lastSeekAt > 200) {
+          this.playhead = snapshot.position;
+        }
+      } else {
+        this.lastTransportPosition = -1;
+        this.audioRecoveryAttempts = 0;
       }
     } catch {
       // 轮询失败时保持现状，不打断交互。

@@ -62,11 +62,12 @@ impl Runtime {
         }
     }
 
-    /// 惰性打开默认输出设备；重复调用是幂等的。
+    /// 惰性打开默认输出设备；音频流出错后会丢弃旧句柄并重新打开。
     pub fn ensure_audio(&mut self) -> Result<(), CommandError> {
-        if self.audio.is_some() {
+        if self.audio.as_ref().is_some_and(AudioHandle::is_healthy) {
             return Ok(());
         }
+        self.audio = None;
         let handle = aurtrack_io::spawn(self.playback.clone())
             .map_err(|error| CommandError::new("audio_unavailable", error.to_string()))?;
         self.sample_rate = handle.sample_rate();
@@ -100,6 +101,11 @@ impl Runtime {
     fn transport_play(&mut self) -> Result<CommandResponse, CommandError> {
         if self.session.project().is_none() {
             return Err(CommandError::not_found("还没有工程，先执行 project.create"));
+        }
+        // 每次从停止状态开始播放都重新打开输出，避免系统切换默认设备后
+        // 继续使用已经收不到回调的旧音频流。
+        if !self.playback.is_playing() {
+            self.audio = None;
         }
         self.ensure_audio()?;
         let project = self

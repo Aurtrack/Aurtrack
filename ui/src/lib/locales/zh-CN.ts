@@ -191,6 +191,9 @@ export const zhCN = {
   "status.playFailed": (params) => `播放失败：${params.message}`,
   "status.stopped": "已停止",
   "status.stopFailed": (params) => `停止失败：${params.message}`,
+  "status.audioRecovering": "音频流没有推进，正在重新打开输出…",
+  "status.audioRecovered": "音频流已重新打开",
+  "status.audioLost": (params) => `音频流中断：${params.message}`,
   "status.rendering": "正在渲染 WAV…",
   "status.rendered": (params) =>
     `已渲染：峰值 ${params.peak} · 均方根 ${params.rms} · ${params.frames} 帧`,

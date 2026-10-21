@@ -17,6 +17,9 @@
 
 use std::fmt;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::Sender;
+use std::thread::JoinHandle;
 
 use aurtrack_engine::Playback;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
@@ -63,10 +66,13 @@ impl fmt::Debug for AudioOutput {
 }
 
 /// 音频线程创建的句柄。只包含可 `Send` 的元数据。
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct AudioHandle {
     sample_rate: u32,
     device_name: String,
+    healthy: Arc<AtomicBool>,
+    stop: Sender<()>,
+    thread: Option<JoinHandle<()>>,
 }
 
 impl AudioHandle {
@@ -77,26 +83,42 @@ impl AudioHandle {
     pub fn device_name(&self) -> &str {
         &self.device_name
     }
+
+    /// 音频流出错后会变为 `false`；调用方应丢弃句柄并重新打开设备。
+    pub fn is_healthy(&self) -> bool {
+        self.healthy.load(Ordering::Acquire)
+    }
+}
+
+impl Drop for AudioHandle {
+    fn drop(&mut self) {
+        let _ = self.stop.send(());
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
 }
 
 /// 在专用线程里打开设备并保持音频流存活。
 ///
 /// `cpal::Stream` 在部分平台不是 `Send`，所以不能直接放进 Tauri 状态；
-/// 这里让线程持有它，主线程只拿元数据。
+/// 这里让线程持有它，主线程只拿元数据。丢弃句柄会唤醒线程并释放音频流，
+/// 避免切换设备或重开输出后留下旧流。
 pub fn spawn(playback: Arc<Playback>) -> Result<AudioHandle, AudioError> {
     let (sender, receiver) = std::sync::mpsc::channel();
-    std::thread::Builder::new()
+    let (stop, stop_signal) = std::sync::mpsc::channel();
+    let healthy = Arc::new(AtomicBool::new(true));
+    let stream_health = Arc::clone(&healthy);
+    let thread = std::thread::Builder::new()
         .name("aurtrack-audio".to_string())
-        .spawn(move || match start(playback) {
+        .spawn(move || match start(playback, &stream_health) {
             Ok(output) => {
-                let handle = AudioHandle {
-                    sample_rate: output.sample_rate(),
-                    device_name: output.device_name().to_string(),
-                };
-                let _ = sender.send(Ok(handle));
-                loop {
-                    std::thread::park();
+                let metadata = (output.sample_rate(), output.device_name().to_string());
+                if sender.send(Ok(metadata)).is_err() {
+                    return;
                 }
+                let _ = stop_signal.recv();
+                drop(output);
             },
             Err(error) => {
                 let _ = sender.send(Err(error));
@@ -104,9 +126,23 @@ pub fn spawn(playback: Arc<Playback>) -> Result<AudioHandle, AudioError> {
         })
         .map_err(|error| AudioError::Build(error.to_string()))?;
 
-    receiver
-        .recv()
-        .map_err(|_| AudioError::Build("音频线程提前退出".to_string()))?
+    match receiver.recv() {
+        Ok(Ok((sample_rate, device_name))) => Ok(AudioHandle {
+            sample_rate,
+            device_name,
+            healthy,
+            stop,
+            thread: Some(thread),
+        }),
+        Ok(Err(error)) => {
+            let _ = thread.join();
+            Err(error)
+        },
+        Err(_) => {
+            let _ = thread.join();
+            Err(AudioError::Build("音频线程提前退出".to_string()))
+        },
+    }
 }
 
 impl AudioOutput {
@@ -120,7 +156,7 @@ impl AudioOutput {
 }
 
 /// 打开默认输出设备并立即开始静音输出。
-fn start(playback: Arc<Playback>) -> Result<AudioOutput, AudioError> {
+fn start(playback: Arc<Playback>, healthy: &Arc<AtomicBool>) -> Result<AudioOutput, AudioError> {
     let host = cpal::default_host();
     let device = host.default_output_device().ok_or(AudioError::NoDevice)?;
     let device_name = device.name().unwrap_or_else(|_| "unknown".to_string());
@@ -137,9 +173,9 @@ fn start(playback: Arc<Playback>) -> Result<AudioOutput, AudioError> {
     };
 
     let stream = match sample_format {
-        SampleFormat::F32 => build::<f32>(&device, &config, playback, channels)?,
-        SampleFormat::I16 => build::<i16>(&device, &config, playback, channels)?,
-        SampleFormat::U16 => build::<u16>(&device, &config, playback, channels)?,
+        SampleFormat::F32 => build::<f32>(&device, &config, playback, channels, healthy)?,
+        SampleFormat::I16 => build::<i16>(&device, &config, playback, channels, healthy)?,
+        SampleFormat::U16 => build::<u16>(&device, &config, playback, channels, healthy)?,
         other => return Err(AudioError::UnsupportedFormat(other)),
     };
 
@@ -159,10 +195,12 @@ fn build<T>(
     config: &cpal::StreamConfig,
     playback: Arc<Playback>,
     channels: usize,
+    healthy: &Arc<AtomicBool>,
 ) -> Result<Stream, AudioError>
 where
     T: SizedSample + FromSample<f32> + 'static,
 {
+    let stream_health = Arc::clone(healthy);
     // 预分配一块临时缓冲，回调里按块切分，避免分配。
     let mut scratch = vec![0.0_f32; 8192];
     let stream = device
@@ -184,7 +222,10 @@ where
                     offset += chunk;
                 }
             },
-            move |error| eprintln!("音频流错误：{error}"),
+            move |error| {
+                stream_health.store(false, Ordering::Release);
+                eprintln!("音频流错误：{error}");
+            },
             None,
         )
         .map_err(|error| AudioError::Build(error.to_string()))?;

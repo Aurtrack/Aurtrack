@@ -201,6 +201,10 @@ export const en: Record<MessageKey, Message> = {
   "status.playFailed": (params) => `Play failed: ${params.message}`,
   "status.stopped": "STOPPED",
   "status.stopFailed": (params) => `Stop failed: ${params.message}`,
+  "status.audioRecovering":
+    "Audio stream is not advancing; reopening output…",
+  "status.audioRecovered": "Audio stream reopened",
+  "status.audioLost": (params) => `Audio stream lost: ${params.message}`,
   "status.rendering": "Rendering WAV…",
   "status.rendered": (params) =>
     `Rendered: peak ${params.peak} · rms ${params.rms} · ${params.frames} frames`,
