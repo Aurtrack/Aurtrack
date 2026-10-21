@@ -1,6 +1,6 @@
-# 命令规范 v0.7
+# 命令规范 v0.8
 
-这份文档定义 Aurtrack 的可运行命令面：27 条命令、统一的返回结构、寻址规则，以及 MCP 的映射方式。代码必须与本文一致。
+这份文档定义 Aurtrack 的可运行命令面：29 条命令、统一的返回结构、寻址规则，以及 MCP 的映射方式。代码必须与本文一致。
 
 ## 信封
 
@@ -453,6 +453,43 @@
 { "path": "/tracks/track-1/clips/clip-1/notes/note-1", "note": { }, "grid": 0.125 }
 ```
 
+### 28. `note.paste`
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `path` | string | 是 | 目标片段路径 |
+| `notes` | array | 是 | 音符草稿数组，至少 1 个 |
+| `notes[].pitch` | integer | 是 | MIDI 音高 |
+| `notes[].start` | number | 是 | 相对片段起点 |
+| `notes[].duration` | number | 是 | 音符长度 |
+| `notes[].velocity` | number | 否 | 0 到 1，默认 `0.8` |
+
+一次批量写入多个音符，只产生一个撤销快照。所有音符先统一校验，任意一个非法则整批拒绝。
+
+返回：
+
+```json
+{ "path": "/tracks/track-1/clips/clip-1", "note_ids": ["note-1"], "notes": [ ] }
+```
+
+### 29. `clip.paste`
+
+| 参数 | 类型 | 必填 | 说明 |
+| --- | --- | --- | --- |
+| `track_id` | string | 是 | 目标轨道 |
+| `name` | string | 否 | 片段名，省略时自动生成 |
+| `start` | number | 是 | 片段起点，0 到 5 |
+| `duration` | number | 是 | 片段长度，必须让终点不超过 5 |
+| `notes` | array | 是 | 音符草稿数组，可为空 |
+
+一次批量写入片段和音符，只产生一个撤销快照。
+
+返回：
+
+```json
+{ "track_id": "track-1", "clip_id": "clip-2", "path": "/tracks/track-1/clips/clip-2", "clip": { } }
+```
+
 ## MCP 映射
 
 工具名是命令 ID 把 `.` 换成 `_`：
@@ -485,6 +522,8 @@
 | `note.remove` | `note_remove` |
 | `note.duplicate` | `note_duplicate` |
 | `note.quantize` | `note_quantize` |
+| `note.paste` | `note_paste` |
+| `clip.paste` | `clip_paste` |
 | `device.remove` | `device_remove` |
 
 - `tools/list` 的 `inputSchema` 直接来自命令注册表；

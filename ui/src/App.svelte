@@ -53,6 +53,12 @@
     } else if (modifier && key === "y") {
       event.preventDefault();
       void session.redo();
+    } else if (modifier && key === "c") {
+      event.preventDefault();
+      session.copySelected();
+    } else if (modifier && key === "v") {
+      event.preventDefault();
+      void session.pasteClipboard();
     } else if (modifier && key === "d") {
       event.preventDefault();
       void session.duplicateSelected();

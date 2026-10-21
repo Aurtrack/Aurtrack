@@ -46,6 +46,22 @@ export type RecentProject = {
   savedAt: number;
 };
 
+type ClipboardNote = {
+  pitch: number;
+  start: number;
+  duration: number;
+  velocity: number;
+};
+
+type Clipboard =
+  | { kind: "notes"; notes: ClipboardNote[] }
+  | {
+      kind: "clip";
+      name: string;
+      duration: number;
+      notes: ClipboardNote[];
+    };
+
 const MUTATING_COMMANDS = new Set([
   "track.create",
   "track.remove",
@@ -61,6 +77,8 @@ const MUTATING_COMMANDS = new Set([
   "note.remove",
   "note.duplicate",
   "note.quantize",
+  "note.paste",
+  "clip.paste",
   "undo",
   "redo",
   "project.open",
@@ -118,6 +136,7 @@ export class SessionStore {
   recoveryAvailable = $state(false);
   closeRequested = $state(false);
   pendingOpenPath = $state<string | null>(null);
+  clipboard = $state<Clipboard | null>(null);
   recentProjects = $state<RecentProject[]>(loadRecentProjects());
   private lastSeekAt = 0;
   private lastProjectSnapshot = "";
@@ -246,6 +265,104 @@ export class SessionStore {
     }
     if (this.selectedClipPath) {
       await this.deleteClip(this.selectedClipPath);
+    }
+  }
+
+  copySelected() {
+    if (this.selectedNote) {
+      this.clipboard = {
+        kind: "notes",
+        notes: [
+          {
+            pitch: this.selectedNote.pitch,
+            start: this.selectedNote.start,
+            duration: this.selectedNote.duration,
+            velocity: this.selectedNote.velocity,
+          },
+        ],
+      };
+      this.setStatus("status.noteCopied");
+      return;
+    }
+    if (this.selectedClip) {
+      this.clipboard = {
+        kind: "clip",
+        name: this.selectedClip.name,
+        duration: this.selectedClip.duration,
+        notes: this.selectedClip.notes.map((note) => ({
+          pitch: note.pitch,
+          start: note.start,
+          duration: note.duration,
+          velocity: note.velocity,
+        })),
+      };
+      this.setStatus("status.clipCopied");
+      return;
+    }
+    this.setStatus("status.copyEmpty");
+  }
+
+  async pasteClipboard() {
+    if (this.busy) return;
+    const clipboard = this.clipboard;
+    if (!clipboard) {
+      this.setStatus("status.pasteEmpty");
+      return;
+    }
+    this.busy = true;
+    try {
+      if (clipboard.kind === "notes") {
+        const clip = this.selectedClip;
+        const path = this.selectedClipPath;
+        if (!clip || !path) {
+          this.setStatus("status.pasteFailed", { message: "先选择一个片段" });
+          return;
+        }
+        let base = 0;
+        if (
+          this.playhead >= clip.start &&
+          this.playhead < clip.start + clip.duration
+        ) {
+          base = this.playhead - clip.start;
+        }
+        const result = await this.run<{ note_ids: string[] }>("note.paste", {
+          path,
+          notes: clipboard.notes.map((note) => ({
+            ...note,
+            start: note.start + base,
+          })),
+        });
+        await this.refreshProject();
+        await this.reloadIfPlaying();
+        this.selectedNoteId = result.note_ids[0] ?? "";
+        this.setStatus("status.pasted");
+      } else {
+        const track = this.selectedTrack;
+        if (!track) {
+          this.setStatus("status.pasteFailed", { message: "先选择一条轨道" });
+          return;
+        }
+        const start = Math.min(
+          this.playhead,
+          Math.max(0, this.duration - clipboard.duration),
+        );
+        const result = await this.run<{ clip_id: string }>("clip.paste", {
+          track_id: track.id,
+          name: `${clipboard.name} 副本`,
+          start,
+          duration: clipboard.duration,
+          notes: clipboard.notes,
+        });
+        await this.refreshProject();
+        await this.reloadIfPlaying();
+        this.selectedClipId = result.clip_id;
+        this.selectedNoteId = "";
+        this.setStatus("status.pasted");
+      }
+    } catch (error) {
+      this.fail("status.pasteFailed", error);
+    } finally {
+      this.busy = false;
     }
   }
 

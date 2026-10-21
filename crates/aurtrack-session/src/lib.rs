@@ -139,6 +139,8 @@ impl Session {
             "note.remove" => self.cmd_note_remove(&request.args),
             "note.duplicate" => self.cmd_note_duplicate(&request.args),
             "note.quantize" => self.cmd_note_quantize(&request.args),
+            "note.paste" => self.cmd_note_paste(&request.args),
+            "clip.paste" => self.cmd_clip_paste(&request.args),
             "device.add" => self.cmd_device_add(&request.args),
             "device.remove" => self.cmd_device_remove(&request.args),
             "param.set" => self.cmd_param_set(&request.args),
@@ -929,6 +931,140 @@ impl Session {
         .with_undo(token))
     }
 
+    fn cmd_note_paste(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        let args: NotePasteArgs = parse_args(args)?;
+        if args.notes.is_empty() {
+            return Err(CommandError::invalid_args("notes 不能为空"));
+        }
+        let path = args.path;
+        let (track_id, clip_id) = parse_clip_path(&path)?;
+        let clip_duration = self
+            .project
+            .as_ref()
+            .and_then(|project| project.tracks.iter().find(|track| track.id == track_id))
+            .and_then(|track| track.clips.iter().find(|clip| clip.id == clip_id))
+            .map(|clip| clip.duration)
+            .ok_or_else(|| CommandError::not_found(format!("找不到片段：{path}")))?;
+        for draft in &args.notes {
+            validate_note_values(
+                draft.pitch,
+                draft.start,
+                draft.duration,
+                draft.velocity.unwrap_or(0.8),
+                clip_duration,
+            )?;
+        }
+
+        let token = self.snapshot("note.paste");
+        let mut notes = Vec::with_capacity(args.notes.len());
+        for draft in args.notes {
+            self.next_note += 1;
+            notes.push(Note {
+                id: format!("note-{}", self.next_note),
+                pitch: draft.pitch,
+                start: draft.start,
+                duration: draft.duration,
+                velocity: draft.velocity.unwrap_or(0.8),
+            });
+        }
+        let note_ids = notes.iter().map(|note| note.id.clone()).collect::<Vec<_>>();
+        let project = self
+            .project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let track = project
+            .tracks
+            .iter_mut()
+            .find(|track| track.id == track_id)
+            .ok_or_else(|| CommandError::not_found(format!("找不到片段：{path}")))?;
+        let clip = track
+            .clips
+            .iter_mut()
+            .find(|clip| clip.id == clip_id)
+            .ok_or_else(|| CommandError::not_found(format!("找不到片段：{path}")))?;
+        clip.notes.extend(notes.clone());
+
+        Ok(CommandResponse::ok(json!({
+            "path": path,
+            "note_ids": note_ids,
+            "notes": notes,
+        }))
+        .with_undo(token))
+    }
+
+    fn cmd_clip_paste(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        let ClipPasteArgs {
+            track_id,
+            name,
+            start,
+            duration,
+            notes,
+        } = parse_args(args)?;
+        validate_clip_range(start, duration)?;
+        let name = name.unwrap_or_else(|| format!("片段 {}", self.next_clip + 1));
+        if name.trim().is_empty() {
+            return Err(CommandError::invalid_args("name 不能为空"));
+        }
+        let track_exists = self
+            .project
+            .as_ref()
+            .is_some_and(|project| project.tracks.iter().any(|track| track.id == track_id));
+        if !track_exists {
+            return Err(CommandError::not_found(format!("找不到轨道：{track_id}")));
+        }
+        for draft in &notes {
+            validate_note_values(
+                draft.pitch,
+                draft.start,
+                draft.duration,
+                draft.velocity.unwrap_or(0.8),
+                duration,
+            )?;
+        }
+
+        let token = self.snapshot("clip.paste");
+        self.next_clip += 1;
+        let clip_id = format!("clip-{}", self.next_clip);
+        let notes = notes
+            .into_iter()
+            .map(|draft| {
+                self.next_note += 1;
+                Note {
+                    id: format!("note-{}", self.next_note),
+                    pitch: draft.pitch,
+                    start: draft.start,
+                    duration: draft.duration,
+                    velocity: draft.velocity.unwrap_or(0.8),
+                }
+            })
+            .collect::<Vec<_>>();
+        let clip = Clip {
+            id: clip_id.clone(),
+            name,
+            start,
+            duration,
+            notes,
+        };
+        let project = self
+            .project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let track = project
+            .tracks
+            .iter_mut()
+            .find(|track| track.id == track_id)
+            .ok_or_else(|| CommandError::not_found(format!("找不到轨道：{track_id}")))?;
+        track.clips.push(clip.clone());
+
+        Ok(CommandResponse::ok(json!({
+            "track_id": track_id,
+            "clip_id": clip_id,
+            "path": format!("/tracks/{track_id}/clips/{clip_id}"),
+            "clip": clip,
+        }))
+        .with_undo(token))
+    }
+
     fn cmd_device_remove(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
         let args: DeviceRemoveArgs = parse_args(args)?;
         let path = args.path;
@@ -1518,4 +1654,32 @@ struct NotePathArgs {
 struct NoteQuantizeArgs {
     path: String,
     grid: f64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NoteDraft {
+    pitch: u8,
+    start: f64,
+    duration: f64,
+    #[serde(default)]
+    velocity: Option<f64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NotePasteArgs {
+    path: String,
+    notes: Vec<NoteDraft>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClipPasteArgs {
+    track_id: String,
+    #[serde(default)]
+    name: Option<String>,
+    start: f64,
+    duration: f64,
+    notes: Vec<NoteDraft>,
 }

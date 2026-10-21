@@ -152,10 +152,60 @@ fn duplicate_and_quantize_notes_and_clips() {
 }
 
 #[test]
-fn describe_lists_twenty_seven_commands() {
+fn paste_notes_and_clip_in_one_snapshot() {
+    let mut session = Session::default();
+    run(&mut session, "project.create", json!({}));
+    run(&mut session, "track.create", json!({ "name": "lead" }));
+    run(
+        &mut session,
+        "clip.create",
+        json!({ "track_id": "track-1", "start": 0.0, "duration": 2.0 }),
+    );
+
+    let pasted = run(
+        &mut session,
+        "note.paste",
+        json!({
+            "path": "/tracks/track-1/clips/clip-1",
+            "notes": [
+                { "pitch": 60, "start": 0.0, "duration": 0.25, "velocity": 0.8 },
+                { "pitch": 64, "start": 0.25, "duration": 0.25 }
+            ],
+        }),
+    );
+    assert_eq!(pasted["note_ids"].as_array().unwrap().len(), 2);
+    assert_eq!(pasted["notes"][1]["velocity"], 0.8);
+
+    let pasted_clip = run(
+        &mut session,
+        "clip.paste",
+        json!({
+            "track_id": "track-1",
+            "name": "copy",
+            "start": 2.0,
+            "duration": 1.0,
+            "notes": [{ "pitch": 67, "start": 0.0, "duration": 0.5 }],
+        }),
+    );
+    assert_eq!(pasted_clip["clip_id"], "clip-2");
+    assert_eq!(pasted_clip["clip"]["notes"].as_array().unwrap().len(), 1);
+
+    run(&mut session, "undo", json!({}));
+    let state = run(&mut session, "project.state", json!({}));
+    assert_eq!(
+        state["project"]["tracks"][0]["clips"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+}
+
+#[test]
+fn describe_lists_twenty_nine_commands() {
     let mut session = Session::default();
     let out = run(&mut session, "describe", json!({}));
-    assert_eq!(out["commands"].as_array().unwrap().len(), 27);
+    assert_eq!(out["commands"].as_array().unwrap().len(), 29);
     assert!(out["project"].is_null());
 }
 

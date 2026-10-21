@@ -26,6 +26,8 @@ export const en: Record<MessageKey, Message> = {
   "menu.undo": "Undo",
   "menu.redo": "Redo",
   "menu.duplicateSelected": "Duplicate selected",
+  "menu.copySelected": "Copy",
+  "menu.paste": "Paste",
   "menu.deleteSelected": "Delete selected",
   "menu.renderWav": "Render WAV",
   "menu.resetLayout": "Reset layout",
@@ -239,6 +241,12 @@ export const en: Record<MessageKey, Message> = {
   "status.noteUpdated": (params) => `Updated note ${params.id}`,
   "status.noteUpdateFailed": (params) =>
     `Update note failed: ${params.message}`,
+  "status.noteCopied": "Note copied",
+  "status.clipCopied": "Clip copied",
+  "status.copyEmpty": "Nothing to copy",
+  "status.pasted": "Pasted",
+  "status.pasteEmpty": "Clipboard is empty",
+  "status.pasteFailed": (params) => `Paste failed: ${params.message}`,
 
   "error.not_found": "Not found",
   "error.invalid_args": "Invalid arguments",

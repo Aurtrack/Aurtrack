@@ -157,6 +157,25 @@
               role="menuitem"
               disabled={session.busy ||
                 (!session.selectedNotePath && !session.selectedClipPath)}
+              onclick={() => run(() => session.copySelected())}
+            >
+              <span>{t("menu.copySelected")}</span>
+              <span class="menu-shortcut">Ctrl+C</span>
+            </button>
+            <button
+              class="menu-item"
+              role="menuitem"
+              disabled={session.busy || !session.clipboard}
+              onclick={() => run(() => void session.pasteClipboard())}
+            >
+              <span>{t("menu.paste")}</span>
+              <span class="menu-shortcut">Ctrl+V</span>
+            </button>
+            <button
+              class="menu-item"
+              role="menuitem"
+              disabled={session.busy ||
+                (!session.selectedNotePath && !session.selectedClipPath)}
               onclick={() => run(() => void session.duplicateSelected())}
             >
               <span>{t("menu.duplicateSelected")}</span>

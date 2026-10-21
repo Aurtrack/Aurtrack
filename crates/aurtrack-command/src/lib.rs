@@ -336,6 +336,56 @@ fn note_quantize_schema() -> Value {
     )
 }
 
+fn note_paste_schema() -> Value {
+    object_schema(
+        json!({
+            "path": { "type": "string", "description": "/tracks/{id}/clips/{id}" },
+            "notes": {
+                "type": "array",
+                "minItems": 1,
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "pitch": { "type": "integer", "minimum": 0, "maximum": 127 },
+                        "start": { "type": "number", "minimum": 0 },
+                        "duration": { "type": "number", "exclusiveMinimum": 0 },
+                        "velocity": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.8 }
+                    },
+                    "required": ["pitch", "start", "duration"]
+                }
+            }
+        }),
+        &["path", "notes"],
+    )
+}
+
+fn clip_paste_schema() -> Value {
+    object_schema(
+        json!({
+            "track_id": { "type": "string" },
+            "name": { "type": "string" },
+            "start": { "type": "number", "minimum": 0, "maximum": 5 },
+            "duration": { "type": "number", "exclusiveMinimum": 0, "maximum": 5 },
+            "notes": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "properties": {
+                        "pitch": { "type": "integer", "minimum": 0, "maximum": 127 },
+                        "start": { "type": "number", "minimum": 0 },
+                        "duration": { "type": "number", "exclusiveMinimum": 0 },
+                        "velocity": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.8 }
+                    },
+                    "required": ["pitch", "start", "duration"]
+                }
+            }
+        }),
+        &["track_id", "start", "duration", "notes"],
+    )
+}
+
 fn note_add_schema() -> Value {
     object_schema(
         json!({
@@ -416,7 +466,7 @@ fn transport_gain_schema() -> Value {
     )
 }
 
-static COMMANDS: [CommandSpec; 27] = [
+static COMMANDS: [CommandSpec; 29] = [
     CommandSpec {
         id: "project.create",
         summary: "创建或替换当前工程",
@@ -506,6 +556,18 @@ static COMMANDS: [CommandSpec; 27] = [
         summary: "把音符起点量化到指定网格",
         undo: UndoKind::Snapshot,
         input_schema: note_quantize_schema,
+    },
+    CommandSpec {
+        id: "note.paste",
+        summary: "批量粘贴音符到片段",
+        undo: UndoKind::Snapshot,
+        input_schema: note_paste_schema,
+    },
+    CommandSpec {
+        id: "clip.paste",
+        summary: "批量粘贴片段及音符到轨道",
+        undo: UndoKind::Snapshot,
+        input_schema: clip_paste_schema,
     },
     CommandSpec {
         id: "device.add",
