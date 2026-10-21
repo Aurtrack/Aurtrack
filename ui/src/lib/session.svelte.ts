@@ -146,6 +146,9 @@ export class SessionStore {
   clipboard = $state<Clipboard | null>(null);
   recentProjects = $state<RecentProject[]>(loadRecentProjects());
   private lastSeekAt = 0;
+  private lastSeekSentAt = 0;
+  private seekTimer: number | null = null;
+  private pendingSeekSeconds: number | null = null;
   private lastTransportPosition = -1;
   private lastTransportProgressAt = 0;
   private audioRecoveryAttempts = 0;
@@ -235,6 +238,7 @@ export class SessionStore {
       window.clearTimeout(this.recoveryTimer);
       this.recoveryTimer = null;
     }
+    this.cancelSeek();
     if (this.unlistenClose) {
       this.unlistenClose();
       this.unlistenClose = null;
@@ -975,6 +979,7 @@ export class SessionStore {
 
   async stop() {
     try {
+      this.cancelSeek();
       await transportStop();
       this.playing = false;
       this.lastTransportPosition = -1;
@@ -991,6 +996,7 @@ export class SessionStore {
     this.audioRecoveryAttempts += 1;
     this.setStatus("status.audioRecovering");
     try {
+      this.cancelSeek();
       await transportStop();
       await setMasterGain(this.gain / 100);
       await transportPlay();
@@ -1008,13 +1014,47 @@ export class SessionStore {
   seek(seconds: number) {
     this.playhead = seconds;
     this.lastSeekAt = performance.now();
+    const now = performance.now();
+    const wait = 30 - (now - this.lastSeekSentAt);
+    if (wait <= 0) {
+      this.cancelPendingSeek();
+      this.sendSeek(seconds);
+      return;
+    }
+    this.pendingSeekSeconds = seconds;
+    if (this.seekTimer === null) {
+      this.seekTimer = window.setTimeout(() => {
+        this.seekTimer = null;
+        const pending = this.pendingSeekSeconds;
+        this.pendingSeekSeconds = null;
+        if (pending !== null) this.sendSeek(pending);
+      }, wait);
+    }
+  }
+
+  private sendSeek(seconds: number) {
+    this.lastSeekSentAt = performance.now();
     void transportSeek(seconds).catch(() => {});
+  }
+
+  private cancelPendingSeek() {
+    if (this.seekTimer !== null) {
+      window.clearTimeout(this.seekTimer);
+      this.seekTimer = null;
+    }
+    this.pendingSeekSeconds = null;
+  }
+
+  private cancelSeek() {
+    this.cancelPendingSeek();
+    this.lastSeekSentAt = 0;
   }
 
   async render() {
     if (this.busy) return;
     this.busy = true;
     try {
+      this.cancelSeek();
       await transportStop();
       this.playing = false;
       this.lastTransportPosition = -1;

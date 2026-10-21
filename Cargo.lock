@@ -364,6 +364,7 @@ name = "aurtrack-session"
 version = "0.0.0"
 dependencies = [
  "aurtrack-command",
+ "aurtrack-engine",
  "serde",
  "serde_json",
 ]

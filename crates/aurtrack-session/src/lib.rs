@@ -28,6 +28,7 @@ use std::io;
 use std::path::Path;
 
 use aurtrack_command::{CommandError, CommandRequest, CommandResponse, registry};
+use aurtrack_engine::{midi_to_hz, note_envelope};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -1658,10 +1659,6 @@ fn track_gain(track: &Track) -> f64 {
         .product::<f64>()
 }
 
-fn midi_to_hz(pitch: u8) -> f64 {
-    440.0 * 2_f64.powf((f64::from(pitch) - 69.0) / 12.0)
-}
-
 fn render_project(
     project: &Project,
     start_seconds: f64,
@@ -1687,11 +1684,11 @@ fn render_project(
                     let note_start = clip.start + note.start;
                     let note_end = note_start + note.duration;
                     if time >= note_start && time < note_end {
-                        sample +=
-                            (std::f64::consts::TAU * midi_to_hz(note.pitch) * (time - note_start))
-                                .sin()
-                                * note.velocity
-                                * 0.25;
+                        let local = time - note_start;
+                        sample += (std::f64::consts::TAU * midi_to_hz(note.pitch) * local).sin()
+                            * note.velocity
+                            * note_envelope(local, note.duration)
+                            * 0.25;
                     }
                 }
             }
