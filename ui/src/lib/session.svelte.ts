@@ -740,6 +740,31 @@ export class SessionStore {
     }
   }
 
+  async addGraphNode(
+    trackId: string,
+    kind: string,
+    x: number,
+    y: number,
+  ): Promise<string | undefined> {
+    if (this.busy) return undefined;
+    this.busy = true;
+    try {
+      const data = await this.run<{ node_id: string }>("node.add", {
+        track_id: trackId,
+        kind,
+        position: [x, y],
+      });
+      await this.refreshProject();
+      this.setStatus("status.nodeAdded");
+      return data.node_id;
+    } catch (error) {
+      this.fail("status.nodeAddFailed", error);
+      return undefined;
+    } finally {
+      this.busy = false;
+    }
+  }
+
   async addMix(trackId: string) {
     if (this.busy) return;
     this.busy = true;

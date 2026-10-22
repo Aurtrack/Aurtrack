@@ -721,7 +721,6 @@ impl Graph {
 
         let mut seen = BTreeSet::new();
         let mut inputs = BTreeSet::new();
-        let mut mix_inputs: BTreeMap<NodeId, usize> = BTreeMap::new();
         for connection in &self.connections {
             self.validate_connection(connection)?;
             let from = (connection.from.node.clone(), connection.from.port.clone());
@@ -731,22 +730,6 @@ impl Graph {
             }
             if !inputs.insert(to) {
                 return Err(GraphError::PortOccupied);
-            }
-            if self
-                .nodes
-                .get(&connection.to.node)
-                .is_some_and(|node| node.kind() == NodeKind::Mix)
-            {
-                *mix_inputs.entry(connection.to.node.clone()).or_default() += 1;
-            }
-        }
-        for node in self
-            .nodes
-            .values()
-            .filter(|node| node.kind() == NodeKind::Mix)
-        {
-            if mix_inputs.get(node.id()).copied().unwrap_or(0) != 2 {
-                return Err(GraphError::MixInputs(node.id().clone()));
             }
         }
 
@@ -914,19 +897,41 @@ impl Graph {
                 queue.push_back(target.clone());
             }
         }
+        let output_id = self
+            .nodes
+            .values()
+            .find(|node| node.kind() == NodeKind::Output)
+            .map(|node| node.id().clone())
+            .ok_or(GraphError::OutputCount(0))?;
+        if !reachable.contains(&output_id) {
+            return Err(GraphError::NotConnected);
+        }
+        let mut useful = BTreeSet::new();
+        let mut reverse_queue = VecDeque::from([output_id]);
+        while let Some(id) = reverse_queue.pop_front() {
+            if !useful.insert(id.clone()) {
+                continue;
+            }
+            for connection in self
+                .connections
+                .iter()
+                .filter(|connection| connection.to.node == id)
+            {
+                reverse_queue.push_back(connection.from.node.clone());
+            }
+        }
         let order = self.topological_order()?;
         let audio_ids: Vec<NodeId> = order
             .iter()
             .filter(|id| {
-                self.nodes.get(*id).is_some_and(|node| {
-                    !node.kind().is_instrument() && node.kind() != NodeKind::AmpAdsr
-                })
+                reachable.contains(*id)
+                    && useful.contains(*id)
+                    && self.nodes.get(*id).is_some_and(|node| {
+                        !node.kind().is_instrument() && node.kind() != NodeKind::AmpAdsr
+                    })
             })
             .cloned()
             .collect();
-        if audio_ids.iter().any(|id| !reachable.contains(id)) {
-            return Err(GraphError::NotConnected);
-        }
         let source_frequency = match instrument.kind() {
             NodeKind::InstrumentSine => instrument.param("frequency"),
             _ => None,
@@ -1220,6 +1225,26 @@ mod tests {
             )
             .unwrap_err();
         assert!(matches!(error, GraphError::PortOccupied));
+    }
+
+    #[test]
+    fn unconnected_devices_are_ignored_by_compiler() {
+        let mut graph = Graph::linear_track();
+        graph
+            .add_node(Node::new(
+                NodeId::new("floating").unwrap(),
+                NodeKind::FilterLowpass,
+            ))
+            .unwrap();
+        graph
+            .add_node(Node::new(
+                NodeId::new("floating-mix").unwrap(),
+                NodeKind::Mix,
+            ))
+            .unwrap();
+        graph.validate().unwrap();
+        let compiled = graph.compile_graph().unwrap();
+        assert!(compiled.nodes.iter().all(|node| node.op != CompiledOp::Mix));
     }
 
     #[test]

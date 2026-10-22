@@ -256,6 +256,9 @@ export const en: Record<MessageKey, Message> = {
   "status.nodeDisconnected": "Connection removed",
   "status.nodeDisconnectFailed": (params) =>
     `Disconnect failed: ${params.message}`,
+  "status.nodeAdded": "Node added; drag ports to wire",
+  "status.nodeAddFailed": (params) =>
+    `Add node failed: ${params.message}`,
   "status.nodesPlaced": "Node positions saved",
   "status.nodesPlaceFailed": (params) =>
     `Save node positions failed: ${params.message}`,

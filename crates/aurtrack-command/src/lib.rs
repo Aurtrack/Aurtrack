@@ -230,6 +230,12 @@ fn device_add_schema() -> Value {
                     "resonance": { "type": "number", "minimum": 0, "maximum": 0.95 }
                 },
                 "additionalProperties": false
+            },
+            "position": {
+                "type": "array",
+                "items": { "type": "number" },
+                "minItems": 2,
+                "maxItems": 2
             }
         }),
         &["track_id", "kind"],
@@ -768,7 +774,7 @@ static COMMANDS: [CommandSpec; 41] = [
     },
     CommandSpec {
         id: "node.add",
-        summary: "向轨道节点图添加设备节点",
+        summary: "向轨道节点图添加未连接的设备节点",
         undo: UndoKind::Snapshot,
         input_schema: device_add_schema,
     },

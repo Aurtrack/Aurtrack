@@ -242,6 +242,8 @@ export const zhCN = {
   "status.nodeConnectFailed": (params) => `连接节点失败：${params.message}`,
   "status.nodeDisconnected": "已断开连接",
   "status.nodeDisconnectFailed": (params) => `断开连接失败：${params.message}`,
+  "status.nodeAdded": "已添加节点，拖端口接线",
+  "status.nodeAddFailed": (params) => `添加节点失败：${params.message}`,
   "status.nodesPlaced": "节点位置已保存",
   "status.nodesPlaceFailed": (params) => `保存节点位置失败：${params.message}`,
   "status.nodesRemoved": "已删除节点",

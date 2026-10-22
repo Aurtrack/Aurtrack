@@ -650,12 +650,12 @@ fn node_commands_add_move_and_remove() {
 
     let adsr = run(
         &mut session,
-        "node.add",
+        "device.add",
         json!({ "track_id": "track-1", "kind": "amp.adsr" }),
     );
     let gain = run(
         &mut session,
-        "node.add",
+        "device.add",
         json!({ "track_id": "track-1", "kind": "gain" }),
     );
     assert_eq!(adsr["node_id"], "device-1");
@@ -763,6 +763,14 @@ fn node_positions_and_batch_remove() {
         json!({ "track_id": "track-1", "kind": "filter.lowpass" }),
     );
     let filter_id = filter["node_id"].as_str().unwrap();
+    let state = run(&mut session, "project.state", json!({}));
+    assert_eq!(
+        state["project"]["tracks"][0]["graph"]["connections"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
     run(
         &mut session,
         "node.position",
@@ -823,12 +831,12 @@ fn branch_graph_connects_mix_and_renders() {
     );
     run(
         &mut session,
-        "node.add",
+        "device.add",
         json!({ "track_id": "track-1", "kind": "filter.lowpass" }),
     );
     let mix = run(
         &mut session,
-        "node.add",
+        "device.add",
         json!({ "track_id": "track-1", "kind": "mix" }),
     );
     let mix_id = mix["node_id"].as_str().unwrap().to_string();

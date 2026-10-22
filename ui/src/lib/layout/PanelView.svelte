@@ -105,10 +105,8 @@
   <NodeGraph
     track={session.selectedTrack}
     busy={session.busy}
-    onAddGain={(trackId: string) => void session.addGain(trackId)}
-    onAddAdsr={(trackId: string) => void session.addAdsr(trackId)}
-    onAddFilter={(trackId: string) => void session.addFilter(trackId)}
-    onAddMix={(trackId: string) => void session.addMix(trackId)}
+    onAddNode={(trackId, kind, x, y) =>
+      session.addGraphNode(trackId, kind, x, y)}
     onConnect={(trackId, fromNodeId, fromPort, toNodeId, toPort) =>
       void session.connectNodes(
         trackId,

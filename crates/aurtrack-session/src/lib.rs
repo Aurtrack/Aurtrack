@@ -536,6 +536,10 @@ impl Session {
         for (name, value) in args.params.unwrap_or_default() {
             node.set_param(&name, value).map_err(graph_error)?;
         }
+        if let Some([x, y]) = args.position {
+            node.set_position(x, y).map_err(graph_error)?;
+        }
+        let free = command == "node.add";
         let project = self
             .project
             .as_mut()
@@ -545,10 +549,14 @@ impl Session {
             .iter_mut()
             .find(|track| track.id == args.track_id)
             .ok_or_else(|| CommandError::not_found(format!("找不到轨道：{}", args.track_id)))?;
-        track
-            .graph
-            .insert_before_output(node)
-            .map_err(graph_error)?;
+        if free {
+            track.graph.add_node(node).map_err(graph_error)?;
+        } else {
+            track
+                .graph
+                .insert_before_output(node)
+                .map_err(graph_error)?;
+        }
         Ok(CommandResponse::ok(json!({
             "device_id": device_id,
             "node_id": device_id,
@@ -2532,6 +2540,8 @@ struct DeviceAddArgs {
     kind: String,
     #[serde(default)]
     params: Option<BTreeMap<String, f64>>,
+    #[serde(default)]
+    position: Option<[f64; 2]>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -83,6 +83,7 @@
 | `track_id` | string | 是 | | 目标轨道 |
 | `kind` | string | 是 | | `gain`、`amp.adsr`、`filter.lowpass` 或 `mix` |
 | `params` | object | 否 | | `gain` 范围 0 到 4；ADSR / 低通参数见下表 |
+| `position` | number[2] | 否 | | 节点画布坐标，仅 `node.add` 使用 |
 
 返回：
 
@@ -592,7 +593,7 @@
 
 ### 35. `node.add`
 
-向轨道节点图插入一个设备节点，位置在 `output` 之前。参数与 `device.add` 相同，节点 ID 仍生成 `device-{n}`。
+向轨道节点图添加一个**未连接**的设备节点，参数与 `device.add` 相同；节点 ID 仍生成 `device-{n}`。可选 `position: [x, y]` 指定画布坐标。新节点不会自动插入输出之前，接线由 `node.connect` 完成。
 
 ```json
 { "track_id": "track-1", "kind": "gain", "params": { "gain": 0.5 } }

@@ -6,10 +6,12 @@
   interface Props {
     track: Track | null;
     busy: boolean;
-    onAddGain: (trackId: string) => void;
-    onAddAdsr: (trackId: string) => void;
-    onAddFilter: (trackId: string) => void;
-    onAddMix: (trackId: string) => void;
+    onAddNode: (
+      trackId: string,
+      kind: string,
+      x: number,
+      y: number,
+    ) => void | Promise<string | undefined>;
     onConnect: (
       trackId: string,
       fromNodeId: string,
@@ -41,10 +43,7 @@
   let {
     track,
     busy,
-    onAddGain,
-    onAddAdsr,
-    onAddFilter,
-    onAddMix,
+    onAddNode,
     onConnect,
     onDisconnect,
     onPlace,
@@ -400,10 +399,7 @@
     event.preventDefault();
     selectNode(node, event);
     if (!selected.has(node.id)) return;
-    const ids = [...selected].filter((id) => {
-      const candidate = graph?.nodes[id];
-      return candidate && !candidate.kind.startsWith("instrument.");
-    });
+    const ids = [...selected].filter((id) => Boolean(graph?.nodes[id]));
     const origins: Record<string, Point> = {};
     for (const id of ids) {
       const position = nodePositions[id];
@@ -463,8 +459,8 @@
       const next = { ...draft };
       for (const [id, origin] of Object.entries(nodeDrag.origins)) {
         next[id] = {
-          x: Math.max(0, origin.x + dx),
-          y: Math.max(0, origin.y + dy),
+          x: origin.x + dx,
+          y: origin.y + dy,
         };
       }
       draft = next;
@@ -649,10 +645,22 @@
     if (event.code === "Space" || event.key === " ") spaceHeld = false;
   }
 
-  function addFromMenu(action: (trackId: string) => void) {
+  function addNode(kind: string, at?: Point) {
     if (!track) return;
+    const point =
+      at ??
+      (addMenu
+        ? { x: addMenu.x, y: addMenu.y }
+        : {
+            x: (board?.clientWidth ?? 800) / 2,
+            y: (board?.clientHeight ?? 500) / 2,
+          });
+    const world = {
+      x: (point.x - view.x) / view.scale,
+      y: (point.y - view.y) / view.scale,
+    };
     addMenu = null;
-    action(track.id);
+    void onAddNode(track.id, kind, world.x, world.y);
   }
 </script>
 
@@ -687,28 +695,28 @@
       <button
         class="ghost small graph-add"
         disabled={busy || hasAdsr}
-        onclick={() => onAddAdsr(owner.id)}
+        onclick={() => addNode("amp.adsr")}
       >
         {t("graph.addAdsr")}
       </button>
       <button
         class="ghost small graph-add"
         disabled={busy}
-        onclick={() => onAddFilter(owner.id)}
+        onclick={() => addNode("filter.lowpass")}
       >
         {t("graph.addFilter")}
       </button>
       <button
         class="ghost small graph-add"
         disabled={busy}
-        onclick={() => onAddMix(owner.id)}
+        onclick={() => addNode("mix")}
       >
         {t("graph.addMix")}
       </button>
       <button
         class="ghost small graph-add"
         disabled={busy}
-        onclick={() => onAddGain(owner.id)}
+        onclick={() => addNode("gain")}
       >
         {t("graph.addGain")}
       </button>
@@ -982,28 +990,28 @@
           <button
             role="menuitem"
             disabled={busy || hasAdsr}
-            onclick={() => addFromMenu(onAddAdsr)}
+            onclick={() => addNode("amp.adsr")}
           >
             {t("graph.addAdsr")}
           </button>
           <button
             role="menuitem"
             disabled={busy}
-            onclick={() => addFromMenu(onAddFilter)}
+            onclick={() => addNode("filter.lowpass")}
           >
             {t("graph.addFilter")}
           </button>
           <button
             role="menuitem"
             disabled={busy}
-            onclick={() => addFromMenu(onAddMix)}
+            onclick={() => addNode("mix")}
           >
             {t("graph.addMix")}
           </button>
           <button
             role="menuitem"
             disabled={busy}
-            onclick={() => addFromMenu(onAddGain)}
+            onclick={() => addNode("gain")}
           >
             {t("graph.addGain")}
           </button>
