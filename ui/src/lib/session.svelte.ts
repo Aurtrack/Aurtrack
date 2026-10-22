@@ -858,6 +858,44 @@ export class SessionStore {
     }
   }
 
+  async placeNodes(
+    trackId: string,
+    nodes: { id: string; x: number; y: number }[],
+  ) {
+    if (this.busy || nodes.length === 0) return;
+    this.busy = true;
+    try {
+      await this.run("node.position", {
+        positions: nodes.map((node) => ({
+          path: `/tracks/${trackId}/nodes/${node.id}`,
+          x: node.x,
+          y: node.y,
+        })),
+      });
+      await this.refreshProject();
+      this.setStatus("status.nodesPlaced");
+    } catch (error) {
+      this.fail("status.nodesPlaceFailed", error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  async deleteNodes(paths: string[]) {
+    if (this.busy || paths.length === 0) return;
+    this.busy = true;
+    try {
+      await this.run("node.remove_many", { paths });
+      await this.refreshProject();
+      await this.reloadIfPlaying();
+      this.setStatus("status.nodesRemoved");
+    } catch (error) {
+      this.fail("status.nodesRemoveFailed", error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
   async deleteNode(path: string) {
     if (this.busy) return;
     this.busy = true;

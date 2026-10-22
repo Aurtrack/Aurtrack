@@ -49,6 +49,7 @@ export type GraphNode = {
   id: string;
   kind: string;
   params: Record<string, number>;
+  position?: [number, number];
 };
 
 export type GraphConnection = {

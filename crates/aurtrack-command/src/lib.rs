@@ -551,6 +551,43 @@ fn node_connect_schema() -> Value {
     )
 }
 
+fn node_position_schema() -> Value {
+    object_schema(
+        json!({
+            "positions": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 128,
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "path": { "type": "string" },
+                        "x": { "type": "number" },
+                        "y": { "type": "number" }
+                    },
+                    "required": ["path", "x", "y"],
+                    "additionalProperties": false
+                }
+            }
+        }),
+        &["positions"],
+    )
+}
+
+fn nodes_remove_schema() -> Value {
+    object_schema(
+        json!({
+            "paths": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 128,
+                "items": { "type": "string" }
+            }
+        }),
+        &["paths"],
+    )
+}
+
 fn transport_play_schema() -> Value {
     object_schema(json!({}), &[])
 }
@@ -590,7 +627,7 @@ fn transport_metronome_schema() -> Value {
     )
 }
 
-static COMMANDS: [CommandSpec; 39] = [
+static COMMANDS: [CommandSpec; 41] = [
     CommandSpec {
         id: "project.create",
         summary: "创建或替换当前工程",
@@ -758,6 +795,18 @@ static COMMANDS: [CommandSpec; 39] = [
         summary: "断开两个节点之间的连接",
         undo: UndoKind::Snapshot,
         input_schema: node_connect_schema,
+    },
+    CommandSpec {
+        id: "node.position",
+        summary: "批量记录节点画布坐标",
+        undo: UndoKind::Snapshot,
+        input_schema: node_position_schema,
+    },
+    CommandSpec {
+        id: "node.remove_many",
+        summary: "批量删除设备节点",
+        undo: UndoKind::Snapshot,
+        input_schema: nodes_remove_schema,
     },
     CommandSpec {
         id: "param.set",

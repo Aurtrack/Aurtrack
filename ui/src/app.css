@@ -1621,3 +1621,128 @@ button:disabled {
   stroke-dasharray: 4 3;
   pointer-events: none;
 }
+
+/* Blender 风格画布：视口平移缩放、框选和节点拖动。 */
+.graph-board {
+  position: relative;
+  overflow: hidden;
+  padding: 0;
+  cursor: default;
+  user-select: none;
+}
+
+.graph-board.panning {
+  cursor: grabbing;
+}
+
+.graph-canvas {
+  position: absolute;
+  top: 0;
+  left: 0;
+  margin: 0;
+  min-width: 0;
+  min-height: 0;
+  transform-origin: 0 0;
+}
+
+.graph-node {
+  z-index: 2;
+  width: 220px;
+  min-height: 90px;
+  cursor: default;
+}
+
+.graph-node.selected {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+
+.graph-node.selected .graph-node-head {
+  background: #e4ecf5;
+}
+
+.graph-node-head {
+  cursor: grab;
+  touch-action: none;
+}
+
+.graph-node-head:active {
+  cursor: grabbing;
+}
+
+.graph-port {
+  z-index: 4;
+  width: 11px;
+  height: 11px;
+  transition: transform 80ms linear;
+}
+
+.graph-port:hover,
+.graph-port.active {
+  transform: scale(1.35);
+}
+
+.graph-wire {
+  pointer-events: none;
+}
+
+.graph-wire-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 14;
+  pointer-events: stroke;
+  cursor: pointer;
+}
+
+.graph-wire-hit:hover + .graph-wire,
+.graph-wire-hit:focus + .graph-wire {
+  stroke-width: 2.6;
+}
+
+.graph-marquee {
+  position: absolute;
+  z-index: 6;
+  border: 1px solid var(--blue);
+  background: rgba(46, 95, 145, 0.08);
+  pointer-events: none;
+}
+
+.graph-add-menu {
+  position: absolute;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  min-width: 150px;
+  border: 1px solid var(--blue);
+  background: #fbfbfa;
+}
+
+.graph-add-menu button {
+  margin: 0;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  padding: 7px 12px;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 10px;
+  text-align: left;
+  text-transform: none;
+}
+
+.graph-add-menu button:last-child {
+  border-bottom: 0;
+}
+
+.graph-add-menu button:hover {
+  background: var(--blue);
+  color: #fff;
+}
+
+.graph-zoom {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 9px;
+  min-width: 38px;
+  text-align: right;
+}

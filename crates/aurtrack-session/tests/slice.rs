@@ -330,10 +330,10 @@ fn batch_note_edits_and_cross_track_clip_move_share_snapshots() {
 }
 
 #[test]
-fn describe_lists_thirty_nine_commands() {
+fn describe_lists_forty_one_commands() {
     let mut session = Session::default();
     let out = run(&mut session, "describe", json!({}));
-    assert_eq!(out["commands"].as_array().unwrap().len(), 39);
+    assert_eq!(out["commands"].as_array().unwrap().len(), 41);
     assert!(out["project"].is_null());
 }
 
@@ -750,6 +750,54 @@ fn lowpass_device_accepts_cutoff_and_resonance() {
         })
         .unwrap_err();
     assert_eq!(error.code, "invalid_args");
+}
+
+#[test]
+fn node_positions_and_batch_remove() {
+    let mut session = Session::default();
+    run(&mut session, "project.create", json!({}));
+    run(&mut session, "track.create", json!({ "name": "lead" }));
+    let filter = run(
+        &mut session,
+        "node.add",
+        json!({ "track_id": "track-1", "kind": "filter.lowpass" }),
+    );
+    let filter_id = filter["node_id"].as_str().unwrap();
+    run(
+        &mut session,
+        "node.position",
+        json!({
+            "positions": [{
+                "path": format!("/tracks/track-1/nodes/{filter_id}"),
+                "x": 320.0,
+                "y": 140.0
+            }]
+        }),
+    );
+    let state = run(&mut session, "project.state", json!({}));
+    let node = &state["project"]["tracks"][0]["graph"]["nodes"][filter_id];
+    assert_eq!(node["position"], json!([320.0, 140.0]));
+    run(&mut session, "undo", json!({}));
+    let state = run(&mut session, "project.state", json!({}));
+    assert!(
+        state["project"]["tracks"][0]["graph"]["nodes"][filter_id]
+            .get("position")
+            .is_none()
+    );
+
+    run(
+        &mut session,
+        "node.remove_many",
+        json!({
+            "paths": [format!("/tracks/track-1/nodes/{filter_id}")]
+        }),
+    );
+    let state = run(&mut session, "project.state", json!({}));
+    assert!(
+        state["project"]["tracks"][0]["graph"]["nodes"]
+            .get(filter_id)
+            .is_none()
+    );
 }
 
 #[test]

@@ -295,6 +295,8 @@ impl Session {
             "node.move" => self.cmd_node_move(&request.args),
             "node.connect" => self.cmd_node_connect(&request.args),
             "node.disconnect" => self.cmd_node_disconnect(&request.args),
+            "node.position" => self.cmd_node_position(&request.args),
+            "node.remove_many" => self.cmd_node_remove_many(&request.args),
             "param.set" => self.cmd_param_set(&request.args),
             "render.segment" => self.cmd_render_segment(&request.args),
             "describe" => Ok(self.cmd_describe()),
@@ -1843,6 +1845,98 @@ impl Session {
         .with_undo(token))
     }
 
+    fn cmd_node_position(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        let args: NodePositionArgs = parse_args(args)?;
+        if args.positions.is_empty() {
+            return Err(CommandError::invalid_args("positions 不能为空"));
+        }
+        if args.positions.len() > 128 {
+            return Err(CommandError::invalid_args("一次最多移动 128 个节点"));
+        }
+        let project = self
+            .project
+            .as_ref()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let mut parsed = Vec::with_capacity(args.positions.len());
+        for position in &args.positions {
+            let (track_id, node) = parse_node_path(&position.path)?;
+            let node_id = NodeId::new(node).map_err(graph_error)?;
+            let track = project
+                .tracks
+                .iter()
+                .find(|track| track.id == track_id)
+                .ok_or_else(|| CommandError::not_found(format!("找不到轨道：{track_id}")))?;
+            if track.graph.node(&node_id).is_none() {
+                return Err(CommandError::not_found(format!(
+                    "找不到节点：{}",
+                    position.path
+                )));
+            }
+            parsed.push((track_id.to_string(), node_id, position.x, position.y));
+        }
+        let token = self.snapshot("node.position");
+        let project = self
+            .project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        for (track_id, node_id, x, y) in &parsed {
+            let track = project
+                .tracks
+                .iter_mut()
+                .find(|track| track.id == *track_id)
+                .ok_or_else(|| CommandError::not_found(format!("找不到轨道：{track_id}")))?;
+            track
+                .graph
+                .set_position(node_id, *x, *y)
+                .map_err(graph_error)?;
+        }
+        Ok(CommandResponse::ok(json!({ "positions": args.positions })).with_undo(token))
+    }
+
+    fn cmd_node_remove_many(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        let args: NodesRemoveArgs = parse_args(args)?;
+        if args.paths.is_empty() {
+            return Err(CommandError::invalid_args("paths 不能为空"));
+        }
+        if args.paths.len() > 128 {
+            return Err(CommandError::invalid_args("一次最多删除 128 个节点"));
+        }
+        let project = self
+            .project
+            .as_ref()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let mut parsed = Vec::with_capacity(args.paths.len());
+        for path in &args.paths {
+            let (track_id, node) = parse_node_path(path)?;
+            let node_id = NodeId::new(node).map_err(graph_error)?;
+            let node_kind = project
+                .tracks
+                .iter()
+                .find(|track| track.id == track_id)
+                .and_then(|track| track.graph.node(&node_id))
+                .map(Node::kind)
+                .ok_or_else(|| CommandError::not_found(format!("找不到节点：{path}")))?;
+            if !node_kind.is_device() {
+                return Err(CommandError::invalid_args("只能删除设备节点"));
+            }
+            parsed.push((track_id.to_string(), node_id, node_kind));
+        }
+        let token = self.snapshot("node.remove_many");
+        let project = self
+            .project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        for (track_id, node_id, _) in parsed {
+            let track = project
+                .tracks
+                .iter_mut()
+                .find(|track| track.id == track_id)
+                .ok_or_else(|| CommandError::not_found(format!("找不到轨道：{track_id}")))?;
+            track.graph.remove_node(&node_id).map_err(graph_error)?;
+        }
+        Ok(CommandResponse::ok(json!({ "paths": args.paths })).with_undo(token))
+    }
+
     fn cmd_redo(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
         let args: UndoArgs = parse_args(args)?;
         let steps = args.steps.unwrap_or(1);
@@ -2493,6 +2587,26 @@ struct NodeConnectArgs {
     from_port: String,
     #[serde(default = "default_to_port")]
     to_port: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NodePositionArgs {
+    positions: Vec<NodePositionArg>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct NodePositionArg {
+    path: String,
+    x: f64,
+    y: f64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NodesRemoveArgs {
+    paths: Vec<String>,
 }
 
 fn default_from_port() -> String {

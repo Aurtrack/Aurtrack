@@ -24,7 +24,12 @@
       toNodeId: string,
       toPort: string,
     ) => void;
+    onPlace: (
+      trackId: string,
+      nodes: { id: string; x: number; y: number }[],
+    ) => void | Promise<void>;
     onRemove: (path: string) => void;
+    onRemoveMany: (paths: string[]) => void;
     onParamChange: (
       trackId: string,
       nodeId: string,
@@ -42,36 +47,108 @@
     onAddMix,
     onConnect,
     onDisconnect,
+    onPlace,
     onRemove,
+    onRemoveMany,
     onParamChange,
   }: Props = $props();
 
-  type Position = {
-    x: number;
-    y: number;
-    w: number;
-    h: number;
-  };
-
+  type Point = { x: number; y: number };
+  type Position = Point & { w: number; h: number };
   type Layout = {
     positions: Record<string, Position>;
     width: number;
     height: number;
   };
+  type WireDrag = {
+    side: "out" | "in";
+    node: string;
+    port: string;
+    x: number;
+    y: number;
+  };
+  type NodeDrag = {
+    start: Point;
+    ids: string[];
+    origins: Record<string, Point>;
+    moved: boolean;
+  };
+  type PanDrag = {
+    startX: number;
+    startY: number;
+    viewX: number;
+    viewY: number;
+  };
+  type Marquee = {
+    x1: number;
+    y1: number;
+    x2: number;
+    y2: number;
+    additive: boolean;
+  };
+  type AddMenu = { x: number; y: number };
 
   const CARD_WIDTH = 220;
   const COLUMN_GAP = 110;
   const HEADER_PORT_Y = 22;
+  const MIN_SCALE = 0.25;
+  const MAX_SCALE = 2.5;
 
-  let canvas = $state<HTMLDivElement>();
-  let wireDrag = $state<{ from: string; x: number; y: number } | null>(null);
+  let board = $state<HTMLDivElement>();
+  let view = $state({ x: 20, y: 30, scale: 0.8 });
+  let selected = $state<Set<string>>(new Set());
+  let draft = $state<Record<string, Point>>({});
+  let nodeDrag = $state<NodeDrag | null>(null);
+  let panDrag = $state<PanDrag | null>(null);
+  let marquee = $state<Marquee | null>(null);
+  let wireDrag = $state<WireDrag | null>(null);
   let wireHover = $state<{ node: string; port: string } | null>(null);
+  let addMenu = $state<AddMenu | null>(null);
+  let spaceHeld = $state(false);
+  let lastPointer = $state<Point>({ x: 0, y: 0 });
 
   let graph = $derived(track?.graph ?? null);
   let nodes = $derived(graph ? Object.values(graph.nodes) : ([] as GraphNode[]));
   let connections = $derived(graph?.connections ?? ([] as GraphConnection[]));
   let hasAdsr = $derived(nodes.some((node) => node.kind === "amp.adsr"));
-  let layout = $derived.by(() => buildLayout(nodes, connections));
+  let autoLayout = $derived.by(() => buildLayout(nodes, connections));
+
+  let nodePositions = $derived.by(() => {
+    const result: Record<string, Position> = {};
+    for (const node of nodes) {
+      const size = nodeSize(node);
+      const stored = node.position;
+      const auto = autoLayout.positions[node.id];
+      const base = stored
+        ? { x: stored[0], y: stored[1] }
+        : (auto ?? { x: 30, y: 30 });
+      const point = draft[node.id] ?? base;
+      result[node.id] = { ...point, ...size };
+    }
+    return result;
+  });
+
+  let lastTrackId = "";
+
+  $effect(() => {
+    const id = track?.id ?? "";
+    if (id === lastTrackId) return;
+    lastTrackId = id;
+    selected = new Set();
+    draft = {};
+    addMenu = null;
+    view = { x: 20, y: 30, scale: 0.8 };
+  });
+
+  let canvasSize = $derived.by(() => {
+    let width = 1600;
+    let height = 900;
+    for (const position of Object.values(nodePositions)) {
+      width = Math.max(width, position.x + position.w + 200);
+      height = Math.max(height, position.y + position.h + 200);
+    }
+    return { width, height };
+  });
 
   function nodeHeight(kind: string): number {
     if (kind === "amp.adsr") return 184;
@@ -80,6 +157,10 @@
     if (kind === "mix") return 104;
     if (kind === "output") return 80;
     return 90;
+  }
+
+  function nodeSize(node: GraphNode) {
+    return { w: CARD_WIDTH, h: nodeHeight(node.kind) };
   }
 
   function buildLayout(
@@ -179,66 +260,298 @@
     return [{ port: "in", y: HEADER_PORT_Y }];
   }
 
-  function outputPoint(connection: GraphConnection) {
-    const position = layout.positions[connection.from.node];
+  function outputPoint(nodeId: string): Point | null {
+    const position = nodePositions[nodeId];
     if (!position) return null;
     return { x: position.x + position.w, y: position.y + HEADER_PORT_Y };
   }
 
-  function inputPoint(connection: GraphConnection) {
-    const position = layout.positions[connection.to.node];
-    const node = graph?.nodes[connection.to.node];
+  function inputPoint(nodeId: string, portName: string): Point | null {
+    const position = nodePositions[nodeId];
+    const node = graph?.nodes[nodeId];
     if (!position || !node) return null;
     const port = inputPorts(node).find(
-      (candidate) => candidate.port === connection.to.port,
+      (candidate) => candidate.port === portName,
     );
     return { x: position.x, y: position.y + (port?.y ?? HEADER_PORT_Y) };
   }
 
   function wirePath(connection: GraphConnection): string {
-    const from = outputPoint(connection);
-    const to = inputPoint(connection);
+    const from = outputPoint(connection.from.node);
+    const to = inputPoint(connection.to.node, connection.to.port);
     if (!from || !to) return "";
-    const bend = Math.max(42, Math.abs(to.x - from.x) * 0.35);
+    return curve(from, to);
+  }
+
+  function curve(from: Point, to: Point): string {
+    const bend = Math.max(48, Math.abs(to.x - from.x) * 0.4);
     return `M ${from.x} ${from.y} C ${from.x + bend} ${from.y}, ${to.x - bend} ${to.y}, ${to.x} ${to.y}`;
   }
 
-  function pointer(event: MouseEvent) {
-    if (!canvas) return null;
-    const rect = canvas.getBoundingClientRect();
+  function pointer(event: { clientX: number; clientY: number }): Point | null {
+    if (!board) return null;
+    const rect = board.getBoundingClientRect();
     return { x: event.clientX - rect.left, y: event.clientY - rect.top };
   }
 
-  function startWire(event: MouseEvent, node: GraphNode) {
-    if (event.button !== 0 || busy) return;
+  function worldPoint(event: { clientX: number; clientY: number }): Point | null {
+    const point = pointer(event);
+    if (!point) return null;
+    return {
+      x: (point.x - view.x) / view.scale,
+      y: (point.y - view.y) / view.scale,
+    };
+  }
+
+  function clampScale(scale: number): number {
+    return Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale));
+  }
+
+  function handleWheel(event: WheelEvent) {
+    if (!board) return;
+    event.preventDefault();
     const point = pointer(event);
     if (!point) return;
+    const next = clampScale(view.scale * Math.exp(-event.deltaY * 0.0012));
+    const worldX = (point.x - view.x) / view.scale;
+    const worldY = (point.y - view.y) / view.scale;
+    view = {
+      x: point.x - worldX * next,
+      y: point.y - worldY * next,
+      scale: next,
+    };
+  }
+
+  function frameAll() {
+    if (!board || nodes.length === 0) return;
+    const rect = board.getBoundingClientRect();
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const node of nodes) {
+      const position = nodePositions[node.id];
+      if (!position) continue;
+      minX = Math.min(minX, position.x);
+      minY = Math.min(minY, position.y);
+      maxX = Math.max(maxX, position.x + position.w);
+      maxY = Math.max(maxY, position.y + position.h);
+    }
+    if (!Number.isFinite(minX) || !Number.isFinite(minY)) return;
+    const width = Math.max(1, maxX - minX);
+    const height = Math.max(1, maxY - minY);
+    const scale = clampScale(
+      Math.min(1, (rect.width - 100) / width, (rect.height - 100) / height),
+    );
+    view = {
+      x: (rect.width - width * scale) / 2 - minX * scale,
+      y: (rect.height - height * scale) / 2 - minY * scale,
+      scale,
+    };
+  }
+
+  function boardMouseDown(event: MouseEvent) {
+    if (event.button === 1 || (spaceHeld && event.button === 0)) {
+      event.preventDefault();
+      panDrag = {
+        startX: event.clientX,
+        startY: event.clientY,
+        viewX: view.x,
+        viewY: view.y,
+      };
+      return;
+    }
+    if (event.button !== 0) return;
+    const target = event.target as Element | null;
+    if (target?.closest(".graph-node, .graph-wire-hit, .graph-add-menu")) {
+      return;
+    }
+    const point = worldPoint(event);
+    if (!point) return;
+    const additive = event.shiftKey;
+    if (!additive) selected = new Set();
+    marquee = {
+      x1: point.x,
+      y1: point.y,
+      x2: point.x,
+      y2: point.y,
+      additive,
+    };
+    addMenu = null;
+    event.preventDefault();
+  }
+
+  function selectNode(node: GraphNode, event: MouseEvent) {
+    addMenu = null;
+    if (event.button !== 0) return;
+    if (event.shiftKey) {
+      const next = new Set(selected);
+      if (next.has(node.id)) next.delete(node.id);
+      else next.add(node.id);
+      selected = next;
+    } else if (!selected.has(node.id)) {
+      selected = new Set([node.id]);
+    }
+  }
+
+  function headerMouseDown(event: MouseEvent, node: GraphNode) {
+    if (event.button !== 0 || busy || spaceHeld) return;
+    event.stopPropagation();
+    event.preventDefault();
+    selectNode(node, event);
+    if (!selected.has(node.id)) return;
+    const ids = [...selected].filter((id) => {
+      const candidate = graph?.nodes[id];
+      return candidate && !candidate.kind.startsWith("instrument.");
+    });
+    const origins: Record<string, Point> = {};
+    for (const id of ids) {
+      const position = nodePositions[id];
+      if (position) origins[id] = { x: position.x, y: position.y };
+    }
+    const start = worldPoint(event);
+    if (!start) return;
+    nodeDrag = { start, ids, origins, moved: false };
+    addMenu = null;
+  }
+
+  function startWire(event: MouseEvent, node: GraphNode, side: "out" | "in", port: string) {
+    if (event.button !== 0 || busy || spaceHeld) return;
     event.preventDefault();
     event.stopPropagation();
-    wireDrag = { from: node.id, x: point.x, y: point.y };
+    const point = worldPoint(event);
+    if (!point) return;
+    wireDrag = { side, node: node.id, port, x: point.x, y: point.y };
+    wireHover = null;
+  }
+
+  function updateWireHover(event: MouseEvent) {
+    const drag = wireDrag;
+    if (!drag) return;
+    const selector = drag.side === "out" ? "[data-input-node]" : "[data-output-node]";
+    const element = document.elementFromPoint(event.clientX, event.clientY);
+    const target = element?.closest<HTMLElement>(selector);
+    if (drag.side === "out") {
+      const node = target?.dataset.inputNode;
+      const port = target?.dataset.inputPort;
+      wireHover =
+        node && port && node !== drag.node ? { node, port } : null;
+    } else {
+      const node = target?.dataset.outputNode;
+      wireHover =
+        node && node !== drag.node ? { node, port: "out" } : null;
+    }
   }
 
   function handleMouseMove(event: MouseEvent) {
-    if (!wireDrag) return;
-    const point = pointer(event);
-    if (!point) return;
-    wireDrag = { ...wireDrag, x: point.x, y: point.y };
-    const element = document.elementFromPoint(event.clientX, event.clientY);
-    const target = element?.closest<HTMLElement>("[data-input-node]");
-    const node = target?.dataset.inputNode;
-    const port = target?.dataset.inputPort;
-    wireHover =
-      node && port && node !== wireDrag.from ? { node, port } : null;
-    event.preventDefault();
+    lastPointer = pointer(event) ?? lastPointer;
+    if (panDrag) {
+      view = {
+        ...view,
+        x: panDrag.viewX + event.clientX - panDrag.startX,
+        y: panDrag.viewY + event.clientY - panDrag.startY,
+      };
+      return;
+    }
+    if (nodeDrag) {
+      const point = worldPoint(event);
+      if (!point) return;
+      const dx = point.x - nodeDrag.start.x;
+      const dy = point.y - nodeDrag.start.y;
+      if (!nodeDrag.moved && Math.hypot(dx, dy) < 2) return;
+      nodeDrag.moved = true;
+      const next = { ...draft };
+      for (const [id, origin] of Object.entries(nodeDrag.origins)) {
+        next[id] = {
+          x: Math.max(0, origin.x + dx),
+          y: Math.max(0, origin.y + dy),
+        };
+      }
+      draft = next;
+      event.preventDefault();
+      return;
+    }
+    if (marquee) {
+      const point = worldPoint(event);
+      if (!point) return;
+      marquee = { ...marquee, x2: point.x, y2: point.y };
+      return;
+    }
+    if (wireDrag) {
+      const point = worldPoint(event);
+      if (point) wireDrag = { ...wireDrag, x: point.x, y: point.y };
+      updateWireHover(event);
+    }
+  }
+
+  function finishMarquee() {
+    const area = marquee;
+    marquee = null;
+    if (!area) return;
+    if (Math.abs(area.x2 - area.x1) < 3 && Math.abs(area.y2 - area.y1) < 3) {
+      return;
+    }
+    const left = Math.min(area.x1, area.x2);
+    const right = Math.max(area.x1, area.x2);
+    const top = Math.min(area.y1, area.y2);
+    const bottom = Math.max(area.y1, area.y2);
+    const hits: string[] = [];
+    for (const node of nodes) {
+      const position = nodePositions[node.id];
+      if (!position) continue;
+      if (
+        position.x < right &&
+        position.x + position.w > left &&
+        position.y < bottom &&
+        position.y + position.h > top
+      ) {
+        hits.push(node.id);
+      }
+    }
+    selected = area.additive ? new Set([...selected, ...hits]) : new Set(hits);
   }
 
   function handleMouseUp() {
-    const drag = wireDrag;
-    const target = wireHover;
-    wireDrag = null;
-    wireHover = null;
-    if (!drag || !target || !track) return;
-    onConnect(track.id, drag.from, "out", target.node, target.port);
+    if (panDrag) {
+      panDrag = null;
+      return;
+    }
+    if (marquee) {
+      finishMarquee();
+      return;
+    }
+    if (nodeDrag) {
+      const drag = nodeDrag;
+      nodeDrag = null;
+      if (drag.moved && track) {
+        const placed = drag.ids
+          .map((id) => {
+            const point = draft[id];
+            return point ? { id, x: point.x, y: point.y } : null;
+          })
+          .filter((item): item is { id: string; x: number; y: number } =>
+            Boolean(item),
+          );
+        if (placed.length > 0) {
+          Promise.resolve(onPlace(track.id, placed)).finally(() => {
+            draft = {};
+          });
+        }
+      }
+      return;
+    }
+    if (wireDrag) {
+      const drag = wireDrag;
+      const target = wireHover;
+      wireDrag = null;
+      wireHover = null;
+      if (!track || !target) return;
+      if (drag.side === "out") {
+        onConnect(track.id, drag.node, drag.port, target.node, target.port);
+      } else {
+        onConnect(track.id, target.node, "out", drag.node, drag.port);
+      }
+    }
   }
 
   function removeWire(event: Event, connection: GraphConnection) {
@@ -255,16 +568,100 @@
 
   function tempWirePath(): string {
     if (!wireDrag) return "";
-    const position = layout.positions[wireDrag.from];
-    if (!position) return "";
-    const fromX = position.x + position.w;
-    const fromY = position.y + HEADER_PORT_Y;
-    const bend = Math.max(42, Math.abs(wireDrag.x - fromX) * 0.35);
-    return `M ${fromX} ${fromY} C ${fromX + bend} ${fromY}, ${wireDrag.x - bend} ${wireDrag.y}, ${wireDrag.x} ${wireDrag.y}`;
+    const anchor =
+      wireDrag.side === "out"
+        ? outputPoint(wireDrag.node)
+        : inputPoint(wireDrag.node, wireDrag.port);
+    if (!anchor) return "";
+    return curve(anchor, { x: wireDrag.x, y: wireDrag.y });
+  }
+
+  function marqueeStyle(): string {
+    if (!marquee) return "";
+    const left = Math.min(marquee.x1, marquee.x2);
+    const top = Math.min(marquee.y1, marquee.y2);
+    const width = Math.abs(marquee.x2 - marquee.x1);
+    const height = Math.abs(marquee.y2 - marquee.y1);
+    return `left:${left}px;top:${top}px;width:${width}px;height:${height}px`;
+  }
+
+  function selectedPaths(): string[] {
+    if (!track) return [];
+    return nodes
+      .filter((node) => selected.has(node.id) && isDevice(node))
+      .map((node) => `/tracks/${track.id}/nodes/${node.id}`);
+  }
+
+  function deleteSelected() {
+    const paths = selectedPaths();
+    if (paths.length === 0) return;
+    selected = new Set();
+    onRemoveMany(paths);
+  }
+
+  function isEditing(): boolean {
+    const element = document.activeElement;
+    return (
+      element instanceof HTMLInputElement ||
+      element instanceof HTMLTextAreaElement ||
+      element instanceof HTMLSelectElement ||
+      (element instanceof HTMLElement && element.isContentEditable)
+    );
+  }
+
+  function handleKeyDown(event: KeyboardEvent) {
+    if ((event.code === "Space" || event.key === " ") && !isEditing()) {
+      spaceHeld = true;
+      event.preventDefault();
+      return;
+    }
+    if (isEditing()) return;
+    if (event.key === "Home") {
+      event.preventDefault();
+      frameAll();
+      return;
+    }
+    if (event.key === "Delete" || event.key === "Backspace") {
+      event.preventDefault();
+      deleteSelected();
+      return;
+    }
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
+      event.preventDefault();
+      selected = new Set(nodes.map((node) => node.id));
+      return;
+    }
+    if (event.shiftKey && event.key.toLowerCase() === "a") {
+      event.preventDefault();
+      addMenu = {
+        x: Math.max(10, lastPointer.x),
+        y: Math.max(10, lastPointer.y),
+      };
+      return;
+    }
+    if (event.key === "Escape") {
+      selected = new Set();
+      addMenu = null;
+    }
+  }
+
+  function handleKeyUp(event: KeyboardEvent) {
+    if (event.code === "Space" || event.key === " ") spaceHeld = false;
+  }
+
+  function addFromMenu(action: (trackId: string) => void) {
+    if (!track) return;
+    addMenu = null;
+    action(track.id);
   }
 </script>
 
-<svelte:window onmousemove={handleMouseMove} onmouseup={handleMouseUp} />
+<svelte:window
+  onmousemove={handleMouseMove}
+  onmouseup={handleMouseUp}
+  onkeydown={handleKeyDown}
+  onkeyup={handleKeyUp}
+/>
 
 <section class="section graph-section">
   <div class="section-head graph-head">
@@ -283,6 +680,10 @@
     <div class="graph-toolbar">
       <span class="graph-hint">{t("graph.hint")}</span>
       <span class="rule"></span>
+      <span class="graph-zoom">{Math.round(view.scale * 100)}%</span>
+      <button class="ghost small graph-add" onclick={frameAll}>
+        {t("graph.frameAll")}
+      </button>
       <button
         class="ghost small graph-add"
         disabled={busy || hasAdsr}
@@ -313,26 +714,37 @@
       </button>
     </div>
 
-    <div class="graph-board">
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <div
+      class="graph-board"
+      class:panning={Boolean(panDrag)}
+      bind:this={board}
+      role="application"
+      aria-label={t("graph.title")}
+      onmousedown={boardMouseDown}
+      onwheel={handleWheel}
+      style:background-position={`${view.x}px ${view.y}px`}
+      style:background-size={`${24 * view.scale}px ${24 * view.scale}px`}
+    >
       <div
         class="graph-canvas"
-        bind:this={canvas}
-        style:width={`${layout.width}px`}
-        style:height={`${layout.height}px`}
+        style:width={`${canvasSize.width}px`}
+        style:height={`${canvasSize.height}px`}
+        style:transform={`translate(${view.x}px, ${view.y}px) scale(${view.scale})`}
       >
         <svg
           class="graph-wires"
-          width={layout.width}
-          height={layout.height}
+          width={canvasSize.width}
+          height={canvasSize.height}
           aria-hidden="true"
         >
           {#each connections as connection, index (`${connection.from.node}:${connection.from.port}->${connection.to.node}:${connection.to.port}:${index}`)}
             <path
-              class="graph-wire"
+              class="graph-wire-hit"
+              d={wirePath(connection)}
               role="button"
               tabindex="0"
               aria-label={t("graph.removeWire")}
-              d={wirePath(connection)}
               onclick={(event) => removeWire(event, connection)}
               onkeydown={(event) => {
                 if (event.key === "Enter" || event.key === " ") {
@@ -341,31 +753,46 @@
                 }
               }}
             />
+            <path class="graph-wire" d={wirePath(connection)} />
           {/each}
           {#if wireDrag}
             <path class="graph-wire temp" d={tempWirePath()} />
           {/if}
         </svg>
 
+        {#if marquee}
+          <div class="graph-marquee" style={marqueeStyle()}></div>
+        {/if}
+
         {#each nodes as node (node.id)}
-          {@const position = layout.positions[node.id]}
+          {@const position = nodePositions[node.id]}
           {@const device = isDevice(node)}
+          {@const isSelected = selected.has(node.id)}
+          <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
           <div
             class="graph-node"
+            class:device
+            class:instrument={node.kind.startsWith("instrument.")}
+            class:output={node.kind === "output"}
+            class:selected={isSelected}
+            class:wire-target={wireHover?.node === node.id}
             role="group"
             aria-label={nodeLabel(node)}
             data-node-id={node.id}
             data-node-kind={node.kind}
-            class:device
-            class:instrument={node.kind.startsWith("instrument.")}
-            class:output={node.kind === "output"}
-            class:wire-target={wireHover?.node === node.id}
             style:left={`${position?.x ?? 0}px`}
             style:top={`${position?.y ?? 0}px`}
+            style:min-height={`${position?.h ?? 90}px`}
             style:width={`${position?.w ?? CARD_WIDTH}px`}
-            style:height={`${position?.h ?? 96}px`}
+            onmousedown={(event) => selectNode(node, event)}
           >
-            <div class="graph-node-head">
+            <div
+              class="graph-node-head"
+              role="button"
+              tabindex="0"
+              aria-label={nodeLabel(node)}
+              onmousedown={(event) => headerMouseDown(event, node)}
+            >
               <span class="graph-node-kind">{nodeLabel(node)}</span>
               <span class="graph-node-id">{node.id}</span>
             </div>
@@ -374,10 +801,12 @@
               <button
                 type="button"
                 class="graph-port graph-port-out"
+                class:active={wireHover?.node === node.id &&
+                  wireDrag?.side === "in"}
                 aria-label={t("graph.startWire")}
                 title={t("graph.startWire")}
                 data-output-node={node.id}
-                onmousedown={(event) => startWire(event, node)}
+                onmousedown={(event) => startWire(event, node, "out", "out")}
               ></button>
             {/if}
             {#each inputPorts(node) as input (input.port)}
@@ -390,6 +819,7 @@
                 aria-label={t("graph.inputPort")}
                 data-input-node={node.id}
                 data-input-port={input.port}
+                onmousedown={(event) => startWire(event, node, "in", input.port)}
               ></button>
             {/each}
 
@@ -527,8 +957,10 @@
                 <button
                   class="mini-button danger"
                   disabled={busy}
-                  onclick={() =>
-                    onRemove(`/tracks/${owner.id}/nodes/${node.id}`)}
+                  onclick={(event) => {
+                    event.stopPropagation();
+                    onRemove(`/tracks/${owner.id}/nodes/${node.id}`);
+                  }}
                 >
                   ×
                 </button>
@@ -537,6 +969,46 @@
           </div>
         {/each}
       </div>
+
+      {#if addMenu}
+        <div
+          class="graph-add-menu"
+          style:left={`${addMenu.x}px`}
+          style:top={`${addMenu.y}px`}
+          role="menu"
+          tabindex="-1"
+          onmousedown={(event) => event.stopPropagation()}
+        >
+          <button
+            role="menuitem"
+            disabled={busy || hasAdsr}
+            onclick={() => addFromMenu(onAddAdsr)}
+          >
+            {t("graph.addAdsr")}
+          </button>
+          <button
+            role="menuitem"
+            disabled={busy}
+            onclick={() => addFromMenu(onAddFilter)}
+          >
+            {t("graph.addFilter")}
+          </button>
+          <button
+            role="menuitem"
+            disabled={busy}
+            onclick={() => addFromMenu(onAddMix)}
+          >
+            {t("graph.addMix")}
+          </button>
+          <button
+            role="menuitem"
+            disabled={busy}
+            onclick={() => addFromMenu(onAddGain)}
+          >
+            {t("graph.addGain")}
+          </button>
+        </div>
+      {/if}
     </div>
 
     <div class="section-foot">

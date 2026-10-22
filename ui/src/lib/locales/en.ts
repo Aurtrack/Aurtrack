@@ -147,7 +147,7 @@ export const en: Record<MessageKey, Message> = {
   "graph.title": "NODE GRAPH",
   "graph.nodes": "NODES",
   "graph.noTrack": "Select a track first",
-  "graph.hint": "Drag from an output port to an input port; click a wire to remove",
+  "graph.hint": "MMB pan · wheel zoom · Shift+A add · drag ports to wire",
   "graph.addAdsr": "+ ADSR",
   "graph.addFilter": "+ LOWPASS",
   "graph.addMix": "+ MIX",
@@ -168,7 +168,8 @@ export const en: Record<MessageKey, Message> = {
   "graph.startWire": "Drag from here",
   "graph.inputPort": "Input port",
   "graph.removeWire": "Click to disconnect",
-  "graph.foot": "Node params and wires write to the project; undo supported",
+  "graph.frameAll": "FRAME ALL",
+  "graph.foot": "Home frame · box select then drag · Del remove · undo supported",
   "graph.direction": "IN → OUT",
   "number.decrease": "Decrease",
   "number.increase": "Increase",
@@ -255,6 +256,12 @@ export const en: Record<MessageKey, Message> = {
   "status.nodeDisconnected": "Connection removed",
   "status.nodeDisconnectFailed": (params) =>
     `Disconnect failed: ${params.message}`,
+  "status.nodesPlaced": "Node positions saved",
+  "status.nodesPlaceFailed": (params) =>
+    `Save node positions failed: ${params.message}`,
+  "status.nodesRemoved": "Nodes removed",
+  "status.nodesRemoveFailed": (params) =>
+    `Remove nodes failed: ${params.message}`,
   "status.deviceParamFailed": (params) =>
     `Set device parameter failed: ${params.message}`,
   "status.nodeMoved": "Node order updated",

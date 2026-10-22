@@ -125,7 +125,9 @@
         toNodeId,
         toPort,
       )}
+    onPlace={(trackId, nodes) => session.placeNodes(trackId, nodes)}
     onRemove={(path: string) => void session.deleteNode(path)}
+    onRemoveMany={(paths) => void session.deleteNodes(paths)}
     onParamChange={(trackId, nodeId, name, value) =>
       void session.changeDeviceParam(trackId, nodeId, name, value)}
   />

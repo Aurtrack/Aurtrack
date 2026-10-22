@@ -39,6 +39,11 @@
     if (event.defaultPrevented || isTypingTarget(event.target)) return;
     const modifier = event.ctrlKey || event.metaKey;
     const key = event.key.toLowerCase();
+    const nodeCanvasActive = Boolean(document.querySelector(".graph-board"));
+
+    if (nodeCanvasActive && (key === "delete" || key === "backspace" || key === " ")) {
+      return;
+    }
 
     if (modifier && key === "s") {
       event.preventDefault();

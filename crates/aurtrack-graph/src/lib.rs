@@ -226,6 +226,8 @@ pub struct Node {
     id: NodeId,
     kind: NodeKind,
     params: BTreeMap<String, f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    position: Option<[f64; 2]>,
 }
 
 impl Node {
@@ -234,6 +236,7 @@ impl Node {
             id,
             kind,
             params: kind.default_params(),
+            position: None,
         }
     }
 
@@ -247,6 +250,18 @@ impl Node {
 
     pub fn params(&self) -> &BTreeMap<String, f64> {
         &self.params
+    }
+
+    pub fn position(&self) -> Option<[f64; 2]> {
+        self.position
+    }
+
+    pub fn set_position(&mut self, x: f64, y: f64) -> Result<(), GraphError> {
+        if !x.is_finite() || !y.is_finite() {
+            return Err(GraphError::InvalidPosition);
+        }
+        self.position = Some([x, y]);
+        Ok(())
     }
 
     pub fn param(&self, name: &str) -> Option<f64> {
@@ -580,6 +595,15 @@ impl Graph {
             PortRef::fixed(target.clone(), PORT_IN),
         )?;
         Ok(())
+    }
+
+    /// 记录节点在画布上的位置；位置只是编辑器元数据，不参与音频编译。
+    pub fn set_position(&mut self, id: &NodeId, x: f64, y: f64) -> Result<(), GraphError> {
+        let node = self
+            .nodes
+            .get_mut(id)
+            .ok_or_else(|| GraphError::UnknownNode(id.clone()))?;
+        node.set_position(x, y)
     }
 
     /// 删除节点及所有相关连线；用于无法保持链式语义的混合节点。
@@ -1045,6 +1069,8 @@ pub enum GraphError {
     BranchNode(NodeId),
     #[error("节点太多，当前上限是 {0}")]
     TooManyNodes(usize),
+    #[error("节点坐标必须是有限数")]
+    InvalidPosition,
     #[error("找不到这条连接")]
     MissingConnection,
     #[error("图存在环")]

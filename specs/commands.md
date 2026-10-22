@@ -1,6 +1,6 @@
 # 命令规范 v1.3
 
-这份文档定义 Aurtrack 的可运行命令面：39 条命令、统一的返回结构、寻址规则，以及 MCP 的映射方式。代码必须与本文一致。
+这份文档定义 Aurtrack 的可运行命令面：41 条命令、统一的返回结构、寻址规则，以及 MCP 的映射方式。代码必须与本文一致。
 
 工程格式 v4 用 music tick 存储位置（960 PPQ），轨道保存 `aurtrack-graph` 节点图。命令边界仍用秒，避免 UI 和 CLI 直接操作 tick。旧 v3 工程会被拒绝。
 
@@ -640,6 +640,26 @@
 
 参数与 `node.connect` 相同，断开完全一致的一条连接。找不到连接时返回 `not_found`。
 
+### 40. `node.position`
+
+批量记录节点在画布上的坐标。坐标只用于编辑器布局，不参与音频编译；一次最多 128 个节点，整批共用一个撤销快照。
+
+```json
+{
+  "positions": [
+    { "path": "/tracks/track-1/nodes/device-2", "x": 320, "y": 140 }
+  ]
+}
+```
+
+### 41. `node.remove_many`
+
+批量删除设备节点。删除节点及所有相关连线；乐器和 `output` 不能删除。
+
+```json
+{ "paths": ["/tracks/track-1/nodes/device-2"] }
+```
+
 ## MCP 映射
 
 工具名是命令 ID 把 `.` 换成 `_`：
@@ -655,6 +675,8 @@
 | `node.move` | `node_move` |
 | `node.connect` | `node_connect` |
 | `node.disconnect` | `node_disconnect` |
+| `node.position` | `node_position` |
+| `node.remove_many` | `node_remove_many` |
 | `param.set` | `param_set` |
 | `render.segment` | `render_segment` |
 | `transport.play` | `transport_play` |
