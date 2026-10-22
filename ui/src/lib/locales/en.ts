@@ -137,6 +137,7 @@ export const en: Record<MessageKey, Message> = {
   "inspector.empty": "NO TRACK SELECTED",
   "inspector.addGain": "+ GAIN",
   "inspector.addAdsr": "+ ADSR",
+  "inspector.addFilter": "+ LOWPASS",
   "inspector.moveUp": "Move node up",
   "inspector.moveDown": "Move node down",
   "inspector.removeDeviceTitle": "Remove device",
@@ -148,7 +149,11 @@ export const en: Record<MessageKey, Message> = {
   "graph.noTrack": "Select a track first",
   "graph.hint": "Drag a node header to reorder, or use the arrows",
   "graph.addAdsr": "+ ADSR",
+  "graph.addFilter": "+ LOWPASS",
   "graph.addGain": "+ GAIN",
+  "graph.filter": "FILTER",
+  "graph.cutoff": "CUTOFF Hz",
+  "graph.resonance": "RES %",
   "graph.sine": "SINE",
   "graph.silence": "SILENCE",
   "graph.silenceSource": "SILENT SOURCE",
@@ -165,6 +170,9 @@ export const en: Record<MessageKey, Message> = {
 
   "device.kind.gain": "GAIN",
   "device.kind.adsr": "ADSR",
+  "device.kind.filter": "LOWPASS",
+  "device.filter.cutoff": "CUTOFF Hz",
+  "device.filter.resonance": "RESONANCE %",
   "device.adsr.attack": "ATTACK s",
   "device.adsr.decay": "DECAY s",
   "device.adsr.sustain": "SUSTAIN %",
@@ -230,6 +238,9 @@ export const en: Record<MessageKey, Message> = {
   "status.adsrAdded": "ADSR added",
   "status.adsrAddFailed": (params) =>
     `Add ADSR failed: ${params.message}`,
+  "status.filterAdded": "Lowpass added",
+  "status.filterAddFailed": (params) =>
+    `Add lowpass failed: ${params.message}`,
   "status.deviceParamFailed": (params) =>
     `Set device parameter failed: ${params.message}`,
   "status.nodeMoved": "Node order updated",

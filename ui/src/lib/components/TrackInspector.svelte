@@ -8,6 +8,7 @@
     busy: boolean;
     onAddGain: (trackId: string) => void;
     onAddAdsr: (trackId: string) => void;
+    onAddFilter: (trackId: string) => void;
     onMoveDevice: (
       trackId: string,
       nodeId: string,
@@ -28,6 +29,7 @@
     busy,
     onAddGain,
     onAddAdsr,
+    onAddFilter,
     onMoveDevice,
     onRemoveDevice,
     onGainChange,
@@ -91,6 +93,7 @@
   function kindLabel(kind: string): string {
     if (kind === "gain") return t("device.kind.gain");
     if (kind === "amp.adsr") return t("device.kind.adsr");
+    if (kind === "filter.lowpass") return t("device.kind.filter");
     return kind.toUpperCase();
   }
 </script>
@@ -142,6 +145,11 @@
                 D {formatNumber(paramOf(device, "decay", 0.12), 2)} /
                 S {formatNumber(paramOf(device, "sustain", 0.75) * 100)}% /
                 R {formatNumber(paramOf(device, "release", 0.18), 2)}
+              </span>
+            {:else if device.kind === "filter.lowpass"}
+              <span class="readout">
+                {formatNumber(paramOf(device, "cutoff", 1200), 0)} Hz /
+                {formatNumber(paramOf(device, "resonance", 0.2) * 100, 0)}%
               </span>
             {/if}
             <button
@@ -237,6 +245,42 @@
                 />
               </label>
             </div>
+          {:else if device.kind === "filter.lowpass"}
+            <div class="adsr-grid">
+              <label class="field narrow">
+                <span>{t("device.filter.cutoff")}</span>
+                <NumberField
+                  value={paramOf(device, "cutoff", 1200)}
+                  min={20}
+                  max={20000}
+                  step={1}
+                  precision={0}
+                  suffix="Hz"
+                  disabled={busy}
+                  onchange={(value) =>
+                    onParamChange(current.id, device.id, "cutoff", value)}
+                />
+              </label>
+              <label class="field narrow">
+                <span>{t("device.filter.resonance")}</span>
+                <NumberField
+                  value={Math.round(paramOf(device, "resonance", 0.2) * 100)}
+                  min={0}
+                  max={95}
+                  step={1}
+                  precision={0}
+                  suffix="%"
+                  disabled={busy}
+                  onchange={(value) =>
+                    onParamChange(
+                      current.id,
+                      device.id,
+                      "resonance",
+                      value / 100,
+                    )}
+                />
+              </label>
+            </div>
           {/if}
         </div>
       {/each}
@@ -255,6 +299,13 @@
           onclick={() => onAddAdsr(current.id)}
         >
           {t("inspector.addAdsr")}
+        </button>
+        <button
+          class="ghost small"
+          disabled={busy}
+          onclick={() => onAddFilter(current.id)}
+        >
+          {t("inspector.addFilter")}
         </button>
       </div>
     </div>

@@ -81,8 +81,8 @@
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 | --- | --- | --- | --- | --- |
 | `track_id` | string | 是 | | 目标轨道 |
-| `kind` | string | 是 | | `gain` 或 `amp.adsr` |
-| `params` | object | 否 | | `gain` 范围 0 到 4；ADSR 参数见下表 |
+| `kind` | string | 是 | | `gain`、`amp.adsr` 或 `filter.lowpass` |
+| `params` | object | 否 | | `gain` 范围 0 到 4；ADSR / 低通参数见下表 |
 
 返回：
 
@@ -99,12 +99,19 @@
 | `sustain` | `0.75` | 0 到 1 |
 | `release` | `0.18` | 0.001 到 10 秒 |
 
+`filter.lowpass` 默认参数：
+
+| 参数 | 默认 | 范围 |
+| --- | --- | --- |
+| `cutoff` | `1200` | 20 到 20000 Hz |
+| `resonance` | `0.2` | 0 到 0.95 |
+
 ### 4. `param.set`
 
 | 参数 | 类型 | 必填 | 说明 |
 | --- | --- | --- | --- |
 | `path` | string | 是 | 参数路径 |
-| `value` | number | 是 | `gain` 范围 0 到 4；`amp.adsr` 参数见上表 |
+| `value` | number | 是 | `gain` 范围 0 到 4；ADSR / 低通参数见上表 |
 
 返回：
 

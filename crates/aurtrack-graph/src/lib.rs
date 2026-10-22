@@ -72,6 +72,8 @@ pub enum NodeKind {
     InstrumentSilence,
     #[serde(rename = "amp.adsr")]
     AmpAdsr,
+    #[serde(rename = "filter.lowpass")]
+    FilterLowpass,
     #[serde(rename = "gain")]
     Gain,
     #[serde(rename = "output")]
@@ -84,6 +86,7 @@ impl NodeKind {
             Self::InstrumentSine => "instrument.sine",
             Self::InstrumentSilence => "instrument.silence",
             Self::AmpAdsr => "amp.adsr",
+            Self::FilterLowpass => "filter.lowpass",
             Self::Gain => "gain",
             Self::Output => "output",
         }
@@ -94,22 +97,24 @@ impl NodeKind {
     }
 
     pub const fn is_device(self) -> bool {
-        matches!(self, Self::AmpAdsr | Self::Gain)
+        matches!(self, Self::AmpAdsr | Self::FilterLowpass | Self::Gain)
     }
 
     pub const fn inputs(self) -> &'static [&'static str] {
         match self {
             Self::InstrumentSine | Self::InstrumentSilence => &[],
-            Self::AmpAdsr | Self::Gain | Self::Output => &[PORT_IN],
+            Self::AmpAdsr | Self::FilterLowpass | Self::Gain | Self::Output => &[PORT_IN],
         }
     }
 
     pub const fn outputs(self) -> &'static [&'static str] {
         match self {
             Self::Output => &[],
-            Self::InstrumentSine | Self::InstrumentSilence | Self::AmpAdsr | Self::Gain => {
-                &[PORT_OUT]
-            },
+            Self::InstrumentSine
+            | Self::InstrumentSilence
+            | Self::AmpAdsr
+            | Self::FilterLowpass
+            | Self::Gain => &[PORT_OUT],
         }
     }
 
@@ -126,6 +131,7 @@ impl NodeKind {
             Self::InstrumentSine => &SINE_PARAMS,
             Self::InstrumentSilence | Self::Output => &[],
             Self::AmpAdsr => &ADSR_PARAMS,
+            Self::FilterLowpass => &FILTER_PARAMS,
             Self::Gain => &GAIN_PARAMS,
         }
     }
@@ -179,6 +185,21 @@ const ADSR_PARAMS: [ParamSpec; 4] = [
         default: 0.18,
         minimum: 0.001,
         maximum: 10.0,
+    },
+];
+
+const FILTER_PARAMS: [ParamSpec; 2] = [
+    ParamSpec {
+        name: "cutoff",
+        default: 1200.0,
+        minimum: 20.0,
+        maximum: 20_000.0,
+    },
+    ParamSpec {
+        name: "resonance",
+        default: 0.2,
+        minimum: 0.0,
+        maximum: 0.95,
     },
 ];
 
@@ -318,7 +339,16 @@ impl Connection {
 pub struct CompiledChain {
     pub source_frequency: Option<f64>,
     pub adsr: Option<AdsrSettings>,
+    pub filters: Vec<FilterSettings>,
     pub gain: f64,
+}
+
+/// 低通滤波器参数。
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FilterSettings {
+    pub cutoff: f64,
+    pub resonance: f64,
 }
 
 /// 编译器看到的 ADSR 参数。
@@ -660,6 +690,7 @@ impl Graph {
         let mut visited = BTreeSet::new();
         let mut source_frequency = None;
         let mut adsr = None;
+        let mut filters = Vec::new();
         let mut gain = 1.0;
         loop {
             if !visited.insert(current.clone()) {
@@ -684,6 +715,12 @@ impl Graph {
                         release: node.param("release").unwrap_or(0.18),
                     });
                 },
+                NodeKind::FilterLowpass => {
+                    filters.push(FilterSettings {
+                        cutoff: node.param("cutoff").unwrap_or(1200.0),
+                        resonance: node.param("resonance").unwrap_or(0.2),
+                    });
+                },
                 NodeKind::Gain => {
                     gain *= node.param("gain").unwrap_or(1.0);
                 },
@@ -703,6 +740,7 @@ impl Graph {
         Ok(CompiledChain {
             source_frequency,
             adsr,
+            filters,
             gain,
         })
     }
@@ -870,6 +908,20 @@ mod tests {
         graph.validate().unwrap();
         assert_eq!(graph.device_nodes().unwrap().len(), 1);
         assert!(graph.compile_linear().unwrap().adsr.is_none());
+    }
+
+    #[test]
+    fn lowpass_node_is_compiled_in_order() {
+        let mut graph = Graph::linear_track();
+        graph
+            .insert_before_output(Node::new(
+                NodeId::new("device-1").unwrap(),
+                NodeKind::FilterLowpass,
+            ))
+            .unwrap();
+        let compiled = graph.compile_linear().unwrap();
+        assert_eq!(compiled.filters.len(), 1);
+        assert!((compiled.filters[0].cutoff - 1200.0).abs() < 1e-9);
     }
 
     #[test]

@@ -716,6 +716,43 @@ fn node_commands_add_move_and_remove() {
 }
 
 #[test]
+fn lowpass_device_accepts_cutoff_and_resonance() {
+    let mut session = Session::default();
+    run(&mut session, "project.create", json!({}));
+    run(&mut session, "track.create", json!({ "name": "lead" }));
+    let device = run(
+        &mut session,
+        "device.add",
+        json!({ "track_id": "track-1", "kind": "filter.lowpass" }),
+    );
+    let device_id = device["device_id"].as_str().unwrap();
+    run(
+        &mut session,
+        "param.set",
+        json!({
+            "path": format!("/tracks/track-1/devices/{device_id}/params/cutoff"),
+            "value": 640.0
+        }),
+    );
+    let state = run(&mut session, "project.state", json!({}));
+    let device = &state["project"]["tracks"][0]["devices"][0];
+    assert_eq!(device["kind"], "filter.lowpass");
+    assert!((device["params"]["cutoff"].as_f64().unwrap() - 640.0).abs() < 1e-9);
+    assert!((device["params"]["resonance"].as_f64().unwrap() - 0.2).abs() < 1e-9);
+
+    let error = session
+        .execute(&CommandRequest {
+            cmd: "param.set".to_string(),
+            args: json!({
+                "path": format!("/tracks/track-1/devices/{device_id}/params/cutoff"),
+                "value": 30_000.0
+            }),
+        })
+        .unwrap_err();
+    assert_eq!(error.code, "invalid_args");
+}
+
+#[test]
 fn tempo_change_keeps_musical_positions() {
     let mut session = Session::default();
     run(&mut session, "project.create", json!({ "name": "tempo" }));

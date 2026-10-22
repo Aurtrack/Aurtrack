@@ -92,6 +92,7 @@
     busy={session.busy}
     onAddGain={(trackId: string) => void session.addGain(trackId)}
     onAddAdsr={(trackId: string) => void session.addAdsr(trackId)}
+    onAddFilter={(trackId: string) => void session.addFilter(trackId)}
     onMoveDevice={(trackId, nodeId, beforeNodeId) =>
       void session.moveDevice(trackId, nodeId, beforeNodeId)}
     onRemoveDevice={(path: string) => void session.deleteDevice(path)}
@@ -106,6 +107,7 @@
     busy={session.busy}
     onAddGain={(trackId: string) => void session.addGain(trackId)}
     onAddAdsr={(trackId: string) => void session.addAdsr(trackId)}
+    onAddFilter={(trackId: string) => void session.addFilter(trackId)}
     onMove={(trackId, nodeId, beforeNodeId) =>
       void session.moveDevice(trackId, nodeId, beforeNodeId)}
     onRemove={(path: string) => void session.deleteDevice(path)}

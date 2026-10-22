@@ -1,7 +1,7 @@
 <script lang="ts">
   import { tick } from "svelte";
 
-  import { formatNumber, t } from "../i18n.svelte";
+  import { t } from "../i18n.svelte";
 
   interface Props {
     value: number;
@@ -62,7 +62,7 @@
   }
 
   function display(valueToShow: number): string {
-    return `${formatNumber(valueToShow, decimals)}${suffix}`;
+    return `${valueToShow.toFixed(decimals)}${suffix}`;
   }
 
   function commitValue(next: number) {

@@ -1,4 +1,4 @@
-# 节点图规范 v0.2
+# 节点图规范 v0.3
 
 这份文档定义 `aurtrack-graph` 的第一版线性节点图。已接入工程格式 v4；只支持线性链。
 
@@ -11,6 +11,7 @@
 | `instrument.sine` | 无 | `out` | `frequency` 20–20000，默认 440 |
 | `instrument.silence` | 无 | `out` | 无 |
 | `amp.adsr` | `in` | `out` | `attack` 0.001–10，`decay` 0–10，`sustain` 0–1，`release` 0.001–10 |
+| `filter.lowpass` | `in` | `out` | `cutoff` 20–20000 Hz，`resonance` 0–0.95 |
 | `gain` | `in` | `out` | `gain` 0–4，默认 1 |
 | `output` | `in` | 无 | 无 |
 
@@ -25,6 +26,8 @@ instrument.sine -> amp.adsr -> gain -> output
 ```text
 instrument.silence -> output
 ```
+
+低通默认值：`cutoff = 1200`、`resonance = 0.2`。
 
 ADSR 默认值：
 
@@ -95,7 +98,8 @@ release 0.18
 ```text
 source_frequency: Option<f64>
 adsr:             Option<AdsrSettings>
+filters:          Vec<FilterSettings>
 gain:             f64
 ```
 
-`gain` 节点可以串联，编译时相乘；`adsr` 只允许一个；`instrument.sine` 的频率进入 `source_frequency`。
+`gain` 节点可以串联，编译时相乘；`adsr` 只允许一个；`filter.lowpass` 可以串联，按链顺序执行；`instrument.sine` 的频率进入 `source_frequency`。

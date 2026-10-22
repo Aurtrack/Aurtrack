@@ -39,7 +39,100 @@ pub struct TrackPlan {
     pub frequency: Option<f64>,
     pub gain: f64,
     pub adsr: Option<AdsrPlan>,
+    pub filters: Vec<FilterPlan>,
     pub notes: Vec<NotePlan>,
+}
+
+/// 低通滤波器参数。
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct FilterSettings {
+    pub cutoff: f64,
+    pub resonance: f64,
+}
+
+impl FilterSettings {
+    pub fn new(cutoff: f64, resonance: f64) -> Self {
+        Self { cutoff, resonance }
+    }
+}
+
+impl Default for FilterSettings {
+    fn default() -> Self {
+        Self::new(1200.0, 0.2)
+    }
+}
+
+/// 离线渲染使用的滤波器状态。
+#[derive(Debug, Clone, Copy, Default)]
+pub struct FilterState {
+    z1: f64,
+    z2: f64,
+}
+
+impl FilterState {
+    pub fn reset(&mut self) {
+        self.z1 = 0.0;
+        self.z2 = 0.0;
+    }
+}
+
+impl FilterSettings {
+    /// 单采样 TPT 低通；共振 0 时接近一阶，接近 1 时更尖。
+    pub fn process(&self, sample_rate: u32, state: &mut FilterState, input: f64) -> f64 {
+        let nyquist_limit = f64::from(sample_rate) * 0.45;
+        let cutoff = self.cutoff.clamp(20.0, nyquist_limit.max(20.0));
+        let resonance = self.resonance.clamp(0.0, 0.95);
+        let g = (std::f64::consts::PI * cutoff / f64::from(sample_rate)).tan();
+        let k = (2.0 - 2.0 * resonance).max(0.05);
+        let a1 = 1.0 / (1.0 + g * (g + k));
+        let a2 = g * a1;
+        let a3 = g * a2;
+        let v3 = input - state.z2;
+        let v1 = a1 * state.z1 + a2 * v3;
+        let v2 = state.z2 + a2 * state.z1 + a3 * v3;
+        state.z1 = 2.0 * v1 - state.z1;
+        state.z2 = 2.0 * v2 - state.z2;
+        v2
+    }
+}
+
+#[derive(Debug, Default)]
+struct FilterStateAtomics {
+    z1: AtomicU64,
+    z2: AtomicU64,
+}
+
+/// 实时计划里的一个有状态滤波器。
+#[derive(Debug, Clone)]
+pub struct FilterPlan {
+    pub settings: FilterSettings,
+    state: Arc<FilterStateAtomics>,
+}
+
+impl FilterPlan {
+    pub fn new(settings: FilterSettings) -> Self {
+        Self {
+            settings,
+            state: Arc::new(FilterStateAtomics::default()),
+        }
+    }
+
+    pub fn process(&self, sample_rate: u32, input: f64) -> f64 {
+        let mut state = FilterState {
+            z1: f64::from_bits(self.state.z1.load(Ordering::Relaxed)),
+            z2: f64::from_bits(self.state.z2.load(Ordering::Relaxed)),
+        };
+        let output = self.settings.process(sample_rate, &mut state, input);
+        self.state.z1.store(state.z1.to_bits(), Ordering::Relaxed);
+        self.state.z2.store(state.z2.to_bits(), Ordering::Relaxed);
+        output
+    }
+
+    pub fn reset(&self) {
+        self.state.z1.store(0.0_f64.to_bits(), Ordering::Relaxed);
+        self.state.z2.store(0.0_f64.to_bits(), Ordering::Relaxed);
+    }
 }
 
 /// 每个音符可用的 ADSR 包络参数，时间单位秒。
@@ -183,6 +276,16 @@ impl Playback {
         if !was_playing || was_stopping {
             self.transport_gain
                 .store(0.0_f64.to_bits(), Ordering::Release);
+            self.reset_filters();
+        }
+    }
+
+    fn reset_filters(&self) {
+        let plan = self.plan.load();
+        for track in &plan.tracks {
+            for filter in &track.filters {
+                filter.reset();
+            }
         }
     }
 
@@ -205,6 +308,7 @@ impl Playback {
         let length_seconds = plan.length_seconds.max(plan.loop_seconds).max(0.001);
         let wrapped = seconds.rem_euclid(length_seconds);
         let frames = (wrapped * f64::from(plan.sample_rate)).round() as u64;
+        self.reset_filters();
         if !self.playing.load(Ordering::Acquire) {
             self.position.store(frames, Ordering::Release);
             self.seek_target.store(NO_SEEK, Ordering::Release);
@@ -407,6 +511,9 @@ impl Playback {
                         * 0.25;
                 }
             }
+            for filter in &track.filters {
+                voice = filter.process(plan.sample_rate, voice);
+            }
             sample += voice * track.gain;
         }
         (sample * master_gain).clamp(-1.0, 1.0)
@@ -436,6 +543,7 @@ mod tests {
                 frequency: Some(440.0),
                 gain: 1.0,
                 adsr: None,
+                filters: Vec::new(),
                 notes: Vec::new(),
             }],
         }
@@ -491,6 +599,7 @@ mod tests {
                 frequency: Some(331.0),
                 gain: 1.0,
                 adsr: None,
+                filters: Vec::new(),
                 notes: Vec::new(),
             }],
         });
@@ -537,6 +646,7 @@ mod tests {
                 frequency: None,
                 gain: 1.0,
                 adsr: None,
+                filters: Vec::new(),
                 notes: vec![NotePlan {
                     start: 0.0,
                     duration: 1.0,
@@ -576,6 +686,36 @@ mod tests {
     }
 
     #[test]
+    fn lowpass_attenuates_high_frequency() {
+        let settings = FilterSettings {
+            cutoff: 500.0,
+            resonance: 0.2,
+        };
+        let mut low_state = FilterState::default();
+        let mut high_state = FilterState::default();
+        let mut low_energy = 0.0;
+        let mut high_energy = 0.0;
+        for index in 0..48_000 {
+            let time = index as f64 / 48_000.0;
+            let low = settings.process(
+                48_000,
+                &mut low_state,
+                (std::f64::consts::TAU * 100.0 * time).sin(),
+            );
+            let high = settings.process(
+                48_000,
+                &mut high_state,
+                (std::f64::consts::TAU * 8_000.0 * time).sin(),
+            );
+            if index > 4_800 {
+                low_energy += low * low;
+                high_energy += high * high;
+            }
+        }
+        assert!(low_energy > high_energy * 4.0);
+    }
+
+    #[test]
     fn adsr_release_tail_is_rendered() {
         let playback = Playback::new(48_000);
         playback.set_plan(PlaybackPlan {
@@ -592,6 +732,7 @@ mod tests {
                     sustain: 0.8,
                     release: 0.2,
                 }),
+                filters: Vec::new(),
                 notes: vec![NotePlan {
                     start: 0.0,
                     duration: 0.05,
@@ -618,6 +759,7 @@ mod tests {
                 frequency: None,
                 gain: 1.0,
                 adsr: None,
+                filters: Vec::new(),
                 notes: vec![NotePlan {
                     start: 0.0,
                     duration: 0.25,
@@ -681,6 +823,7 @@ mod tests {
                 frequency: Some(331.0),
                 gain: 1.0,
                 adsr: None,
+                filters: Vec::new(),
                 notes: Vec::new(),
             }],
         });
@@ -707,6 +850,7 @@ mod tests {
                     frequency: Some(440.0),
                     gain: 1.0,
                     adsr: None,
+                    filters: Vec::new(),
                     notes: Vec::new(),
                 })
                 .collect(),
@@ -729,6 +873,7 @@ mod tests {
                 frequency: None,
                 gain: 1.0,
                 adsr: None,
+                filters: Vec::new(),
                 notes: vec![NotePlan {
                     start: 2.0,
                     duration: 1.0,

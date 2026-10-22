@@ -8,6 +8,7 @@
     busy: boolean;
     onAddGain: (trackId: string) => void;
     onAddAdsr: (trackId: string) => void;
+    onAddFilter: (trackId: string) => void;
     onMove: (trackId: string, nodeId: string, beforeNodeId: string) => void;
     onRemove: (path: string) => void;
     onParamChange: (
@@ -23,6 +24,7 @@
     busy,
     onAddGain,
     onAddAdsr,
+    onAddFilter,
     onMove,
     onRemove,
     onParamChange,
@@ -63,7 +65,11 @@
   let dropTarget = $state<string | null>(null);
 
   function isDeviceNode(node: GraphNode): boolean {
-    return node.kind === "amp.adsr" || node.kind === "gain";
+    return (
+      node.kind === "amp.adsr" ||
+      node.kind === "filter.lowpass" ||
+      node.kind === "gain"
+    );
   }
 
   function handleMouseDown(event: MouseEvent, node: GraphNode) {
@@ -110,6 +116,7 @@
     if (node.kind === "instrument.sine") return t("graph.sine");
     if (node.kind === "instrument.silence") return t("graph.silence");
     if (node.kind === "amp.adsr") return t("graph.adsr");
+    if (node.kind === "filter.lowpass") return t("graph.filter");
     if (node.kind === "gain") return t("graph.gain");
     if (node.kind === "output") return t("graph.output");
     return node.kind.toUpperCase();
@@ -158,6 +165,13 @@
       <button
         class="ghost small graph-add"
         disabled={busy}
+        onclick={() => onAddFilter(owner.id)}
+      >
+        {t("graph.addFilter")}
+      </button>
+      <button
+        class="ghost small graph-add"
+        disabled={busy}
         onclick={() => onAddGain(owner.id)}
       >
         {t("graph.addGain")}
@@ -167,7 +181,10 @@
     <div class="graph-board">
       <div class="graph-flow">
         {#each chain as node, index (node.id)}
-          {@const isDevice = node.kind === "amp.adsr" || node.kind === "gain"}
+          {@const isDevice =
+            node.kind === "amp.adsr" ||
+            node.kind === "filter.lowpass" ||
+            node.kind === "gain"}
           <div
             class="graph-node"
             role="group"
@@ -255,6 +272,42 @@
                     disabled={busy}
                     onchange={(value) =>
                       onParamChange(owner.id, node.id, "release", value)}
+                  />
+                </label>
+              </div>
+            {:else if node.kind === "filter.lowpass"}
+              <div class="graph-param-grid">
+                <label>
+                  <span>{t("graph.cutoff")}</span>
+                  <NumberField
+                    value={paramOf(node, "cutoff", 1200)}
+                    min={20}
+                    max={20000}
+                    step={1}
+                    precision={0}
+                    suffix="Hz"
+                    disabled={busy}
+                    onchange={(value) =>
+                      onParamChange(owner.id, node.id, "cutoff", value)}
+                  />
+                </label>
+                <label>
+                  <span>{t("graph.resonance")}</span>
+                  <NumberField
+                    value={Math.round(paramOf(node, "resonance", 0.2) * 100)}
+                    min={0}
+                    max={95}
+                    step={1}
+                    precision={0}
+                    suffix="%"
+                    disabled={busy}
+                    onchange={(value) =>
+                      onParamChange(
+                        owner.id,
+                        node.id,
+                        "resonance",
+                        value / 100,
+                      )}
                   />
                 </label>
               </div>

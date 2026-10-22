@@ -28,7 +28,9 @@ use std::io;
 use std::path::Path;
 
 use aurtrack_command::{CommandError, CommandRequest, CommandResponse, registry};
-use aurtrack_engine::{AdsrPlan, adsr_envelope, midi_to_hz, note_envelope};
+use aurtrack_engine::{
+    AdsrPlan, FilterSettings, FilterState, adsr_envelope, midi_to_hz, note_envelope,
+};
 use aurtrack_graph::{Graph, GraphError, Node, NodeId, NodeKind, PORT_IN};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -450,6 +452,7 @@ impl Session {
         let kind = match args.kind.as_str() {
             "gain" => NodeKind::Gain,
             "amp.adsr" => NodeKind::AmpAdsr,
+            "filter.lowpass" => NodeKind::FilterLowpass,
             other => {
                 return Err(CommandError::invalid_args(format!(
                     "不支持的 kind：{other}"
@@ -529,6 +532,9 @@ impl Session {
             NodeKind::Gain if name == "gain" => validate_gain(args.value)?,
             NodeKind::AmpAdsr if ADSR_PARAMS.contains(&name) => {
                 validate_adsr_param(name, args.value)?;
+            },
+            NodeKind::FilterLowpass if name == "cutoff" || name == "resonance" => {
+                validate_filter_param(name, args.value)?;
             },
             _ => {
                 return Err(CommandError::invalid_args(format!("不支持的参数：{name}")));
@@ -2147,6 +2153,21 @@ fn validate_adsr_param(name: &str, value: f64) -> Result<(), CommandError> {
     Ok(())
 }
 
+fn validate_filter_param(name: &str, value: f64) -> Result<(), CommandError> {
+    if !value.is_finite() {
+        return Err(CommandError::invalid_args(format!("{name} 必须是有限数")));
+    }
+    let valid = match name {
+        "cutoff" => (20.0..=20_000.0).contains(&value),
+        "resonance" => (0.0..=0.95).contains(&value),
+        _ => false,
+    };
+    if !valid {
+        return Err(CommandError::invalid_args(format!("{name} 超出允许范围")));
+    }
+    Ok(())
+}
+
 fn validate_gain(value: f64) -> Result<(), CommandError> {
     if !value.is_finite() || !(0.0..=4.0).contains(&value) {
         return Err(CommandError::invalid_args(
@@ -2175,6 +2196,12 @@ fn render_project(
             sustain: settings.sustain,
             release: settings.release,
         });
+        let filters: Vec<FilterSettings> = compiled
+            .filters
+            .into_iter()
+            .map(|settings| FilterSettings::new(settings.cutoff, settings.resonance))
+            .collect();
+        let mut filter_states = vec![FilterState::default(); filters.len()];
         let release = adsr.map_or(0.0, |envelope| envelope.release.max(0.001));
         for (index, slot) in mix.iter_mut().enumerate() {
             let time = start_seconds + index as f64 / sample_rate_f64;
@@ -2198,6 +2225,9 @@ fn render_project(
                             * 0.25;
                     }
                 }
+            }
+            for (filter, state) in filters.iter().zip(filter_states.iter_mut()) {
+                sample = filter.process(project.sample_rate, state, sample);
             }
             *slot += (sample * gain) as f32;
         }

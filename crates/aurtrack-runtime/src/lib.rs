@@ -20,7 +20,9 @@
 use std::sync::Arc;
 
 use aurtrack_command::{CommandError, CommandRequest, CommandResponse};
-use aurtrack_engine::{AdsrPlan, NotePlan, Playback, PlaybackPlan, TrackPlan, midi_to_hz};
+use aurtrack_engine::{
+    AdsrPlan, FilterPlan, FilterSettings, NotePlan, Playback, PlaybackPlan, TrackPlan, midi_to_hz,
+};
 use aurtrack_io::AudioHandle;
 use aurtrack_session::{Project, Session, TICKS_PER_QUARTER};
 use serde::de::DeserializeOwned;
@@ -188,6 +190,13 @@ fn build_plan(
                 sustain: settings.sustain,
                 release: settings.release,
             });
+            let filters = compiled
+                .filters
+                .into_iter()
+                .map(|settings| {
+                    FilterPlan::new(FilterSettings::new(settings.cutoff, settings.resonance))
+                })
+                .collect();
             let notes = track
                 .clips
                 .iter()
@@ -204,6 +213,7 @@ fn build_plan(
                 frequency: compiled.source_frequency,
                 gain: compiled.gain,
                 adsr,
+                filters,
                 notes,
             })
         })
@@ -229,6 +239,7 @@ fn build_plan(
             frequency: None,
             gain: 0.8,
             adsr: None,
+            filters: Vec::new(),
             notes,
         });
     }

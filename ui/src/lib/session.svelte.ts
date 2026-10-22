@@ -722,6 +722,24 @@ export class SessionStore {
     }
   }
 
+  async addFilter(trackId: string) {
+    if (this.busy) return;
+    this.busy = true;
+    try {
+      await this.run("device.add", {
+        track_id: trackId,
+        kind: "filter.lowpass",
+      });
+      await this.refreshProject();
+      await this.reloadIfPlaying();
+      this.setStatus("status.filterAdded");
+    } catch (error) {
+      this.fail("status.filterAddFailed", error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
   async addAdsr(trackId: string) {
     if (this.busy) return;
     this.busy = true;
