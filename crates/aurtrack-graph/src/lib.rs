@@ -606,6 +606,63 @@ impl Graph {
         node.set_position(x, y)
     }
 
+    /// 复制一批节点；只保留两端都在复制集合里的内部连线。
+    pub fn duplicate_nodes(
+        &mut self,
+        ids: &[NodeId],
+        new_ids: &[NodeId],
+        offset: [f64; 2],
+    ) -> Result<Vec<(NodeId, NodeId)>, GraphError> {
+        if ids.len() != new_ids.len() {
+            return Err(GraphError::DuplicateCount);
+        }
+        let mut mapping = BTreeMap::new();
+        for (old, new) in ids.iter().zip(new_ids) {
+            if self.nodes.contains_key(new) {
+                return Err(GraphError::DuplicateNode(new.clone()));
+            }
+            let node = self
+                .nodes
+                .get(old)
+                .ok_or_else(|| GraphError::UnknownNode(old.clone()))?;
+            if node.kind().is_instrument()
+                || node.kind() == NodeKind::Output
+                || node.kind() == NodeKind::AmpAdsr
+            {
+                return Err(GraphError::NotDevice(node.kind()));
+            }
+            mapping.insert(old.clone(), new.clone());
+        }
+        for (old, new) in ids.iter().zip(new_ids) {
+            let original = self
+                .nodes
+                .get(old)
+                .ok_or_else(|| GraphError::UnknownNode(old.clone()))?;
+            let mut node = Node::new(new.clone(), original.kind());
+            for (name, value) in original.params() {
+                node.set_param(name, *value)?;
+            }
+            if let Some([x, y]) = original.position() {
+                node.set_position(x + offset[0], y + offset[1])?;
+            }
+            self.add_node(node)?;
+        }
+        let original_connections = self.connections.clone();
+        for connection in original_connections {
+            let Some(from) = mapping.get(&connection.from.node) else {
+                continue;
+            };
+            let Some(to) = mapping.get(&connection.to.node) else {
+                continue;
+            };
+            self.connect(
+                PortRef::new(from.clone(), connection.from.port),
+                PortRef::new(to.clone(), connection.to.port),
+            )?;
+        }
+        Ok(mapping.into_iter().collect())
+    }
+
     /// 删除节点及所有相关连线；用于无法保持链式语义的混合节点。
     pub fn remove_node(&mut self, id: &NodeId) -> Result<(), GraphError> {
         if self.nodes.remove(id).is_none() {
@@ -1037,6 +1094,8 @@ pub enum GraphError {
     InvalidNodeId(String),
     #[error("节点已存在：{0}")]
     DuplicateNode(NodeId),
+    #[error("批量复制的源和目标数量不一致")]
+    DuplicateCount,
     #[error("找不到节点：{0}")]
     UnknownNode(NodeId),
     #[error("找不到端口：{node}.{port}")]

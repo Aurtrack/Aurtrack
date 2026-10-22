@@ -296,6 +296,7 @@ impl Session {
             "node.connect" => self.cmd_node_connect(&request.args),
             "node.disconnect" => self.cmd_node_disconnect(&request.args),
             "node.position" => self.cmd_node_position(&request.args),
+            "node.duplicate" => self.cmd_node_duplicate(&request.args),
             "node.remove_many" => self.cmd_node_remove_many(&request.args),
             "param.set" => self.cmd_param_set(&request.args),
             "render.segment" => self.cmd_render_segment(&request.args),
@@ -1901,6 +1902,80 @@ impl Session {
         Ok(CommandResponse::ok(json!({ "positions": args.positions })).with_undo(token))
     }
 
+    fn cmd_node_duplicate(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        let args: NodeDuplicateArgs = parse_args(args)?;
+        if args.paths.is_empty() {
+            return Err(CommandError::invalid_args("paths 不能为空"));
+        }
+        if args.paths.len() > 128 {
+            return Err(CommandError::invalid_args("一次最多复制 128 个节点"));
+        }
+        let offset = args.offset.unwrap_or([40.0, 40.0]);
+        if !offset[0].is_finite() || !offset[1].is_finite() {
+            return Err(CommandError::invalid_args("offset 必须是有限数"));
+        }
+        let project = self
+            .project
+            .as_ref()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let mut groups: BTreeMap<String, Vec<(NodeId, NodeId, String)>> = BTreeMap::new();
+        for path in &args.paths {
+            let (track_id, node) = parse_node_path(path)?;
+            let old_id = NodeId::new(node).map_err(graph_error)?;
+            let node = project
+                .tracks
+                .iter()
+                .find(|track| track.id == track_id)
+                .and_then(|track| track.graph.node(&old_id))
+                .ok_or_else(|| CommandError::not_found(format!("找不到节点：{path}")))?;
+            if !node.kind().is_device()
+                || node.kind().is_instrument()
+                || node.kind() == NodeKind::AmpAdsr
+                || node.kind() == NodeKind::Output
+            {
+                return Err(CommandError::invalid_args("这个节点不能复制"));
+            }
+            let number = self.next_device + 1;
+            self.next_device = number;
+            let new_id = NodeId::new(format!("device-{number}")).map_err(graph_error)?;
+            groups
+                .entry(track_id.to_string())
+                .or_default()
+                .push((old_id, new_id, path.clone()));
+        }
+        let token = self.snapshot("node.duplicate");
+        let project = self
+            .project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let mut copied = Vec::new();
+        for (track_id, entries) in groups {
+            let track = project
+                .tracks
+                .iter_mut()
+                .find(|track| track.id == track_id)
+                .ok_or_else(|| CommandError::not_found(format!("找不到轨道：{track_id}")))?;
+            let old_ids: Vec<NodeId> = entries.iter().map(|entry| entry.0.clone()).collect();
+            let new_ids: Vec<NodeId> = entries.iter().map(|entry| entry.1.clone()).collect();
+            let mapping = track
+                .graph
+                .duplicate_nodes(&old_ids, &new_ids, offset)
+                .map_err(graph_error)?;
+            for (source, target) in mapping {
+                let source_path = entries
+                    .iter()
+                    .find(|entry| entry.0 == source)
+                    .map(|entry| entry.2.clone())
+                    .unwrap_or_default();
+                copied.push(json!({
+                    "source": source_path,
+                    "node_id": target.to_string(),
+                }));
+            }
+        }
+        Ok(CommandResponse::ok(json!({ "nodes": copied })).with_undo(token))
+    }
+
     fn cmd_node_remove_many(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
         let args: NodesRemoveArgs = parse_args(args)?;
         if args.paths.is_empty() {
@@ -2617,6 +2692,14 @@ struct NodePositionArg {
 #[serde(deny_unknown_fields)]
 struct NodesRemoveArgs {
     paths: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NodeDuplicateArgs {
+    paths: Vec<String>,
+    #[serde(default)]
+    offset: Option<[f64; 2]>,
 }
 
 fn default_from_port() -> String {

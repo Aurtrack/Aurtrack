@@ -580,6 +580,26 @@ fn node_position_schema() -> Value {
     )
 }
 
+fn node_duplicate_schema() -> Value {
+    object_schema(
+        json!({
+            "paths": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 128,
+                "items": { "type": "string" }
+            },
+            "offset": {
+                "type": "array",
+                "items": { "type": "number" },
+                "minItems": 2,
+                "maxItems": 2
+            }
+        }),
+        &["paths"],
+    )
+}
+
 fn nodes_remove_schema() -> Value {
     object_schema(
         json!({
@@ -633,7 +653,7 @@ fn transport_metronome_schema() -> Value {
     )
 }
 
-static COMMANDS: [CommandSpec; 41] = [
+static COMMANDS: [CommandSpec; 42] = [
     CommandSpec {
         id: "project.create",
         summary: "创建或替换当前工程",
@@ -807,6 +827,12 @@ static COMMANDS: [CommandSpec; 41] = [
         summary: "批量记录节点画布坐标",
         undo: UndoKind::Snapshot,
         input_schema: node_position_schema,
+    },
+    CommandSpec {
+        id: "node.duplicate",
+        summary: "批量复制选中的设备节点",
+        undo: UndoKind::Snapshot,
+        input_schema: node_duplicate_schema,
     },
     CommandSpec {
         id: "node.remove_many",

@@ -124,6 +124,7 @@
         toPort,
       )}
     onPlace={(trackId, nodes) => session.placeNodes(trackId, nodes)}
+    onDuplicate={(paths) => session.duplicateNodes(paths)}
     onRemove={(path: string) => void session.deleteNode(path)}
     onRemoveMany={(paths) => void session.deleteNodes(paths)}
     onParamChange={(trackId, nodeId, name, value) =>

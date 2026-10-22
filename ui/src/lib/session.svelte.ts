@@ -765,6 +765,26 @@ export class SessionStore {
     }
   }
 
+  async duplicateNodes(
+    paths: string[],
+  ): Promise<{ source: string; node_id: string }[] | undefined> {
+    if (this.busy || paths.length === 0) return undefined;
+    this.busy = true;
+    try {
+      const data = await this.run<{
+        nodes: { source: string; node_id: string }[];
+      }>("node.duplicate", { paths, offset: [40, 40] });
+      await this.refreshProject();
+      this.setStatus("status.nodesDuplicated");
+      return data.nodes;
+    } catch (error) {
+      this.fail("status.nodesDuplicateFailed", error);
+      return undefined;
+    } finally {
+      this.busy = false;
+    }
+  }
+
   async addMix(trackId: string) {
     if (this.busy) return;
     this.busy = true;

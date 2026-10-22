@@ -1,6 +1,6 @@
 # 命令规范 v1.3
 
-这份文档定义 Aurtrack 的可运行命令面：41 条命令、统一的返回结构、寻址规则，以及 MCP 的映射方式。代码必须与本文一致。
+这份文档定义 Aurtrack 的可运行命令面：42 条命令、统一的返回结构、寻址规则，以及 MCP 的映射方式。代码必须与本文一致。
 
 工程格式 v4 用 music tick 存储位置（960 PPQ），轨道保存 `aurtrack-graph` 节点图。命令边界仍用秒，避免 UI 和 CLI 直接操作 tick。旧 v3 工程会被拒绝。
 
@@ -661,6 +661,17 @@
 { "paths": ["/tracks/track-1/nodes/device-2"] }
 ```
 
+### 42. `node.duplicate`
+
+批量复制设备节点。复制参数和位置，并保留两端都被选中的内部连线；`amp.adsr`、乐器和 `output` 不能复制。
+
+```json
+{
+  "paths": ["/tracks/track-1/nodes/device-2"],
+  "offset": [40, 40]
+}
+```
+
 ## MCP 映射
 
 工具名是命令 ID 把 `.` 换成 `_`：
@@ -678,6 +689,7 @@
 | `node.disconnect` | `node_disconnect` |
 | `node.position` | `node_position` |
 | `node.remove_many` | `node_remove_many` |
+| `node.duplicate` | `node_duplicate` |
 | `param.set` | `param_set` |
 | `render.segment` | `render_segment` |
 | `transport.play` | `transport_play` |

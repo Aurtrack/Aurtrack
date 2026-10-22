@@ -30,6 +30,9 @@
       trackId: string,
       nodes: { id: string; x: number; y: number }[],
     ) => void | Promise<void>;
+    onDuplicate: (
+      paths: string[],
+    ) => Promise<{ source: string; node_id: string }[] | undefined> | void;
     onRemove: (path: string) => void;
     onRemoveMany: (paths: string[]) => void;
     onParamChange: (
@@ -47,6 +50,7 @@
     onConnect,
     onDisconnect,
     onPlace,
+    onDuplicate,
     onRemove,
     onRemoveMany,
     onParamChange,
@@ -321,14 +325,14 @@
     };
   }
 
-  function frameAll() {
-    if (!board || nodes.length === 0) return;
+  function frameNodes(group: GraphNode[]) {
+    if (!board || group.length === 0) return;
     const rect = board.getBoundingClientRect();
     let minX = Infinity;
     let minY = Infinity;
     let maxX = -Infinity;
     let maxY = -Infinity;
-    for (const node of nodes) {
+    for (const node of group) {
       const position = nodePositions[node.id];
       if (!position) continue;
       minX = Math.min(minX, position.x);
@@ -347,6 +351,15 @@
       y: (rect.height - height * scale) / 2 - minY * scale,
       scale,
     };
+  }
+
+  function frameAll() {
+    frameNodes(nodes);
+  }
+
+  function frameSelected() {
+    const group = nodes.filter((node) => selected.has(node.id));
+    frameNodes(group.length > 0 ? group : nodes);
   }
 
   function boardMouseDown(event: MouseEvent) {
@@ -595,6 +608,23 @@
     onRemoveMany(paths);
   }
 
+  async function duplicateSelected() {
+    if (!track) return;
+    const paths = nodes
+      .filter(
+        (node) =>
+          selected.has(node.id) &&
+          isDevice(node) &&
+          node.kind !== "amp.adsr",
+      )
+      .map((node) => `/tracks/${track.id}/nodes/${node.id}`);
+    if (paths.length === 0) return;
+    const copied = await onDuplicate(paths);
+    if (copied && copied.length > 0) {
+      selected = new Set(copied.map((item) => item.node_id));
+    }
+  }
+
   function isEditing(): boolean {
     const element = document.activeElement;
     return (
@@ -615,6 +645,26 @@
     if (event.key === "Home") {
       event.preventDefault();
       frameAll();
+      return;
+    }
+    if (event.key.toLowerCase() === "f" || event.code === "NumpadDecimal") {
+      event.preventDefault();
+      frameSelected();
+      return;
+    }
+    if (
+      event.shiftKey &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      event.key.toLowerCase() === "d"
+    ) {
+      event.preventDefault();
+      void duplicateSelected();
+      return;
+    }
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "d") {
+      event.preventDefault();
+      void duplicateSelected();
       return;
     }
     if (event.key === "Delete" || event.key === "Backspace") {

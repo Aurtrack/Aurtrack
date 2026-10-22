@@ -330,10 +330,10 @@ fn batch_note_edits_and_cross_track_clip_move_share_snapshots() {
 }
 
 #[test]
-fn describe_lists_forty_one_commands() {
+fn describe_lists_forty_two_commands() {
     let mut session = Session::default();
     let out = run(&mut session, "describe", json!({}));
-    assert_eq!(out["commands"].as_array().unwrap().len(), 41);
+    assert_eq!(out["commands"].as_array().unwrap().len(), 42);
     assert!(out["project"].is_null());
 }
 
@@ -806,6 +806,39 @@ fn node_positions_and_batch_remove() {
             .get(filter_id)
             .is_none()
     );
+}
+
+#[test]
+fn duplicate_nodes_copies_params_and_position() {
+    let mut session = Session::default();
+    run(&mut session, "project.create", json!({}));
+    run(&mut session, "track.create", json!({ "name": "lead" }));
+    let filter = run(
+        &mut session,
+        "node.add",
+        json!({
+            "track_id": "track-1",
+            "kind": "filter.lowpass",
+            "params": { "cutoff": 640.0 },
+            "position": [100.0, 80.0]
+        }),
+    );
+    let filter_id = filter["node_id"].as_str().unwrap();
+    let duplicated = run(
+        &mut session,
+        "node.duplicate",
+        json!({
+            "paths": [format!("/tracks/track-1/nodes/{filter_id}")],
+            "offset": [30.0, 20.0]
+        }),
+    );
+    let new_id = duplicated["nodes"][0]["node_id"].as_str().unwrap();
+    assert_ne!(new_id, filter_id);
+    let state = run(&mut session, "project.state", json!({}));
+    let node = &state["project"]["tracks"][0]["graph"]["nodes"][new_id];
+    assert_eq!(node["kind"], "filter.lowpass");
+    assert_eq!(node["params"]["cutoff"], 640.0);
+    assert_eq!(node["position"], json!([130.0, 100.0]));
 }
 
 #[test]

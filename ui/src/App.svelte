@@ -41,7 +41,13 @@
     const key = event.key.toLowerCase();
     const nodeCanvasActive = Boolean(document.querySelector(".graph-board"));
 
-    if (nodeCanvasActive && (key === "delete" || key === "backspace" || key === " ")) {
+    if (
+      nodeCanvasActive &&
+      (key === "delete" ||
+        key === "backspace" ||
+        key === " " ||
+        (modifier && key === "d"))
+    ) {
       return;
     }
 

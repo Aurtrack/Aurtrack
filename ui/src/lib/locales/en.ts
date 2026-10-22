@@ -169,7 +169,7 @@ export const en: Record<MessageKey, Message> = {
   "graph.inputPort": "Input port",
   "graph.removeWire": "Click to disconnect",
   "graph.frameAll": "FRAME ALL",
-  "graph.foot": "Home frame · box select then drag · Del remove · undo supported",
+  "graph.foot": "Home all · F selected · Shift+D duplicate · Del remove · undo",
   "graph.direction": "IN → OUT",
   "number.decrease": "Decrease",
   "number.increase": "Increase",
@@ -265,6 +265,9 @@ export const en: Record<MessageKey, Message> = {
   "status.nodesRemoved": "Nodes removed",
   "status.nodesRemoveFailed": (params) =>
     `Remove nodes failed: ${params.message}`,
+  "status.nodesDuplicated": "Nodes duplicated",
+  "status.nodesDuplicateFailed": (params) =>
+    `Duplicate nodes failed: ${params.message}`,
   "status.deviceParamFailed": (params) =>
     `Set device parameter failed: ${params.message}`,
   "status.nodeMoved": "Node order updated",
