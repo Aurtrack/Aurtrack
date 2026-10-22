@@ -1513,3 +1513,111 @@ button:disabled {
     border-bottom: 1px solid var(--line-strong);
   }
 }
+
+/* 节点画布：绝对定位卡片、端口与连线。 */
+.graph-board {
+  padding: 0;
+}
+
+.graph-canvas {
+  position: relative;
+  margin: 30px;
+  min-width: calc(100% - 60px);
+  min-height: calc(100% - 60px);
+}
+
+.graph-node {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  margin: 0;
+  overflow: visible;
+}
+
+.graph-node::before,
+.graph-node::after {
+  content: none;
+}
+
+.graph-node.instrument,
+.graph-node.output {
+  width: 220px;
+}
+
+.graph-node.device .graph-node-head {
+  cursor: default;
+}
+
+.graph-node.wire-target {
+  outline: 1px solid var(--blue);
+  outline-offset: 2px;
+}
+
+.graph-node-head {
+  flex: 0 0 auto;
+  min-height: 31px;
+  cursor: default;
+}
+
+.graph-node > .graph-param-row,
+.graph-node > .graph-param-grid,
+.graph-node > .graph-node-actions {
+  flex: 0 0 auto;
+}
+
+.graph-node > .graph-node-actions {
+  margin-top: auto;
+}
+
+.graph-port {
+  position: absolute;
+  z-index: 3;
+  width: 10px;
+  height: 10px;
+  margin: 0;
+  border: 1px solid var(--blue);
+  border-radius: 50%;
+  padding: 0;
+  background: #fbfbfa;
+  cursor: crosshair;
+}
+
+.graph-port:hover,
+.graph-port.active {
+  background: var(--blue);
+}
+
+.graph-port-out {
+  top: 17px;
+  right: -6px;
+}
+
+.graph-port-in {
+  left: -6px;
+}
+
+.graph-wires {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.graph-wire {
+  fill: none;
+  stroke: var(--blue);
+  stroke-width: 1.2;
+  pointer-events: stroke;
+  cursor: pointer;
+}
+
+.graph-wire:hover {
+  stroke-width: 2.4;
+}
+
+.graph-wire.temp {
+  stroke-dasharray: 4 3;
+  pointer-events: none;
+}

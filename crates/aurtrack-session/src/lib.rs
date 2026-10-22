@@ -29,9 +29,10 @@ use std::path::Path;
 
 use aurtrack_command::{CommandError, CommandRequest, CommandResponse, registry};
 use aurtrack_engine::{
-    AdsrPlan, FilterSettings, FilterState, adsr_envelope, midi_to_hz, note_envelope,
+    AdsrPlan, FilterPlan, FilterSettings, GraphNodePlan, GraphOp, GraphPlan, adsr_envelope,
+    midi_to_hz, note_envelope,
 };
-use aurtrack_graph::{Graph, GraphError, Node, NodeId, NodeKind, PORT_IN};
+use aurtrack_graph::{Graph, GraphError, Node, NodeId, NodeKind, PORT_IN, PortRef};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -149,6 +150,43 @@ impl Track {
     pub fn compiled(&self) -> Result<aurtrack_graph::CompiledChain, GraphError> {
         self.graph.compile_linear()
     }
+
+    pub fn playback_graph(
+        &self,
+    ) -> Result<(Option<f64>, Option<aurtrack_graph::AdsrSettings>, GraphPlan), GraphError> {
+        let compiled = self.graph.compile_graph()?;
+        let nodes: Vec<GraphNodePlan> = compiled
+            .nodes
+            .iter()
+            .map(|node| {
+                let op = match &node.op {
+                    aurtrack_graph::CompiledOp::Voice => GraphOp::Voice,
+                    aurtrack_graph::CompiledOp::Filter(settings) => GraphOp::Filter(
+                        FilterPlan::new(FilterSettings::new(settings.cutoff, settings.resonance)),
+                    ),
+                    aurtrack_graph::CompiledOp::Gain(gain) => GraphOp::Gain(*gain),
+                    aurtrack_graph::CompiledOp::Mix => GraphOp::Mix,
+                    aurtrack_graph::CompiledOp::Output => GraphOp::Output,
+                    _ => return Err(GraphError::NotConnected),
+                };
+                Ok(GraphNodePlan {
+                    op,
+                    inputs: node.inputs.clone(),
+                })
+            })
+            .collect::<Result<_, _>>()?;
+        if nodes.len() > aurtrack_engine::MAX_GRAPH_NODES {
+            return Err(GraphError::TooManyNodes(nodes.len()));
+        }
+        Ok((
+            compiled.source_frequency,
+            compiled.adsr,
+            GraphPlan {
+                nodes,
+                output: compiled.output,
+            },
+        ))
+    }
 }
 
 /// 轨道上的一个片段。
@@ -255,6 +293,8 @@ impl Session {
             "node.add" => self.cmd_node_add(&request.args),
             "node.remove" => self.cmd_node_remove(&request.args),
             "node.move" => self.cmd_node_move(&request.args),
+            "node.connect" => self.cmd_node_connect(&request.args),
+            "node.disconnect" => self.cmd_node_disconnect(&request.args),
             "param.set" => self.cmd_param_set(&request.args),
             "render.segment" => self.cmd_render_segment(&request.args),
             "describe" => Ok(self.cmd_describe()),
@@ -453,6 +493,7 @@ impl Session {
             "gain" => NodeKind::Gain,
             "amp.adsr" => NodeKind::AmpAdsr,
             "filter.lowpass" => NodeKind::FilterLowpass,
+            "mix" => NodeKind::Mix,
             other => {
                 return Err(CommandError::invalid_args(format!(
                     "不支持的 kind：{other}"
@@ -1652,18 +1693,16 @@ impl Session {
         let path = args.path;
         let (track_id, device_id) = parse_node_path(&path)?;
         let node_id = NodeId::new(device_id).map_err(graph_error)?;
-        let exists = self.project.as_ref().is_some_and(|project| {
-            project.tracks.iter().any(|track| {
-                track.id == track_id
-                    && track
-                        .graph
-                        .node(&node_id)
-                        .is_some_and(|node| node.kind().is_device())
-            })
-        });
-        if !exists {
+        let node_kind = self
+            .project
+            .as_ref()
+            .and_then(|project| project.tracks.iter().find(|track| track.id == track_id))
+            .and_then(|track| track.graph.node(&node_id))
+            .filter(|node| node.kind().is_device())
+            .map(Node::kind);
+        let Some(node_kind) = node_kind else {
             return Err(CommandError::not_found(format!("找不到设备：{path}")));
-        }
+        };
         let token = self.snapshot(command);
         let project = self
             .project
@@ -1674,10 +1713,14 @@ impl Session {
             .iter_mut()
             .find(|track| track.id == track_id)
             .ok_or_else(|| CommandError::not_found(format!("找不到节点：{path}")))?;
-        track
-            .graph
-            .remove_chain_node(&node_id)
-            .map_err(graph_error)?;
+        if node_kind == NodeKind::Mix {
+            track.graph.remove_node(&node_id).map_err(graph_error)?;
+        } else {
+            track
+                .graph
+                .remove_chain_node(&node_id)
+                .map_err(graph_error)?;
+        }
         Ok(CommandResponse::ok(json!({ "path": path })).with_undo(token))
     }
 
@@ -1726,6 +1769,76 @@ impl Session {
         Ok(CommandResponse::ok(json!({
             "path": args.path,
             "before": args.before,
+        }))
+        .with_undo(token))
+    }
+
+    fn cmd_node_connect(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        let args: NodeConnectArgs = parse_args(args)?;
+        let (track_id, from_node) = parse_node_path(&args.from)?;
+        let (to_track, to_node) = parse_node_path(&args.to)?;
+        if track_id != to_track {
+            return Err(CommandError::invalid_args("节点必须属于同一条轨道"));
+        }
+        let from = PortRef::new(
+            NodeId::new(from_node).map_err(graph_error)?,
+            args.from_port.clone(),
+        );
+        let to = PortRef::new(
+            NodeId::new(to_node).map_err(graph_error)?,
+            args.to_port.clone(),
+        );
+        let token = self.snapshot("node.connect");
+        let project = self
+            .project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let track = project
+            .tracks
+            .iter_mut()
+            .find(|track| track.id == track_id)
+            .ok_or_else(|| CommandError::not_found(format!("找不到轨道：{track_id}")))?;
+        track.graph.connect(from, to).map_err(graph_error)?;
+        Ok(CommandResponse::ok(json!({
+            "from": args.from,
+            "from_port": args.from_port,
+            "to": args.to,
+            "to_port": args.to_port,
+        }))
+        .with_undo(token))
+    }
+
+    fn cmd_node_disconnect(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        let args: NodeConnectArgs = parse_args(args)?;
+        let (track_id, from_node) = parse_node_path(&args.from)?;
+        let (to_track, to_node) = parse_node_path(&args.to)?;
+        if track_id != to_track {
+            return Err(CommandError::invalid_args("节点必须属于同一条轨道"));
+        }
+        let from = PortRef::new(
+            NodeId::new(from_node).map_err(graph_error)?,
+            args.from_port.clone(),
+        );
+        let to = PortRef::new(
+            NodeId::new(to_node).map_err(graph_error)?,
+            args.to_port.clone(),
+        );
+        let token = self.snapshot("node.disconnect");
+        let project = self
+            .project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let track = project
+            .tracks
+            .iter_mut()
+            .find(|track| track.id == track_id)
+            .ok_or_else(|| CommandError::not_found(format!("找不到轨道：{track_id}")))?;
+        track.graph.disconnect(&from, &to).map_err(graph_error)?;
+        Ok(CommandResponse::ok(json!({
+            "from": args.from,
+            "from_port": args.from_port,
+            "to": args.to,
+            "to_port": args.to_port,
         }))
         .with_undo(token))
     }
@@ -2188,24 +2301,18 @@ fn render_project(
     let frames = (duration_seconds * sample_rate_f64).round() as usize;
     let mut mix = vec![0.0_f32; frames];
     for track in &project.tracks {
-        let compiled = track.compiled().map_err(graph_error)?;
-        let gain = compiled.gain;
-        let adsr = compiled.adsr.map(|settings| AdsrPlan {
+        let (source_frequency, adsr_settings, graph) =
+            track.playback_graph().map_err(graph_error)?;
+        let adsr = adsr_settings.map(|settings| AdsrPlan {
             attack: settings.attack,
             decay: settings.decay,
             sustain: settings.sustain,
             release: settings.release,
         });
-        let filters: Vec<FilterSettings> = compiled
-            .filters
-            .into_iter()
-            .map(|settings| FilterSettings::new(settings.cutoff, settings.resonance))
-            .collect();
-        let mut filter_states = vec![FilterState::default(); filters.len()];
         let release = adsr.map_or(0.0, |envelope| envelope.release.max(0.001));
         for (index, slot) in mix.iter_mut().enumerate() {
             let time = start_seconds + index as f64 / sample_rate_f64;
-            let mut sample = compiled.source_frequency.map_or(0.0, |frequency| {
+            let mut sample = source_frequency.map_or(0.0, |frequency| {
                 (std::f64::consts::TAU * frequency * time).sin() * 0.25
             });
             for clip in &track.clips {
@@ -2226,10 +2333,8 @@ fn render_project(
                     }
                 }
             }
-            for (filter, state) in filters.iter().zip(filter_states.iter_mut()) {
-                sample = filter.process(project.sample_rate, state, sample);
-            }
-            *slot += (sample * gain) as f32;
+            sample = graph.sample(sample, project.sample_rate);
+            *slot += sample as f32;
         }
     }
 
@@ -2377,6 +2482,25 @@ struct DeviceRemoveArgs {
 struct NodeMoveArgs {
     path: String,
     before: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NodeConnectArgs {
+    from: String,
+    to: String,
+    #[serde(default = "default_from_port")]
+    from_port: String,
+    #[serde(default = "default_to_port")]
+    to_port: String,
+}
+
+fn default_from_port() -> String {
+    "out".to_string()
+}
+
+fn default_to_port() -> String {
+    "in".to_string()
 }
 
 #[derive(Debug, Deserialize)]

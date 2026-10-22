@@ -1,6 +1,6 @@
-# 节点图规范 v0.3
+# 节点图规范 v0.4
 
-这份文档定义 `aurtrack-graph` 的第一版线性节点图。已接入工程格式 v4；只支持线性链。
+这份文档定义 `aurtrack-graph` 的 DAG 节点图。已接入工程格式 v4；支持 fan-out、`mix` 和自由连线。
 
 ## 节点
 
@@ -13,6 +13,7 @@
 | `amp.adsr` | `in` | `out` | `attack` 0.001–10，`decay` 0–10，`sustain` 0–1，`release` 0.001–10 |
 | `filter.lowpass` | `in` | `out` | `cutoff` 20–20000 Hz，`resonance` 0–0.95 |
 | `gain` | `in` | `out` | `gain` 0–4，默认 1 |
+| `mix` | `in1`, `in2` | `out` | 无；两个输入相加 |
 | `output` | `in` | 无 | 无 |
 
 默认轨道链：
@@ -40,13 +41,13 @@ release 0.18
 
 ## 连接
 
-连接只能从 `out` 到 `in`。第一版限制：
+连接从 `out` 到输入端口。限制：
 
-- 每个输出端口最多一条连接
-- 每个输入端口最多一条连接
+- 输出端口可以 fan-out
+- 每个输入端口最多一条连接；`mix` 的 `in1` 和 `in2` 各一条
 - 恰好一个乐器节点、一个 `output` 节点
-- 最多一个 `amp.adsr`
-- 图必须无环，且所有节点都在主链上
+- 最多一个 `amp.adsr`，且必须在分支之前
+- 图必须无环，且所有设备都在从乐器到 `output` 的路径上
 
 ## JSON
 
@@ -93,13 +94,13 @@ release 0.18
 
 ## 编译结果
 
-线性图编译成：
+DAG 编译成按拓扑序排列的节点：
 
 ```text
 source_frequency: Option<f64>
 adsr:             Option<AdsrSettings>
-filters:          Vec<FilterSettings>
-gain:             f64
+nodes:            Vec<CompiledNode>
+output:           usize
 ```
 
-`gain` 节点可以串联，编译时相乘；`adsr` 只允许一个；`filter.lowpass` 可以串联，按链顺序执行；`instrument.sine` 的频率进入 `source_frequency`。
+索引 0 固定是声部输入；后续节点是 `filter.lowpass`、`gain`、`mix`、`output`。`mix` 把两个输入相加；滤波器状态按节点保存，实时和离线共用同一拓扑序。

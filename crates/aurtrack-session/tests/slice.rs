@@ -330,10 +330,10 @@ fn batch_note_edits_and_cross_track_clip_move_share_snapshots() {
 }
 
 #[test]
-fn describe_lists_thirty_seven_commands() {
+fn describe_lists_thirty_nine_commands() {
     let mut session = Session::default();
     let out = run(&mut session, "describe", json!({}));
-    assert_eq!(out["commands"].as_array().unwrap().len(), 37);
+    assert_eq!(out["commands"].as_array().unwrap().len(), 39);
     assert!(out["project"].is_null());
 }
 
@@ -750,6 +750,92 @@ fn lowpass_device_accepts_cutoff_and_resonance() {
         })
         .unwrap_err();
     assert_eq!(error.code, "invalid_args");
+}
+
+#[test]
+fn branch_graph_connects_mix_and_renders() {
+    let mut session = Session::default();
+    run(&mut session, "project.create", json!({}));
+    run(&mut session, "track.create", json!({ "name": "lead" }));
+    run(
+        &mut session,
+        "clip.create",
+        json!({ "track_id": "track-1", "start": 0.0, "duration": 1.0 }),
+    );
+    run(
+        &mut session,
+        "note.add",
+        json!({
+            "path": "/tracks/track-1/clips/clip-1",
+            "pitch": 60,
+            "start": 0.0,
+            "duration": 0.5,
+            "velocity": 1.0
+        }),
+    );
+    run(
+        &mut session,
+        "node.add",
+        json!({ "track_id": "track-1", "kind": "filter.lowpass" }),
+    );
+    let mix = run(
+        &mut session,
+        "node.add",
+        json!({ "track_id": "track-1", "kind": "mix" }),
+    );
+    let mix_id = mix["node_id"].as_str().unwrap().to_string();
+    run(
+        &mut session,
+        "node.connect",
+        json!({
+            "from": "/tracks/track-1/nodes/instrument",
+            "to": format!("/tracks/track-1/nodes/{mix_id}"),
+            "to_port": "in2"
+        }),
+    );
+    let state = run(&mut session, "project.state", json!({}));
+    assert_eq!(
+        state["project"]["tracks"][0]["graph"]["connections"]
+            .as_array()
+            .unwrap()
+            .len(),
+        4
+    );
+
+    let branch = temp_path("branch");
+    let out = run(
+        &mut session,
+        "render.segment",
+        json!({ "duration_seconds": 0.4, "path": branch }),
+    );
+    assert!(out["peak"].as_f64().unwrap() > 0.0);
+
+    run(
+        &mut session,
+        "node.disconnect",
+        json!({
+            "from": "/tracks/track-1/nodes/instrument",
+            "to": format!("/tracks/track-1/nodes/{mix_id}"),
+            "to_port": "in2"
+        }),
+    );
+    let state = run(&mut session, "project.state", json!({}));
+    assert_eq!(
+        state["project"]["tracks"][0]["graph"]["connections"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+    run(&mut session, "undo", json!({}));
+    let state = run(&mut session, "project.state", json!({}));
+    assert_eq!(
+        state["project"]["tracks"][0]["graph"]["connections"]
+            .as_array()
+            .unwrap()
+            .len(),
+        4
+    );
 }
 
 #[test]

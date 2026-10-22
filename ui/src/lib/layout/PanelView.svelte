@@ -108,9 +108,24 @@
     onAddGain={(trackId: string) => void session.addGain(trackId)}
     onAddAdsr={(trackId: string) => void session.addAdsr(trackId)}
     onAddFilter={(trackId: string) => void session.addFilter(trackId)}
-    onMove={(trackId, nodeId, beforeNodeId) =>
-      void session.moveDevice(trackId, nodeId, beforeNodeId)}
-    onRemove={(path: string) => void session.deleteDevice(path)}
+    onAddMix={(trackId: string) => void session.addMix(trackId)}
+    onConnect={(trackId, fromNodeId, fromPort, toNodeId, toPort) =>
+      void session.connectNodes(
+        trackId,
+        fromNodeId,
+        fromPort,
+        toNodeId,
+        toPort,
+      )}
+    onDisconnect={(trackId, fromNodeId, fromPort, toNodeId, toPort) =>
+      void session.disconnectNodes(
+        trackId,
+        fromNodeId,
+        fromPort,
+        toNodeId,
+        toPort,
+      )}
+    onRemove={(path: string) => void session.deleteNode(path)}
     onParamChange={(trackId, nodeId, name, value) =>
       void session.changeDeviceParam(trackId, nodeId, name, value)}
   />

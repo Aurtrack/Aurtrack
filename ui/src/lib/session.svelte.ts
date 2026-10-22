@@ -740,6 +740,21 @@ export class SessionStore {
     }
   }
 
+  async addMix(trackId: string) {
+    if (this.busy) return;
+    this.busy = true;
+    try {
+      await this.run("device.add", { track_id: trackId, kind: "mix" });
+      await this.refreshProject();
+      await this.reloadIfPlaying();
+      this.setStatus("status.mixAdded");
+    } catch (error) {
+      this.fail("status.mixAddFailed", error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
   async addAdsr(trackId: string) {
     if (this.busy) return;
     this.busy = true;
@@ -788,6 +803,73 @@ export class SessionStore {
       this.setStatus("status.nodeMoved");
     } catch (error) {
       this.fail("status.nodeMoveFailed", error);
+    }
+  }
+
+  async connectNodes(
+    trackId: string,
+    fromNodeId: string,
+    fromPort: string,
+    toNodeId: string,
+    toPort: string,
+  ) {
+    if (this.busy) return;
+    this.busy = true;
+    try {
+      await this.run("node.connect", {
+        from: `/tracks/${trackId}/nodes/${fromNodeId}`,
+        from_port: fromPort,
+        to: `/tracks/${trackId}/nodes/${toNodeId}`,
+        to_port: toPort,
+      });
+      await this.reloadIfPlaying();
+      await this.refreshProject();
+      this.setStatus("status.nodeConnected");
+    } catch (error) {
+      this.fail("status.nodeConnectFailed", error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  async disconnectNodes(
+    trackId: string,
+    fromNodeId: string,
+    fromPort: string,
+    toNodeId: string,
+    toPort: string,
+  ) {
+    if (this.busy) return;
+    this.busy = true;
+    try {
+      await this.run("node.disconnect", {
+        from: `/tracks/${trackId}/nodes/${fromNodeId}`,
+        from_port: fromPort,
+        to: `/tracks/${trackId}/nodes/${toNodeId}`,
+        to_port: toPort,
+      });
+      await this.reloadIfPlaying();
+      await this.refreshProject();
+      this.setStatus("status.nodeDisconnected");
+    } catch (error) {
+      this.fail("status.nodeDisconnectFailed", error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  async deleteNode(path: string) {
+    if (this.busy) return;
+    this.busy = true;
+    try {
+      await this.run("node.remove", { path });
+      await this.refreshProject();
+      await this.reloadIfPlaying();
+      this.setStatus("status.deviceRemoved");
+    } catch (error) {
+      this.fail("status.deviceRemoveFailed", error);
+    } finally {
+      this.busy = false;
     }
   }
 

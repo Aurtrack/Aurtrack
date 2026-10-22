@@ -76,6 +76,8 @@ pub enum NodeKind {
     FilterLowpass,
     #[serde(rename = "gain")]
     Gain,
+    #[serde(rename = "mix")]
+    Mix,
     #[serde(rename = "output")]
     Output,
 }
@@ -88,6 +90,7 @@ impl NodeKind {
             Self::AmpAdsr => "amp.adsr",
             Self::FilterLowpass => "filter.lowpass",
             Self::Gain => "gain",
+            Self::Mix => "mix",
             Self::Output => "output",
         }
     }
@@ -97,12 +100,16 @@ impl NodeKind {
     }
 
     pub const fn is_device(self) -> bool {
-        matches!(self, Self::AmpAdsr | Self::FilterLowpass | Self::Gain)
+        matches!(
+            self,
+            Self::AmpAdsr | Self::FilterLowpass | Self::Gain | Self::Mix
+        )
     }
 
     pub const fn inputs(self) -> &'static [&'static str] {
         match self {
             Self::InstrumentSine | Self::InstrumentSilence => &[],
+            Self::Mix => &["in1", "in2"],
             Self::AmpAdsr | Self::FilterLowpass | Self::Gain | Self::Output => &[PORT_IN],
         }
     }
@@ -114,7 +121,8 @@ impl NodeKind {
             | Self::InstrumentSilence
             | Self::AmpAdsr
             | Self::FilterLowpass
-            | Self::Gain => &[PORT_OUT],
+            | Self::Gain
+            | Self::Mix => &[PORT_OUT],
         }
     }
 
@@ -129,7 +137,7 @@ impl NodeKind {
     pub fn param_specs(self) -> &'static [ParamSpec] {
         match self {
             Self::InstrumentSine => &SINE_PARAMS,
-            Self::InstrumentSilence | Self::Output => &[],
+            Self::InstrumentSilence | Self::Mix | Self::Output => &[],
             Self::AmpAdsr => &ADSR_PARAMS,
             Self::FilterLowpass => &FILTER_PARAMS,
             Self::Gain => &GAIN_PARAMS,
@@ -361,6 +369,35 @@ pub struct AdsrSettings {
     pub release: f64,
 }
 
+/// DAG 编译结果；索引 0 固定是声部输入。
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompiledGraph {
+    pub source_frequency: Option<f64>,
+    pub adsr: Option<AdsrSettings>,
+    pub nodes: Vec<CompiledNode>,
+    pub output: usize,
+}
+
+/// DAG 中的一个处理节点。
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq)]
+pub struct CompiledNode {
+    pub op: CompiledOp,
+    pub inputs: Vec<usize>,
+}
+
+/// DAG 节点操作。
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq)]
+pub enum CompiledOp {
+    Voice,
+    Filter(FilterSettings),
+    Gain(f64),
+    Mix,
+    Output,
+}
+
 /// 节点、端口和连接。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 #[serde(deny_unknown_fields)]
@@ -463,7 +500,28 @@ impl Graph {
         if self.connections.contains(&connection) {
             return Err(GraphError::DuplicateConnection);
         }
+        if self
+            .connections
+            .iter()
+            .any(|existing| existing.to == connection.to)
+        {
+            return Err(GraphError::PortOccupied);
+        }
         self.connections.push(connection);
+        if self.topological_order().is_err() {
+            self.connections.pop();
+            return Err(GraphError::Cycle);
+        }
+        Ok(())
+    }
+
+    pub fn disconnect(&mut self, from: &PortRef, to: &PortRef) -> Result<(), GraphError> {
+        let index = self
+            .connections
+            .iter()
+            .position(|connection| &connection.from == from && &connection.to == to)
+            .ok_or(GraphError::MissingConnection)?;
+        self.connections.remove(index);
         Ok(())
     }
 
@@ -504,17 +562,33 @@ impl Graph {
             .ok_or_else(|| GraphError::MissingInput(target.clone()))?;
         let predecessor = incoming.from.node.clone();
         let node_id = node.id().clone();
+        let node_input = node
+            .kind()
+            .inputs()
+            .first()
+            .copied()
+            .ok_or(GraphError::MissingInput(node_id.clone()))?;
         self.nodes.insert(node_id.clone(), node);
         self.connections
             .retain(|connection| connection != &incoming);
         self.connect(
             PortRef::fixed(predecessor, PORT_OUT),
-            PortRef::fixed(node_id.clone(), PORT_IN),
+            PortRef::fixed(node_id.clone(), node_input),
         )?;
         self.connect(
             PortRef::fixed(node_id, PORT_OUT),
             PortRef::fixed(target.clone(), PORT_IN),
         )?;
+        Ok(())
+    }
+
+    /// 删除节点及所有相关连线；用于无法保持链式语义的混合节点。
+    pub fn remove_node(&mut self, id: &NodeId) -> Result<(), GraphError> {
+        if self.nodes.remove(id).is_none() {
+            return Err(GraphError::UnknownNode(id.clone()));
+        }
+        self.connections
+            .retain(|connection| connection.from.node != *id && connection.to.node != *id);
         Ok(())
     }
 
@@ -548,8 +622,21 @@ impl Graph {
             .nodes
             .get(id)
             .ok_or_else(|| GraphError::UnknownNode(id.clone()))?;
-        if !node.kind().is_device() {
+        if !node.kind().is_device() || node.kind() == NodeKind::Mix {
             return Err(GraphError::NotDevice(node.kind()));
+        }
+        let incoming_count = self
+            .connections
+            .iter()
+            .filter(|connection| connection.to.node == *id)
+            .count();
+        let outgoing_count = self
+            .connections
+            .iter()
+            .filter(|connection| connection.from.node == *id)
+            .count();
+        if incoming_count != 1 || outgoing_count != 1 {
+            return Err(GraphError::BranchNode(id.clone()));
         }
         let incoming = self
             .connections
@@ -570,7 +657,7 @@ impl Graph {
         self.nodes.remove(id);
         self.connect(
             PortRef::fixed(predecessor, PORT_OUT),
-            PortRef::fixed(successor, PORT_IN),
+            PortRef::new(successor, outgoing.to.port.clone()),
         )?;
         Ok(())
     }
@@ -608,28 +695,38 @@ impl Graph {
             return Err(GraphError::AdsrCount(envelopes));
         }
 
-        let mut outgoing = BTreeSet::new();
-        let mut incoming = BTreeSet::new();
         let mut seen = BTreeSet::new();
+        let mut inputs = BTreeSet::new();
+        let mut mix_inputs: BTreeMap<NodeId, usize> = BTreeMap::new();
         for connection in &self.connections {
             self.validate_connection(connection)?;
             let from = (connection.from.node.clone(), connection.from.port.clone());
             let to = (connection.to.node.clone(), connection.to.port.clone());
-            if !seen.insert((from.clone(), to.clone())) {
+            if !seen.insert((from, to.clone())) {
                 return Err(GraphError::DuplicateConnection);
             }
-            if !outgoing.insert(from) {
-                return Err(GraphError::NotLinear);
+            if !inputs.insert(to) {
+                return Err(GraphError::PortOccupied);
             }
-            if !incoming.insert(to) {
-                return Err(GraphError::NotLinear);
+            if self
+                .nodes
+                .get(&connection.to.node)
+                .is_some_and(|node| node.kind() == NodeKind::Mix)
+            {
+                *mix_inputs.entry(connection.to.node.clone()).or_default() += 1;
+            }
+        }
+        for node in self
+            .nodes
+            .values()
+            .filter(|node| node.kind() == NodeKind::Mix)
+        {
+            if mix_inputs.get(node.id()).copied().unwrap_or(0) != 2 {
+                return Err(GraphError::MixInputs(node.id().clone()));
             }
         }
 
-        let order = self.topological_order()?;
-        if order.len() != self.nodes.len() {
-            return Err(GraphError::Cycle);
-        }
+        self.topological_order()?;
         Ok(())
     }
 
@@ -724,6 +821,7 @@ impl Graph {
                 NodeKind::Gain => {
                     gain *= node.param("gain").unwrap_or(1.0);
                 },
+                NodeKind::Mix => return Err(GraphError::NotLinear),
                 NodeKind::Output => break,
             }
             let next = self
@@ -742,6 +840,138 @@ impl Graph {
             adsr,
             filters,
             gain,
+        })
+    }
+
+    /// 编译成可求值的 DAG；ADSR 必须位于分支之前。
+    #[allow(clippy::too_many_lines)]
+    pub fn compile_graph(&self) -> Result<CompiledGraph, GraphError> {
+        self.validate()?;
+        let instrument = self
+            .nodes
+            .values()
+            .find(|node| node.kind().is_instrument())
+            .ok_or(GraphError::InstrumentCount(0))?;
+        let adsr = self
+            .nodes
+            .values()
+            .find(|node| node.kind() == NodeKind::AmpAdsr);
+        if let Some(adsr) = adsr {
+            let outgoing: Vec<&Connection> = self
+                .connections
+                .iter()
+                .filter(|connection| connection.from.node == *instrument.id())
+                .collect();
+            if outgoing.len() != 1 || outgoing[0].to.node != *adsr.id() {
+                return Err(GraphError::AdsrOrder);
+            }
+        }
+        let start = adsr.map_or_else(|| instrument.id().clone(), |adsr| adsr.id().clone());
+        let mut reachable = BTreeSet::new();
+        let mut queue = VecDeque::from([start.clone()]);
+        while let Some(id) = queue.pop_front() {
+            if !reachable.insert(id.clone()) {
+                continue;
+            }
+            for connection in self
+                .connections
+                .iter()
+                .filter(|connection| connection.from.node == id)
+            {
+                let target = &connection.to.node;
+                let target_kind = self
+                    .nodes
+                    .get(target)
+                    .ok_or_else(|| GraphError::UnknownNode(target.clone()))?
+                    .kind();
+                if target_kind.is_instrument() || target_kind == NodeKind::AmpAdsr {
+                    return Err(GraphError::AdsrOrder);
+                }
+                queue.push_back(target.clone());
+            }
+        }
+        let order = self.topological_order()?;
+        let audio_ids: Vec<NodeId> = order
+            .iter()
+            .filter(|id| {
+                self.nodes.get(*id).is_some_and(|node| {
+                    !node.kind().is_instrument() && node.kind() != NodeKind::AmpAdsr
+                })
+            })
+            .cloned()
+            .collect();
+        if audio_ids.iter().any(|id| !reachable.contains(id)) {
+            return Err(GraphError::NotConnected);
+        }
+        let source_frequency = match instrument.kind() {
+            NodeKind::InstrumentSine => instrument.param("frequency"),
+            _ => None,
+        };
+        let adsr = adsr.map(|adsr| AdsrSettings {
+            attack: adsr.param("attack").unwrap_or(0.01),
+            decay: adsr.param("decay").unwrap_or(0.12),
+            sustain: adsr.param("sustain").unwrap_or(0.75),
+            release: adsr.param("release").unwrap_or(0.18),
+        });
+        let mut indices = BTreeMap::new();
+        indices.insert(start.clone(), 0);
+        let mut nodes = vec![CompiledNode {
+            op: CompiledOp::Voice,
+            inputs: Vec::new(),
+        }];
+        let mut output = 0;
+        for id in audio_ids {
+            let node = self
+                .nodes
+                .get(&id)
+                .ok_or_else(|| GraphError::UnknownNode(id.clone()))?;
+            let mut incoming: Vec<&Connection> = self
+                .connections
+                .iter()
+                .filter(|connection| connection.to.node == id)
+                .collect();
+            incoming.sort_by(|left, right| left.to.port.cmp(&right.to.port));
+            let inputs: Vec<usize> = incoming
+                .iter()
+                .map(|connection| {
+                    indices
+                        .get(&connection.from.node)
+                        .copied()
+                        .ok_or(GraphError::NotConnected)
+                })
+                .collect::<Result<_, _>>()?;
+            let op = match node.kind() {
+                NodeKind::FilterLowpass => CompiledOp::Filter(FilterSettings {
+                    cutoff: node.param("cutoff").unwrap_or(1200.0),
+                    resonance: node.param("resonance").unwrap_or(0.2),
+                }),
+                NodeKind::Gain => CompiledOp::Gain(node.param("gain").unwrap_or(1.0)),
+                NodeKind::Mix => CompiledOp::Mix,
+                NodeKind::Output => CompiledOp::Output,
+                NodeKind::InstrumentSine | NodeKind::InstrumentSilence | NodeKind::AmpAdsr => {
+                    return Err(GraphError::AdsrOrder);
+                },
+            };
+            if op == CompiledOp::Mix && inputs.len() != 2 {
+                return Err(GraphError::MixInputs(id.clone()));
+            }
+            if op != CompiledOp::Mix && inputs.len() != 1 {
+                return Err(GraphError::MissingInput(id.clone()));
+            }
+            if op == CompiledOp::Output {
+                output = nodes.len();
+            }
+            indices.insert(id, nodes.len());
+            nodes.push(CompiledNode { op, inputs });
+        }
+        if output == 0 {
+            return Err(GraphError::OutputCount(0));
+        }
+        Ok(CompiledGraph {
+            source_frequency,
+            adsr,
+            nodes,
+            output,
         })
     }
 
@@ -803,6 +1033,20 @@ pub enum GraphError {
     DuplicateConnection,
     #[error("图不是线性链")]
     NotLinear,
+    #[error("ADSR 必须紧跟在乐器之后，且位于分支之前")]
+    AdsrOrder,
+    #[error("图中有节点没有接到主信号链")]
+    NotConnected,
+    #[error("mix 节点必须恰好有两个输入：{0}")]
+    MixInputs(NodeId),
+    #[error("目标输入端口已经被占用")]
+    PortOccupied,
+    #[error("节点位于分支上，不能按线性链删除：{0}")]
+    BranchNode(NodeId),
+    #[error("节点太多，当前上限是 {0}")]
+    TooManyNodes(usize),
+    #[error("找不到这条连接")]
+    MissingConnection,
     #[error("图存在环")]
     Cycle,
     #[error("节点没有接上输出：{0}")]
@@ -857,13 +1101,12 @@ mod tests {
                 PortRef::new(NodeId::new("right").unwrap(), PORT_IN),
             )
             .unwrap();
-        graph
+        let error = graph
             .connect(
                 PortRef::new(NodeId::new("right").unwrap(), PORT_OUT),
                 PortRef::new(NodeId::new("left").unwrap(), PORT_IN),
             )
-            .unwrap();
-        let error = graph.topological_order().unwrap_err();
+            .unwrap_err();
         assert!(matches!(error, GraphError::Cycle));
     }
 
@@ -922,6 +1165,64 @@ mod tests {
         let compiled = graph.compile_linear().unwrap();
         assert_eq!(compiled.filters.len(), 1);
         assert!((compiled.filters[0].cutoff - 1200.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn connect_rejects_cycles_and_occupied_inputs() {
+        let mut graph = Graph::empty_track(NodeKind::InstrumentSilence).unwrap();
+        graph
+            .insert_before_output(Node::new(
+                NodeId::new("filter").unwrap(),
+                NodeKind::FilterLowpass,
+            ))
+            .unwrap();
+        let from = PortRef::new(NodeId::new("instrument").unwrap(), PORT_OUT);
+        let to = PortRef::new(NodeId::new("filter").unwrap(), PORT_IN);
+        graph.disconnect(&from, &to).unwrap();
+        let error = graph
+            .connect(
+                PortRef::new(NodeId::new("filter").unwrap(), PORT_OUT),
+                PortRef::new(NodeId::new("filter").unwrap(), PORT_IN),
+            )
+            .unwrap_err();
+        assert!(matches!(error, GraphError::Cycle));
+        graph.connect(from, to).unwrap();
+        let error = graph
+            .connect(
+                PortRef::new(NodeId::new("filter").unwrap(), PORT_OUT),
+                PortRef::new(NodeId::new("filter").unwrap(), PORT_IN),
+            )
+            .unwrap_err();
+        assert!(matches!(error, GraphError::PortOccupied));
+    }
+
+    #[test]
+    fn mix_branch_compiles_to_dag() {
+        let mut graph = Graph::empty_track(NodeKind::InstrumentSilence).unwrap();
+        graph
+            .insert_before_output(Node::new(
+                NodeId::new("filter").unwrap(),
+                NodeKind::FilterLowpass,
+            ))
+            .unwrap();
+        graph
+            .insert_before_output(Node::new(NodeId::new("mix").unwrap(), NodeKind::Mix))
+            .unwrap();
+        graph
+            .connect(
+                PortRef::new(NodeId::new("instrument").unwrap(), PORT_OUT),
+                PortRef::new(NodeId::new("mix").unwrap(), "in2"),
+            )
+            .unwrap();
+        graph.validate().unwrap();
+        let compiled = graph.compile_graph().unwrap();
+        assert!(compiled.nodes.iter().any(|node| node.op == CompiledOp::Mix));
+        assert_eq!(compiled.nodes.len(), 4);
+        assert_eq!(compiled.source_frequency, None);
+        graph
+            .remove_chain_node(&NodeId::new("filter").unwrap())
+            .unwrap();
+        graph.validate().unwrap();
     }
 
     #[test]

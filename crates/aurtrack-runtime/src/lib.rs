@@ -20,9 +20,7 @@
 use std::sync::Arc;
 
 use aurtrack_command::{CommandError, CommandRequest, CommandResponse};
-use aurtrack_engine::{
-    AdsrPlan, FilterPlan, FilterSettings, NotePlan, Playback, PlaybackPlan, TrackPlan, midi_to_hz,
-};
+use aurtrack_engine::{AdsrPlan, NotePlan, Playback, PlaybackPlan, TrackPlan, midi_to_hz};
 use aurtrack_io::AudioHandle;
 use aurtrack_session::{Project, Session, TICKS_PER_QUARTER};
 use serde::de::DeserializeOwned;
@@ -181,22 +179,15 @@ fn build_plan(
         .tracks
         .iter()
         .map(|track| {
-            let compiled = track
-                .compiled()
+            let (frequency, adsr_settings, graph) = track
+                .playback_graph()
                 .map_err(|error| CommandError::invalid_args(format!("节点图错误：{error}")))?;
-            let adsr = compiled.adsr.map(|settings| AdsrPlan {
+            let adsr = adsr_settings.map(|settings| AdsrPlan {
                 attack: settings.attack,
                 decay: settings.decay,
                 sustain: settings.sustain,
                 release: settings.release,
             });
-            let filters = compiled
-                .filters
-                .into_iter()
-                .map(|settings| {
-                    FilterPlan::new(FilterSettings::new(settings.cutoff, settings.resonance))
-                })
-                .collect();
             let notes = track
                 .clips
                 .iter()
@@ -210,10 +201,11 @@ fn build_plan(
                 })
                 .collect();
             Ok(TrackPlan {
-                frequency: compiled.source_frequency,
-                gain: compiled.gain,
+                frequency,
+                gain: 1.0,
                 adsr,
-                filters,
+                filters: Vec::new(),
+                graph: Some(graph),
                 notes,
             })
         })
@@ -240,6 +232,7 @@ fn build_plan(
             gain: 0.8,
             adsr: None,
             filters: Vec::new(),
+            graph: None,
             notes,
         });
     }
@@ -382,11 +375,11 @@ mod tests {
     }
 
     #[test]
-    fn describe_lists_thirty_seven_commands() {
+    fn describe_lists_thirty_nine_commands() {
         let mut runtime = Runtime::new();
         let response = run(&mut runtime, "describe", json!({})).unwrap();
         let commands = response.data["commands"].as_array().unwrap();
-        assert_eq!(commands.len(), 37);
+        assert_eq!(commands.len(), 39);
         assert!(
             commands
                 .iter()

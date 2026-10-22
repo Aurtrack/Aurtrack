@@ -217,7 +217,7 @@ fn device_add_schema() -> Value {
     object_schema(
         json!({
             "track_id": { "type": "string" },
-            "kind": { "type": "string", "enum": ["gain", "amp.adsr", "filter.lowpass"] },
+            "kind": { "type": "string", "enum": ["gain", "amp.adsr", "filter.lowpass", "mix"] },
             "params": {
                 "type": "object",
                 "properties": {
@@ -539,6 +539,18 @@ fn node_move_schema() -> Value {
     )
 }
 
+fn node_connect_schema() -> Value {
+    object_schema(
+        json!({
+            "from": { "type": "string", "description": "源节点路径" },
+            "to": { "type": "string", "description": "目标节点路径" },
+            "from_port": { "type": "string", "description": "输出端口，默认 out" },
+            "to_port": { "type": "string", "description": "输入端口；mix 用 in1 / in2" }
+        }),
+        &["from", "to"],
+    )
+}
+
 fn transport_play_schema() -> Value {
     object_schema(json!({}), &[])
 }
@@ -578,7 +590,7 @@ fn transport_metronome_schema() -> Value {
     )
 }
 
-static COMMANDS: [CommandSpec; 37] = [
+static COMMANDS: [CommandSpec; 39] = [
     CommandSpec {
         id: "project.create",
         summary: "创建或替换当前工程",
@@ -734,6 +746,18 @@ static COMMANDS: [CommandSpec; 37] = [
         summary: "把设备节点移动到另一个节点之前",
         undo: UndoKind::Snapshot,
         input_schema: node_move_schema,
+    },
+    CommandSpec {
+        id: "node.connect",
+        summary: "连接两个节点端口",
+        undo: UndoKind::Snapshot,
+        input_schema: node_connect_schema,
+    },
+    CommandSpec {
+        id: "node.disconnect",
+        summary: "断开两个节点之间的连接",
+        undo: UndoKind::Snapshot,
+        input_schema: node_connect_schema,
     },
     CommandSpec {
         id: "param.set",

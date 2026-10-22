@@ -40,6 +40,7 @@ pub struct TrackPlan {
     pub gain: f64,
     pub adsr: Option<AdsrPlan>,
     pub filters: Vec<FilterPlan>,
+    pub graph: Option<GraphPlan>,
     pub notes: Vec<NotePlan>,
 }
 
@@ -132,6 +133,58 @@ impl FilterPlan {
     pub fn reset(&self) {
         self.state.z1.store(0.0_f64.to_bits(), Ordering::Relaxed);
         self.state.z2.store(0.0_f64.to_bits(), Ordering::Relaxed);
+    }
+}
+
+/// DAG 计划最多允许的节点数。
+pub const MAX_GRAPH_NODES: usize = 64;
+
+/// DAG 中的一个节点。
+#[derive(Debug, Clone)]
+pub struct GraphNodePlan {
+    pub op: GraphOp,
+    pub inputs: Vec<usize>,
+}
+
+/// DAG 节点操作。
+#[derive(Debug, Clone)]
+pub enum GraphOp {
+    Voice,
+    Filter(FilterPlan),
+    Gain(f64),
+    Mix,
+    Output,
+}
+
+/// 已排序的 DAG 计划；索引 0 固定是声部。
+#[derive(Debug, Clone)]
+pub struct GraphPlan {
+    pub nodes: Vec<GraphNodePlan>,
+    pub output: usize,
+}
+
+impl GraphPlan {
+    pub fn sample(&self, voice: f64, sample_rate: u32) -> f64 {
+        if self.nodes.len() > MAX_GRAPH_NODES || self.output >= self.nodes.len() {
+            return 0.0;
+        }
+        let mut values = [0.0_f64; MAX_GRAPH_NODES];
+        for (index, node) in self.nodes.iter().enumerate() {
+            let value = match &node.op {
+                GraphOp::Voice => voice,
+                GraphOp::Filter(filter) => node
+                    .inputs
+                    .first()
+                    .map_or(0.0, |input| filter.process(sample_rate, values[*input])),
+                GraphOp::Gain(gain) => {
+                    node.inputs.first().map_or(0.0, |input| values[*input]) * gain
+                },
+                GraphOp::Mix => node.inputs.iter().map(|input| values[*input]).sum(),
+                GraphOp::Output => node.inputs.first().map_or(0.0, |input| values[*input]),
+            };
+            values[index] = value;
+        }
+        values[self.output]
     }
 }
 
@@ -285,6 +338,13 @@ impl Playback {
         for track in &plan.tracks {
             for filter in &track.filters {
                 filter.reset();
+            }
+            if let Some(graph) = &track.graph {
+                for node in &graph.nodes {
+                    if let GraphOp::Filter(filter) = &node.op {
+                        filter.reset();
+                    }
+                }
             }
         }
     }
@@ -511,6 +571,10 @@ impl Playback {
                         * 0.25;
                 }
             }
+            if let Some(graph) = &track.graph {
+                sample += graph.sample(voice, plan.sample_rate);
+                continue;
+            }
             for filter in &track.filters {
                 voice = filter.process(plan.sample_rate, voice);
             }
@@ -544,6 +608,7 @@ mod tests {
                 gain: 1.0,
                 adsr: None,
                 filters: Vec::new(),
+                graph: None,
                 notes: Vec::new(),
             }],
         }
@@ -600,6 +665,7 @@ mod tests {
                 gain: 1.0,
                 adsr: None,
                 filters: Vec::new(),
+                graph: None,
                 notes: Vec::new(),
             }],
         });
@@ -647,6 +713,7 @@ mod tests {
                 gain: 1.0,
                 adsr: None,
                 filters: Vec::new(),
+                graph: None,
                 notes: vec![NotePlan {
                     start: 0.0,
                     duration: 1.0,
@@ -733,6 +800,7 @@ mod tests {
                     release: 0.2,
                 }),
                 filters: Vec::new(),
+                graph: None,
                 notes: vec![NotePlan {
                     start: 0.0,
                     duration: 0.05,
@@ -760,6 +828,7 @@ mod tests {
                 gain: 1.0,
                 adsr: None,
                 filters: Vec::new(),
+                graph: None,
                 notes: vec![NotePlan {
                     start: 0.0,
                     duration: 0.25,
@@ -824,6 +893,7 @@ mod tests {
                 gain: 1.0,
                 adsr: None,
                 filters: Vec::new(),
+                graph: None,
                 notes: Vec::new(),
             }],
         });
@@ -851,6 +921,7 @@ mod tests {
                     gain: 1.0,
                     adsr: None,
                     filters: Vec::new(),
+                    graph: None,
                     notes: Vec::new(),
                 })
                 .collect(),
@@ -874,6 +945,7 @@ mod tests {
                 gain: 1.0,
                 adsr: None,
                 filters: Vec::new(),
+                graph: None,
                 notes: vec![NotePlan {
                     start: 2.0,
                     duration: 1.0,

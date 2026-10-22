@@ -1,6 +1,6 @@
 # 命令规范 v1.3
 
-这份文档定义 Aurtrack 的可运行命令面：37 条命令、统一的返回结构、寻址规则，以及 MCP 的映射方式。代码必须与本文一致。
+这份文档定义 Aurtrack 的可运行命令面：39 条命令、统一的返回结构、寻址规则，以及 MCP 的映射方式。代码必须与本文一致。
 
 工程格式 v4 用 music tick 存储位置（960 PPQ），轨道保存 `aurtrack-graph` 节点图。命令边界仍用秒，避免 UI 和 CLI 直接操作 tick。旧 v3 工程会被拒绝。
 
@@ -81,7 +81,7 @@
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 | --- | --- | --- | --- | --- |
 | `track_id` | string | 是 | | 目标轨道 |
-| `kind` | string | 是 | | `gain`、`amp.adsr` 或 `filter.lowpass` |
+| `kind` | string | 是 | | `gain`、`amp.adsr`、`filter.lowpass` 或 `mix` |
 | `params` | object | 否 | | `gain` 范围 0 到 4；ADSR / 低通参数见下表 |
 
 返回：
@@ -625,7 +625,20 @@
 { "path": "/tracks/track-1/nodes/device-2", "before": "/tracks/track-1/nodes/output" }
 ```
 
-线性链暂时不提供通用 `node.connect` / `node.disconnect`；它们要等分支编译器。
+### 38. `node.connect`
+
+| 参数 | 类型 | 必填 | 默认 | 说明 |
+| --- | --- | --- | --- | --- |
+| `from` | string | 是 | | 源节点路径 |
+| `from_port` | string | 否 | `out` | 输出端口 |
+| `to` | string | 是 | | 目标节点路径 |
+| `to_port` | string | 否 | `in` | 输入端口；`mix` 用 `in1` / `in2` |
+
+输出端口可以 fan-out；每个输入端口只能接一条线。`mix` 必须恰好接满两个输入。
+
+### 39. `node.disconnect`
+
+参数与 `node.connect` 相同，断开完全一致的一条连接。找不到连接时返回 `not_found`。
 
 ## MCP 映射
 
@@ -640,6 +653,8 @@
 | `node.add` | `node_add` |
 | `node.remove` | `node_remove` |
 | `node.move` | `node_move` |
+| `node.connect` | `node_connect` |
+| `node.disconnect` | `node_disconnect` |
 | `param.set` | `param_set` |
 | `render.segment` | `render_segment` |
 | `transport.play` | `transport_play` |
