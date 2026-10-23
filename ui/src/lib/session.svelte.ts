@@ -772,6 +772,14 @@ export class SessionStore {
     return this.run("plugin.inspect", { path, id });
   }
 
+  async setMasterPlugin(path: string, id: string): Promise<unknown> {
+    return this.run("plugin.master", { path, id });
+  }
+
+  async clearMasterPlugin(): Promise<unknown> {
+    return this.run("plugin.master_off", {});
+  }
+
   async scanExtensions(): Promise<{
     directory: string;
     extensions: {

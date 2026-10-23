@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::Sender;
 use std::thread::JoinHandle;
 
-use aurtrack_engine::Playback;
+use aurtrack_engine::{BlockProcessor, Playback};
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 use cpal::{FromSample, SampleFormat, SizedSample, Stream};
 
@@ -105,13 +105,21 @@ impl Drop for AudioHandle {
 /// 这里让线程持有它，主线程只拿元数据。丢弃句柄会唤醒线程并释放音频流，
 /// 避免切换设备或重开输出后留下旧流。
 pub fn spawn(playback: Arc<Playback>) -> Result<AudioHandle, AudioError> {
+    spawn_with_master(playback, None)
+}
+
+/// 打开音频设备，并在主输出后挂一个实时块处理器。
+pub fn spawn_with_master(
+    playback: Arc<Playback>,
+    master: Option<Box<dyn BlockProcessor>>,
+) -> Result<AudioHandle, AudioError> {
     let (sender, receiver) = std::sync::mpsc::channel();
     let (stop, stop_signal) = std::sync::mpsc::channel();
     let healthy = Arc::new(AtomicBool::new(true));
     let stream_health = Arc::clone(&healthy);
     let thread = std::thread::Builder::new()
         .name("aurtrack-audio".to_string())
-        .spawn(move || match start(playback, &stream_health) {
+        .spawn(move || match start(playback, master, &stream_health) {
             Ok(output) => {
                 let metadata = (output.sample_rate(), output.device_name().to_string());
                 if sender.send(Ok(metadata)).is_err() {
@@ -156,7 +164,11 @@ impl AudioOutput {
 }
 
 /// 打开默认输出设备并立即开始静音输出。
-fn start(playback: Arc<Playback>, healthy: &Arc<AtomicBool>) -> Result<AudioOutput, AudioError> {
+fn start(
+    playback: Arc<Playback>,
+    master: Option<Box<dyn BlockProcessor>>,
+    healthy: &Arc<AtomicBool>,
+) -> Result<AudioOutput, AudioError> {
     let host = cpal::default_host();
     let device = host.default_output_device().ok_or(AudioError::NoDevice)?;
     let device_name = device.name().unwrap_or_else(|_| "unknown".to_string());
@@ -173,9 +185,9 @@ fn start(playback: Arc<Playback>, healthy: &Arc<AtomicBool>) -> Result<AudioOutp
     };
 
     let stream = match sample_format {
-        SampleFormat::F32 => build::<f32>(&device, &config, playback, channels, healthy)?,
-        SampleFormat::I16 => build::<i16>(&device, &config, playback, channels, healthy)?,
-        SampleFormat::U16 => build::<u16>(&device, &config, playback, channels, healthy)?,
+        SampleFormat::F32 => build::<f32>(&device, &config, playback, master, channels, healthy)?,
+        SampleFormat::I16 => build::<i16>(&device, &config, playback, master, channels, healthy)?,
+        SampleFormat::U16 => build::<u16>(&device, &config, playback, master, channels, healthy)?,
         other => return Err(AudioError::UnsupportedFormat(other)),
     };
 
@@ -194,6 +206,7 @@ fn build<T>(
     device: &cpal::Device,
     config: &cpal::StreamConfig,
     playback: Arc<Playback>,
+    mut master: Option<Box<dyn BlockProcessor>>,
     channels: usize,
     healthy: &Arc<AtomicBool>,
 ) -> Result<Stream, AudioError>
@@ -201,8 +214,15 @@ where
     T: SizedSample + FromSample<f32> + 'static,
 {
     let stream_health = Arc::clone(healthy);
-    // 预分配一块临时缓冲，回调里按块切分，避免分配。
+    // 预分配块处理缓冲，回调里只做算术。
     let mut scratch = vec![0.0_f32; 8192];
+    let mut left = vec![0.0_f32; 8192];
+    let mut right = vec![0.0_f32; 8192];
+    let mut output_left = vec![0.0_f32; 8192];
+    let mut output_right = vec![0.0_f32; 8192];
+    if let Some(processor) = master.as_mut() {
+        let _ = processor.prepare(config.sample_rate.0, scratch.len());
+    }
     let stream = device
         .build_output_stream(
             config,
@@ -212,6 +232,25 @@ where
                 while offset < frames {
                     let chunk = (frames - offset).min(scratch.len());
                     playback.render(&mut scratch[..chunk]);
+                    if let Some(processor) = master.as_mut() {
+                        left[..chunk].copy_from_slice(&scratch[..chunk]);
+                        right[..chunk].copy_from_slice(&scratch[..chunk]);
+                        output_left[..chunk].fill(0.0);
+                        output_right[..chunk].fill(0.0);
+                        if processor
+                            .process(
+                                &left[..chunk],
+                                &right[..chunk],
+                                &mut output_left[..chunk],
+                                &mut output_right[..chunk],
+                            )
+                            .is_ok()
+                        {
+                            for index in 0..chunk {
+                                scratch[index] = (output_left[index] + output_right[index]) * 0.5;
+                            }
+                        }
+                    }
                     for (index, sample) in scratch[..chunk].iter().enumerate() {
                         let value = T::from_sample(*sample);
                         let base = (offset + index) * channels;

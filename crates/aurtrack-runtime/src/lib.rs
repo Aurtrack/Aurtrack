@@ -43,6 +43,8 @@ pub struct Runtime {
     audio: Option<AudioHandle>,
     sample_rate: u32,
     metronome: bool,
+    plugin_bridge: Option<aurtrack_host::PluginBridgeControl>,
+    plugin_config: Option<(std::path::PathBuf, String)>,
 }
 
 impl Default for Runtime {
@@ -59,6 +61,8 @@ impl Runtime {
             audio: None,
             sample_rate: 48_000,
             metronome: false,
+            plugin_bridge: None,
+            plugin_config: None,
         }
     }
 
@@ -68,10 +72,20 @@ impl Runtime {
             return Ok(());
         }
         self.audio = None;
-        let handle = aurtrack_io::spawn(self.playback.clone())
+        self.plugin_bridge = None;
+        let (bridge, port) = aurtrack_host::PluginBridgeControl::new();
+        let handle = aurtrack_io::spawn_with_master(self.playback.clone(), Some(Box::new(port)))
             .map_err(|error| CommandError::new("audio_unavailable", error.to_string()))?;
         self.sample_rate = handle.sample_rate();
         self.audio = Some(handle);
+        self.plugin_bridge = Some(bridge);
+        if let Some((path, id)) = self.plugin_config.clone() {
+            if let Some(bridge) = self.plugin_bridge.as_ref() {
+                bridge
+                    .load(path, id, self.sample_rate)
+                    .map_err(|error| CommandError::new("plugin_unavailable", error))?;
+            }
+        }
         Ok(())
     }
 
@@ -97,6 +111,8 @@ impl Runtime {
             "transport.metronome" => self.transport_metronome(&request.args),
             "plugin.scan" => Self::plugin_scan(&request.args),
             "plugin.inspect" => Self::plugin_inspect(&request.args),
+            "plugin.master" => self.plugin_master(&request.args),
+            "plugin.master_off" => self.plugin_master_off(),
             "extension.list" => Self::extension_list(&request.args),
             "extension.call" => Self::extension_call(&request.args),
             _ => self.session.execute(request),
@@ -111,6 +127,7 @@ impl Runtime {
         // 继续使用已经收不到回调的旧音频流。
         if !self.playback.is_playing() {
             self.audio = None;
+            self.plugin_bridge = None;
         }
         self.ensure_audio()?;
         let project = self
@@ -200,6 +217,45 @@ impl Runtime {
             "parameters": capabilities.parameters,
             "has_state": capabilities.has_state,
         })))
+    }
+
+    fn plugin_master(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct MasterArgs {
+            path: String,
+            id: String,
+        }
+        let args: MasterArgs = parse_args(args)?;
+        self.ensure_audio()?;
+        let Some(bridge) = self.plugin_bridge.as_ref() else {
+            return Err(CommandError::new(
+                "audio_unavailable",
+                "音频输出没有打开".to_string(),
+            ));
+        };
+        let path = std::path::PathBuf::from(&args.path);
+        if let Err(error) = bridge.load(path.clone(), args.id.clone(), self.sample_rate) {
+            self.plugin_config = None;
+            return Err(CommandError::new("plugin_unavailable", error));
+        }
+        self.plugin_config = Some((path, args.id.clone()));
+        Ok(CommandResponse::ok(json!({
+            "path": args.path,
+            "id": args.id,
+            "sample_rate": self.sample_rate,
+            "loaded": true,
+        })))
+    }
+
+    fn plugin_master_off(&mut self) -> Result<CommandResponse, CommandError> {
+        if let Some(bridge) = self.plugin_bridge.as_ref() {
+            bridge
+                .unload()
+                .map_err(|error| CommandError::new("plugin_unavailable", error))?;
+        }
+        self.plugin_config = None;
+        Ok(CommandResponse::ok(json!({ "loaded": false })))
     }
 
     fn extension_list(args: &Value) -> Result<CommandResponse, CommandError> {
@@ -477,11 +533,11 @@ mod tests {
     }
 
     #[test]
-    fn describe_lists_forty_six_commands() {
+    fn describe_lists_forty_eight_commands() {
         let mut runtime = Runtime::new();
         let response = run(&mut runtime, "describe", json!({})).unwrap();
         let commands = response.data["commands"].as_array().unwrap();
-        assert_eq!(commands.len(), 46);
+        assert_eq!(commands.len(), 48);
         assert!(
             commands
                 .iter()

@@ -237,6 +237,8 @@ export const en: Record<MessageKey, Message> = {
   "plugins.extensions": "APP EXTENSIONS",
   "plugins.refresh": "RESCAN",
   "plugins.inspect": "PARAMS & STATE",
+  "plugins.master": "USE AS MASTER",
+  "plugins.masterOff": "REMOVE MASTER",
   "plugins.loading": "SCANNING…",
   "plugins.empty": "NOTHING FOUND",
   "plugins.close": "CLOSE",

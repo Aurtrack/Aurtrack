@@ -1,6 +1,6 @@
 # 命令规范 v1.3
 
-这份文档定义 Aurtrack 的可运行命令面：46 条命令、统一的返回结构、寻址规则，以及 MCP 的映射方式。代码必须与本文一致。
+这份文档定义 Aurtrack 的可运行命令面：48 条命令、统一的返回结构、寻址规则，以及 MCP 的映射方式。代码必须与本文一致。
 
 工程格式 v4 用 music tick 存储位置（960 PPQ），轨道保存 `aurtrack-graph` 节点图。命令边界仍用秒，避免 UI 和 CLI 直接操作 tick。旧 v3 工程会被拒绝。
 
@@ -688,7 +688,23 @@
 { "path": "D:/Plugins/CLAP/effect.clap", "id": "com.example.effect" }
 ```
 
-### 45. `extension.list`
+### 45. `plugin.master`
+
+把 CLAP 立体声效果器挂到实时主输出。插件在专用线程运行，音频线程通过无锁环形缓冲交换块；当前固定 512 帧，一块延迟。
+
+```json
+{ "path": "D:/Plugins/CLAP/effect.clap", "id": "com.example.effect" }
+```
+
+### 46. `plugin.master_off`
+
+卸载实时主输出插件。
+
+```json
+{}
+```
+
+### 47. `extension.list`
 
 扫描应用扩展目录。扩展是外部进程，清单见 `specs/extensions.md`。
 
@@ -696,7 +712,7 @@
 { "path": "D:/Extensions" }
 ```
 
-### 46. `extension.call`
+### 48. `extension.call`
 
 调用扩展命令。请求通过 JSON stdin 传入，扩展的 stdout 必须是一个 JSON 对象。
 
@@ -728,6 +744,8 @@
 | `node.duplicate` | `node_duplicate` |
 | `plugin.scan` | `plugin_scan` |
 | `plugin.inspect` | `plugin_inspect` |
+| `plugin.master` | `plugin_master` |
+| `plugin.master_off` | `plugin_master_off` |
 | `extension.list` | `extension_list` |
 | `extension.call` | `extension_call` |
 | `param.set` | `param_set` |

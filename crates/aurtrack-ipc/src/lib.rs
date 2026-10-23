@@ -264,13 +264,13 @@ fn ipc_error(message: String) -> CommandError {
 /// CLI / MCP 的执行后端：连得上桌面就共享会话，否则退回本地运行时。
 #[derive(Debug)]
 pub enum Backend {
-    Local(Runtime),
+    Local(Box<Runtime>),
     Remote(SessionClient),
 }
 
 impl Backend {
     pub fn local() -> Self {
-        Self::Local(Runtime::new())
+        Self::Local(Box::new(Runtime::new()))
     }
 
     pub fn remote() -> Result<Self, ClientError> {

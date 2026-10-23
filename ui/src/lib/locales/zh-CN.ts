@@ -230,6 +230,8 @@ export const zhCN = {
   "plugins.extensions": "应用扩展",
   "plugins.refresh": "重新扫描",
   "plugins.inspect": "参数与状态",
+  "plugins.master": "挂到主输出",
+  "plugins.masterOff": "卸载主输出插件",
   "plugins.loading": "正在扫描…",
   "plugins.empty": "没有找到",
   "plugins.close": "关闭",

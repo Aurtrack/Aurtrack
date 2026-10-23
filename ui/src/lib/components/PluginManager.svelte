@@ -67,6 +67,26 @@
     }
   }
 
+  async function useAsMaster(plugin: Plugin) {
+    result = "";
+    try {
+      const data = await session.setMasterPlugin(plugin.path, plugin.id);
+      result = JSON.stringify(data, null, 2);
+    } catch (cause) {
+      result = errorMessage(cause);
+    }
+  }
+
+  async function clearMaster() {
+    result = "";
+    try {
+      const data = await session.clearMasterPlugin();
+      result = JSON.stringify(data, null, 2);
+    } catch (cause) {
+      result = errorMessage(cause);
+    }
+  }
+
   async function runCommand(extension: Extension, command: string) {
     result = "";
     try {
@@ -97,6 +117,9 @@
       {#if loading}
         <span class="plugin-note">{t("plugins.loading")}</span>
       {/if}
+      <button class="ghost small" onclick={() => void clearMaster()}>
+        {t("plugins.masterOff")}
+      </button>
     </div>
     {#if error}
       <p class="modal-text error-text">{error}</p>
@@ -117,9 +140,14 @@
                 <strong>{plugin.name || plugin.id}</strong>
                 <span>{plugin.vendor} · {plugin.version}</span>
                 <code>{plugin.id}</code>
-                <button class="ghost small" onclick={() => void inspect(plugin)}>
-                  {t("plugins.inspect")}
-                </button>
+                <div class="plugin-commands">
+                  <button class="ghost small" onclick={() => void inspect(plugin)}>
+                    {t("plugins.inspect")}
+                  </button>
+                  <button class="ghost small" onclick={() => void useAsMaster(plugin)}>
+                    {t("plugins.master")}
+                  </button>
+                </div>
               </li>
             {/each}
           </ul>

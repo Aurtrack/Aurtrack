@@ -9,10 +9,17 @@
 use std::ffi::{CStr, CString};
 use std::io;
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::mpsc::{self, Receiver, Sender};
+use std::thread::JoinHandle;
+use std::time::Duration;
 
+use aurtrack_engine::BlockProcessor;
 use clack_extensions::params::{ParamInfoBuffer, PluginParams};
 use clack_extensions::state::PluginState;
 use clack_host::prelude::*;
+use rtrb::{Consumer, Producer, RingBuffer};
 use serde::Serialize;
 use thiserror::Error;
 
@@ -231,6 +238,358 @@ pub fn inspect_plugin(path: &Path, plugin_id: &str) -> Result<PluginCapabilities
     })
 }
 
+struct ClapProcessor {
+    instance: PluginInstance<ClapHost>,
+    processor: Option<StartedPluginAudioProcessor<ClapHost>>,
+    input_buffers: [Vec<f32>; 2],
+    output_buffers: [Vec<f32>; 2],
+    input_ports: AudioPorts,
+    output_ports: AudioPorts,
+}
+
+impl ClapProcessor {
+    fn load(path: &Path, plugin_id: &str, sample_rate: u32) -> Result<Self, HostError> {
+        let id = CString::new(plugin_id).map_err(|_| HostError::InvalidPluginId)?;
+        // SAFETY: 加载动态库会执行插件代码，调用方只能传入受信任插件。
+        let entry = unsafe { PluginEntry::load(path) }.map_err(|error| error.to_string())?;
+        let host_info = HostInfo::new(
+            "Aurtrack",
+            "Aurtrack contributors",
+            "https://aurtrack.dev",
+            "0.0.0",
+        )
+        .map_err(|error| error.to_string())?;
+        let mut instance = PluginInstance::<ClapHost>::new(
+            |_| HostShared,
+            |_| HostMainThread,
+            &entry,
+            id.as_c_str(),
+            &host_info,
+        )
+        .map_err(|error| error.to_string())?;
+        let config = PluginAudioConfiguration {
+            sample_rate: f64::from(sample_rate),
+            min_frames_count: 1,
+            max_frames_count: BLOCK_FRAMES as u32,
+        };
+        let stopped = instance
+            .activate(|_, _| HostAudioProcessor, config)
+            .map_err(|error| error.to_string())?;
+        let processor = stopped
+            .start_processing()
+            .map_err(|error| error.to_string())?;
+        Ok(Self {
+            instance,
+            processor: Some(processor),
+            input_buffers: [vec![0.0; BLOCK_FRAMES], vec![0.0; BLOCK_FRAMES]],
+            output_buffers: [vec![0.0; BLOCK_FRAMES], vec![0.0; BLOCK_FRAMES]],
+            input_ports: AudioPorts::with_capacity(2, 1),
+            output_ports: AudioPorts::with_capacity(2, 1),
+        })
+    }
+
+    fn process(
+        &mut self,
+        input_left: &[f32],
+        input_right: &[f32],
+        output_left: &mut [f32],
+        output_right: &mut [f32],
+    ) -> Result<(), HostError> {
+        let frames = input_left
+            .len()
+            .min(input_right.len())
+            .min(output_left.len())
+            .min(output_right.len());
+        if frames == 0 {
+            return Ok(());
+        }
+        let processor = self
+            .processor
+            .as_mut()
+            .ok_or_else(|| HostError::Message("插件未启动".to_string()))?;
+        let mut offset = 0;
+        while offset < frames {
+            let count = (frames - offset).min(BLOCK_FRAMES);
+            self.input_buffers[0][..count].copy_from_slice(&input_left[offset..offset + count]);
+            self.input_buffers[1][..count].copy_from_slice(&input_right[offset..offset + count]);
+            self.output_buffers[0][..count].fill(0.0);
+            self.output_buffers[1][..count].fill(0.0);
+            let input_audio = self.input_ports.with_input_buffers([AudioPortBuffer {
+                latency: 0,
+                channels: AudioPortBufferType::f32_input_only(
+                    self.input_buffers
+                        .iter_mut()
+                        .map(|buffer| InputChannel::constant(&mut buffer[..count])),
+                ),
+            }]);
+            let mut output_audio = self.output_ports.with_output_buffers([AudioPortBuffer {
+                latency: 0,
+                channels: AudioPortBufferType::f32_output_only(
+                    self.output_buffers
+                        .iter_mut()
+                        .map(|buffer| &mut buffer[..count]),
+                ),
+            }]);
+            let input_events = InputEvents::empty();
+            let mut output_events = OutputEvents::void();
+            processor
+                .process(
+                    &input_audio,
+                    &mut output_audio,
+                    &input_events,
+                    &mut output_events,
+                    None,
+                    None,
+                )
+                .map_err(|error| error.to_string())?;
+            output_left[offset..offset + count].copy_from_slice(&self.output_buffers[0][..count]);
+            output_right[offset..offset + count].copy_from_slice(&self.output_buffers[1][..count]);
+            offset += count;
+        }
+        Ok(())
+    }
+}
+
+impl Drop for ClapProcessor {
+    fn drop(&mut self) {
+        if let Some(processor) = self.processor.take() {
+            let stopped = processor.stop_processing();
+            self.instance.deactivate(stopped);
+        }
+    }
+}
+
+const RING_BLOCKS: usize = 4;
+
+/// 音频线程持有的无锁插件端口。
+pub struct PluginAudioPort {
+    input: Producer<f32>,
+    output: Consumer<f32>,
+    enabled: Arc<AtomicBool>,
+}
+
+impl BlockProcessor for PluginAudioPort {
+    fn prepare(&mut self, _sample_rate: u32, _max_block_frames: usize) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn reset(&mut self) {}
+
+    fn process(
+        &mut self,
+        input_left: &[f32],
+        input_right: &[f32],
+        output_left: &mut [f32],
+        output_right: &mut [f32],
+    ) -> Result<(), String> {
+        let frames = input_left
+            .len()
+            .min(input_right.len())
+            .min(output_left.len())
+            .min(output_right.len());
+        if !self.enabled.load(Ordering::Acquire) {
+            output_left[..frames].copy_from_slice(&input_left[..frames]);
+            output_right[..frames].copy_from_slice(&input_right[..frames]);
+            return Ok(());
+        }
+        let mut offset = 0;
+        while offset + BLOCK_FRAMES <= frames {
+            if self.input.slots() < BLOCK_FRAMES * 2 || self.output.slots() < BLOCK_FRAMES * 2 {
+                output_left[offset..offset + BLOCK_FRAMES]
+                    .copy_from_slice(&input_left[offset..offset + BLOCK_FRAMES]);
+                output_right[offset..offset + BLOCK_FRAMES]
+                    .copy_from_slice(&input_right[offset..offset + BLOCK_FRAMES]);
+                offset += BLOCK_FRAMES;
+                continue;
+            }
+            for index in 0..BLOCK_FRAMES {
+                let _ = self.input.push(input_left[offset + index]);
+                let _ = self.input.push(input_right[offset + index]);
+            }
+            for index in 0..BLOCK_FRAMES {
+                let left = self.output.pop().unwrap_or(0.0);
+                let right = self.output.pop().unwrap_or(0.0);
+                output_left[offset + index] = left;
+                output_right[offset + index] = right;
+            }
+            offset += BLOCK_FRAMES;
+        }
+        // 非整块尾巴不进入插件，避免输入输出帧数错位。
+        if offset < frames {
+            output_left[offset..frames].copy_from_slice(&input_left[offset..frames]);
+            output_right[offset..frames].copy_from_slice(&input_right[offset..frames]);
+        }
+        Ok(())
+    }
+}
+
+enum PluginCommand {
+    Load {
+        path: PathBuf,
+        id: String,
+        sample_rate: u32,
+        reply: Sender<Result<(), String>>,
+    },
+    Unload {
+        reply: Sender<Result<(), String>>,
+    },
+    Shutdown,
+}
+
+/// 控制专用插件线程；音频线程只持有 [`PluginAudioPort`]。
+pub struct PluginBridgeControl {
+    commands: Sender<PluginCommand>,
+    active: Arc<AtomicBool>,
+    thread: Option<JoinHandle<()>>,
+}
+
+impl std::fmt::Debug for PluginBridgeControl {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("PluginBridgeControl")
+            .field("active", &self.active.load(Ordering::Relaxed))
+            .finish_non_exhaustive()
+    }
+}
+
+impl PluginBridgeControl {
+    pub fn new() -> (Self, PluginAudioPort) {
+        let (input_producer, input_consumer) = RingBuffer::new(BLOCK_FRAMES * 2 * RING_BLOCKS);
+        let (output_producer, output_consumer) = RingBuffer::new(BLOCK_FRAMES * 2 * RING_BLOCKS);
+        let (commands, command_receiver) = mpsc::channel();
+        let active = Arc::new(AtomicBool::new(false));
+        let thread_active = Arc::clone(&active);
+        let thread = std::thread::Builder::new()
+            .name("aurtrack-plugin".to_string())
+            .spawn(move || {
+                plugin_thread(
+                    command_receiver,
+                    input_consumer,
+                    output_producer,
+                    thread_active,
+                );
+            })
+            .ok();
+        (
+            Self {
+                commands,
+                active: Arc::clone(&active),
+                thread,
+            },
+            PluginAudioPort {
+                input: input_producer,
+                output: output_consumer,
+                enabled: active,
+            },
+        )
+    }
+
+    pub fn load(&self, path: PathBuf, id: String, sample_rate: u32) -> Result<(), String> {
+        let (reply, answer) = mpsc::channel();
+        self.commands
+            .send(PluginCommand::Load {
+                path,
+                id,
+                sample_rate,
+                reply,
+            })
+            .map_err(|_| "插件线程已经退出".to_string())?;
+        answer.recv().map_err(|_| "插件线程没有响应".to_string())?
+    }
+
+    pub fn unload(&self) -> Result<(), String> {
+        let (reply, answer) = mpsc::channel();
+        self.commands
+            .send(PluginCommand::Unload { reply })
+            .map_err(|_| "插件线程已经退出".to_string())?;
+        answer.recv().map_err(|_| "插件线程没有响应".to_string())?
+    }
+
+    pub fn is_loaded(&self) -> bool {
+        self.active.load(Ordering::Acquire)
+    }
+}
+
+impl Drop for PluginBridgeControl {
+    fn drop(&mut self) {
+        let _ = self.commands.send(PluginCommand::Shutdown);
+        if let Some(thread) = self.thread.take() {
+            let _ = thread.join();
+        }
+    }
+}
+
+fn plugin_thread(
+    commands: Receiver<PluginCommand>,
+    mut input: Consumer<f32>,
+    mut output: Producer<f32>,
+    active: Arc<AtomicBool>,
+) {
+    let mut processor: Option<ClapProcessor> = None;
+    loop {
+        match commands.try_recv() {
+            Ok(PluginCommand::Load {
+                path,
+                id,
+                sample_rate,
+                reply,
+            }) => {
+                active.store(false, Ordering::Release);
+                processor = None;
+                let result = ClapProcessor::load(&path, &id, sample_rate).map(|loaded| {
+                    processor = Some(loaded);
+                    active.store(true, Ordering::Release);
+                });
+                let _ = reply.send(result.map_err(|error| error.to_string()));
+            },
+            Ok(PluginCommand::Unload { reply }) => {
+                active.store(false, Ordering::Release);
+                processor = None;
+                let _ = reply.send(Ok(()));
+            },
+            Ok(PluginCommand::Shutdown) | Err(mpsc::TryRecvError::Disconnected) => break,
+            Err(mpsc::TryRecvError::Empty) => {},
+        }
+        let Some(active_processor) = processor.as_mut() else {
+            std::thread::sleep(Duration::from_millis(2));
+            continue;
+        };
+        if input.slots() < BLOCK_FRAMES * 2 {
+            std::thread::sleep(Duration::from_millis(1));
+            continue;
+        }
+        let mut input_left = [0.0_f32; BLOCK_FRAMES];
+        let mut input_right = [0.0_f32; BLOCK_FRAMES];
+        for index in 0..BLOCK_FRAMES {
+            input_left[index] = input.pop().unwrap_or(0.0);
+            input_right[index] = input.pop().unwrap_or(0.0);
+        }
+        let mut output_left = [0.0_f32; BLOCK_FRAMES];
+        let mut output_right = [0.0_f32; BLOCK_FRAMES];
+        if active_processor
+            .process(
+                &input_left,
+                &input_right,
+                &mut output_left,
+                &mut output_right,
+            )
+            .is_err()
+        {
+            active.store(false, Ordering::Release);
+            processor = None;
+            continue;
+        }
+        if output.slots() < BLOCK_FRAMES * 2 {
+            continue;
+        }
+        for index in 0..BLOCK_FRAMES {
+            let _ = output.push(output_left[index]);
+            let _ = output.push(output_right[index]);
+        }
+    }
+    active.store(false, Ordering::Release);
+}
+
 /// 在离线缓冲上运行一个 CLAP 立体声效果器。
 ///
 /// 这是宿主的第一个闭环：验证加载、激活、块处理和停用。它不在实时音频线程里运行。
@@ -347,6 +706,104 @@ mod tests {
         let report = scan_directory(&directory).unwrap();
         assert!(report.plugins.is_empty());
         assert_eq!(report.failures.len(), 1);
+    }
+
+    #[test]
+    fn fixture_plugin_processes_offline() {
+        let path = Path::new("target/fixture-gain.clap");
+        if !path.exists() {
+            return;
+        }
+        let (left, right) = process_stereo_offline(
+            path,
+            "com.aurtrack.fixture.gain",
+            48_000,
+            &[0.5; 64],
+            &[-0.5; 64],
+        )
+        .unwrap();
+        assert!(left.iter().all(|sample| (*sample - 0.25).abs() < 1.0e-5));
+        assert!(right.iter().all(|sample| (*sample + 0.25).abs() < 1.0e-5));
+    }
+
+    #[test]
+    fn fixture_plugin_loads_in_bridge() {
+        let path = Path::new("target/fixture-gain.clap");
+        if !path.exists() {
+            return;
+        }
+        let (control, _port) = PluginBridgeControl::new();
+        control
+            .load(
+                path.to_path_buf(),
+                "com.aurtrack.fixture.gain".to_string(),
+                48_000,
+            )
+            .unwrap();
+        assert!(control.is_loaded());
+        control.unload().unwrap();
+        assert!(!control.is_loaded());
+    }
+
+    #[test]
+    fn fixture_plugin_processes_through_bridge() {
+        let path = Path::new("target/fixture-gain.clap");
+        if !path.exists() {
+            return;
+        }
+        let (control, mut port) = PluginBridgeControl::new();
+        control
+            .load(
+                path.to_path_buf(),
+                "com.aurtrack.fixture.gain".to_string(),
+                48_000,
+            )
+            .unwrap();
+        let input = [0.5_f32; BLOCK_FRAMES];
+        let mut left = [0.0_f32; BLOCK_FRAMES];
+        let mut right = [0.0_f32; BLOCK_FRAMES];
+        let mut processed = false;
+        for _ in 0..200 {
+            port.process(&input, &input, &mut left, &mut right).unwrap();
+            if left[0] > 0.24 && left[0] < 0.26 {
+                processed = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        control.unload().unwrap();
+        assert!(processed, "实时桥没有输出插件处理后的样本");
+    }
+
+    #[test]
+    fn bridge_passthrough_without_plugin() {
+        let (control, mut port) = PluginBridgeControl::new();
+        assert!(!control.is_loaded());
+        let input_left = [0.25_f32; 64];
+        let input_right = [-0.5_f32; 64];
+        let mut output_left = [0.0_f32; 64];
+        let mut output_right = [0.0_f32; 64];
+        port.process(
+            &input_left,
+            &input_right,
+            &mut output_left,
+            &mut output_right,
+        )
+        .unwrap();
+        assert_eq!(output_left, input_left);
+        assert_eq!(output_right, input_right);
+    }
+
+    #[test]
+    fn bridge_reports_missing_plugin() {
+        let (control, _port) = PluginBridgeControl::new();
+        let result = control.load(
+            PathBuf::from("target/not-a-plugin.clap"),
+            "com.example.missing".to_string(),
+            48_000,
+        );
+        assert!(result.is_err());
+        assert!(!control.is_loaded());
     }
 
     #[test]

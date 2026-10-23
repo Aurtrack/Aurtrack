@@ -8,7 +8,9 @@ repository.workspace = true
 authors.workspace = true
 
 [dependencies]
+aurtrack-engine = { path = "../aurtrack-engine" }
 clack-host = "0.2"
 clack-extensions = { version = "0.2", features = ["params", "state", "clack-host"] }
+rtrb = "0.4"
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"

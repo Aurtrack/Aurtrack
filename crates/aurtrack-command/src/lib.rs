@@ -633,6 +633,20 @@ fn plugin_inspect_schema() -> Value {
     )
 }
 
+fn plugin_master_schema() -> Value {
+    object_schema(
+        json!({
+            "path": { "type": "string", "description": "CLAP 动态库路径" },
+            "id": { "type": "string", "description": "插件描述符 ID" }
+        }),
+        &["path", "id"],
+    )
+}
+
+fn plugin_master_off_schema() -> Value {
+    object_schema(json!({}), &[])
+}
+
 fn extension_list_schema() -> Value {
     object_schema(
         json!({
@@ -693,7 +707,7 @@ fn transport_metronome_schema() -> Value {
     )
 }
 
-static COMMANDS: [CommandSpec; 46] = [
+static COMMANDS: [CommandSpec; 48] = [
     CommandSpec {
         id: "project.create",
         summary: "创建或替换当前工程",
@@ -843,6 +857,18 @@ static COMMANDS: [CommandSpec; 46] = [
         summary: "读取 CLAP 插件参数和状态能力",
         undo: UndoKind::None,
         input_schema: plugin_inspect_schema,
+    },
+    CommandSpec {
+        id: "plugin.master",
+        summary: "把 CLAP 插件挂到实时主输出",
+        undo: UndoKind::None,
+        input_schema: plugin_master_schema,
+    },
+    CommandSpec {
+        id: "plugin.master_off",
+        summary: "卸载实时主输出插件",
+        undo: UndoKind::None,
+        input_schema: plugin_master_off_schema,
     },
     CommandSpec {
         id: "extension.list",
