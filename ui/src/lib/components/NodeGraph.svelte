@@ -90,6 +90,7 @@
     additive: boolean;
   };
   type AddMenu = { x: number; y: number };
+  type NodeMenu = { x: number; y: number; nodeId: string };
 
   const CARD_WIDTH = 220;
   const COLUMN_GAP = 110;
@@ -107,6 +108,7 @@
   let wireDrag = $state<WireDrag | null>(null);
   let wireHover = $state<{ node: string; port: string } | null>(null);
   let addMenu = $state<AddMenu | null>(null);
+  let nodeMenu = $state<NodeMenu | null>(null);
   let spaceHeld = $state(false);
   let lastPointer = $state<Point>({ x: 0, y: 0 });
 
@@ -140,6 +142,7 @@
     selected = new Set();
     draft = {};
     addMenu = null;
+    nodeMenu = null;
     view = { x: 20, y: 30, scale: 0.8 };
   });
 
@@ -156,6 +159,7 @@
   function nodeHeight(kind: string): number {
     if (kind === "amp.adsr") return 184;
     if (kind === "filter.lowpass") return 132;
+    if (kind === "instrument.piano") return 184;
     if (kind === "gain") return 104;
     if (kind === "mix") return 104;
     if (kind === "plugin") return 120;
@@ -230,6 +234,7 @@
   function nodeLabel(node: GraphNode): string {
     if (node.kind === "instrument.sine") return t("graph.sine");
     if (node.kind === "instrument.silence") return t("graph.silence");
+    if (node.kind === "instrument.piano") return t("graph.piano");
     if (node.kind === "amp.adsr") return t("graph.adsr");
     if (node.kind === "filter.lowpass") return t("graph.filter");
     if (node.kind === "gain") return t("graph.gain");
@@ -393,6 +398,7 @@
       additive,
     };
     addMenu = null;
+    nodeMenu = null;
     event.preventDefault();
   }
 
@@ -409,8 +415,19 @@
     }
   }
 
-  function headerMouseDown(event: MouseEvent, node: GraphNode) {
+  function isInteractive(target: EventTarget | null): boolean {
+    const element = target as Element | null;
+    return Boolean(
+      element?.closest(
+        "input, textarea, select, button, [contenteditable='true'], .graph-context-menu",
+      ),
+    );
+  }
+
+  function nodeMouseDown(event: MouseEvent, node: GraphNode) {
     if (event.button !== 0 || busy || spaceHeld) return;
+    if (isInteractive(event.target)) return;
+    nodeMenu = null;
     event.stopPropagation();
     event.preventDefault();
     selectNode(node, event);
@@ -425,6 +442,27 @@
     if (!start) return;
     nodeDrag = { start, ids, origins, moved: false };
     addMenu = null;
+  }
+
+  function openNodeMenu(event: MouseEvent, node: GraphNode) {
+    if (!isDevice(node)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (!selected.has(node.id)) selected = new Set([node.id]);
+    addMenu = null;
+    nodeMenu = { x: event.clientX, y: event.clientY, nodeId: node.id };
+  }
+
+  function deleteFromMenu() {
+    if (!nodeMenu) return;
+    nodeMenu = null;
+    deleteSelected();
+  }
+
+  function duplicateFromMenu() {
+    if (!nodeMenu) return;
+    nodeMenu = null;
+    void duplicateSelected();
   }
 
   function startWire(event: MouseEvent, node: GraphNode, side: "out" | "in", port: string) {
@@ -675,6 +713,16 @@
       deleteSelected();
       return;
     }
+    if (
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey &&
+      event.key.toLowerCase() === "x"
+    ) {
+      event.preventDefault();
+      deleteSelected();
+      return;
+    }
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
       event.preventDefault();
       selected = new Set(nodes.map((node) => node.id));
@@ -691,6 +739,7 @@
     if (event.key === "Escape") {
       selected = new Set();
       addMenu = null;
+      nodeMenu = null;
     }
   }
 
@@ -845,14 +894,14 @@
             style:top={`${position?.y ?? 0}px`}
             style:min-height={`${position?.h ?? 90}px`}
             style:width={`${position?.w ?? CARD_WIDTH}px`}
-            onmousedown={(event) => selectNode(node, event)}
+            onmousedown={(event) => nodeMouseDown(event, node)}
+            oncontextmenu={(event) => openNodeMenu(event, node)}
           >
             <div
               class="graph-node-head"
               role="button"
               tabindex="0"
               aria-label={nodeLabel(node)}
-              onmousedown={(event) => headerMouseDown(event, node)}
             >
               <span class="graph-node-kind">{nodeLabel(node)}</span>
               <span class="graph-node-id">{node.id}</span>
@@ -895,6 +944,64 @@
               <div class="graph-param-row">
                 <span>{t("graph.silenceSource")}</span>
                 <strong>0</strong>
+              </div>
+            {:else if node.kind === "instrument.piano"}
+              <div class="graph-param-grid">
+                <label>
+                  <span>{t("graph.partials")}</span>
+                  <NumberField
+                    value={Math.round(paramOf(node, "partials", 10))}
+                    min={1}
+                    max={16}
+                    step={1}
+                    precision={0}
+                    disabled={busy}
+                    onchange={(value) =>
+                      onParamChange(owner.id, node.id, "partials", value)}
+                  />
+                </label>
+                <label>
+                  <span>{t("graph.decay")}</span>
+                  <NumberField
+                    value={paramOf(node, "decay", 1.2)}
+                    min={0.1}
+                    max={8}
+                    step={0.1}
+                    precision={1}
+                    suffix="s"
+                    disabled={busy}
+                    onchange={(value) =>
+                      onParamChange(owner.id, node.id, "decay", value)}
+                  />
+                </label>
+                <label>
+                  <span>{t("graph.brightness")}</span>
+                  <NumberField
+                    value={Math.round(paramOf(node, "brightness", 0.5) * 100)}
+                    min={0}
+                    max={100}
+                    step={1}
+                    precision={0}
+                    suffix="%"
+                    disabled={busy}
+                    onchange={(value) =>
+                      onParamChange(owner.id, node.id, "brightness", value / 100)}
+                  />
+                </label>
+                <label>
+                  <span>{t("graph.hammer")}</span>
+                  <NumberField
+                    value={Math.round(paramOf(node, "hammer", 0.2) * 100)}
+                    min={0}
+                    max={100}
+                    step={1}
+                    precision={0}
+                    suffix="%"
+                    disabled={busy}
+                    onchange={(value) =>
+                      onParamChange(owner.id, node.id, "hammer", value / 100)}
+                  />
+                </label>
               </div>
             {:else if node.kind === "amp.adsr"}
               <div class="graph-param-grid">
@@ -1017,24 +1124,32 @@
                 <span>{t("graph.terminal")}</span>
               </div>
             {/if}
-
-            {#if device}
-              <div class="graph-node-actions">
-                <button
-                  class="mini-button danger"
-                  disabled={busy}
-                  onclick={(event) => {
-                    event.stopPropagation();
-                    onRemove(`/tracks/${owner.id}/nodes/${node.id}`);
-                  }}
-                >
-                  ×
-                </button>
-              </div>
-            {/if}
           </div>
         {/each}
       </div>
+
+      {#if nodeMenu}
+        <div
+          class="graph-context-menu"
+          style:left={`${nodeMenu.x}px`}
+          style:top={`${nodeMenu.y}px`}
+          role="menu"
+          tabindex="-1"
+          onmousedown={(event) => event.stopPropagation()}
+        >
+          <button role="menuitem" disabled={busy} onclick={duplicateFromMenu}>
+            {t("graph.duplicate")}
+          </button>
+          <button
+            role="menuitem"
+            class="danger"
+            disabled={busy}
+            onclick={deleteFromMenu}
+          >
+            {t("graph.delete")}
+          </button>
+        </div>
+      {/if}
 
       {#if addMenu}
         <div

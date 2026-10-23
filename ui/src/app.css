@@ -1857,3 +1857,38 @@ button:disabled {
   font-size: 9px;
   white-space: pre-wrap;
 }
+
+/* 节点右键菜单：位置固定到指针，避免受画布缩放影响。 */
+.graph-context-menu {
+  position: fixed;
+  z-index: 80;
+  display: flex;
+  min-width: 120px;
+  flex-direction: column;
+  border: 1px solid var(--blue);
+  background: var(--paper);
+  box-shadow: 2px 2px 0 var(--line);
+}
+
+.graph-context-menu button {
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  padding: 6px 10px;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 9px;
+  text-align: left;
+}
+
+.graph-context-menu button:last-child {
+  border-bottom: 0;
+}
+
+.graph-context-menu button:hover:not(:disabled) {
+  background: var(--blue-soft);
+}
+
+.graph-context-menu button.danger {
+  color: #8a3030;
+}
