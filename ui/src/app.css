@@ -2113,3 +2113,23 @@ button:disabled {
   font-family: var(--mono);
   font-size: 8px;
 }
+
+.voice-group-select {
+  max-width: 150px;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  padding: 3px 5px;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 8px;
+}
+
+.voice-node-group {
+  margin: 0 8px 5px;
+  padding: 3px 5px;
+  border: 1px solid var(--line);
+  color: var(--blue);
+  font-family: var(--mono);
+  font-size: 8px;
+}

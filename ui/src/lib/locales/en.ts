@@ -184,6 +184,7 @@ export const en: Record<MessageKey, Message> = {
   "voice.noise": "HAMMER NOISE",
   "voice.mix": "MIX",
   "voice.output": "OUTPUT",
+  "voice.groupNode": "GROUP NODE",
   "graph.silence": "SILENCE",
   "graph.silenceSource": "SILENT SOURCE",
   "graph.adsr": "ADSR",

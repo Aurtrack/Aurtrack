@@ -180,6 +180,7 @@ export const zhCN = {
   "voice.noise": "击弦噪声",
   "voice.mix": "混音",
   "voice.output": "输出",
+  "voice.groupNode": "组节点",
   "graph.silenceSource": "静音源",
   "graph.adsr": "ADSR",
   "graph.gain": "GAIN",

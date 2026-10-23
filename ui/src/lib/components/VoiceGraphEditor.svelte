@@ -1,5 +1,6 @@
 <script lang="ts">
   import type {
+    NodeGroup,
     NodeGroupInterface,
     VoiceConnection,
     VoiceGraph,
@@ -11,19 +12,25 @@
 
   interface Props {
     groupId: string;
-    groupName: string;
+    groups: Record<string, NodeGroup>;
+    path: { id: string; name: string }[];
     interface: NodeGroupInterface;
     voice: VoiceGraph;
     embedded?: boolean;
+    onEnterGroup: (groupId: string) => void;
+    onNavigate: (index: number) => void;
     onClose: () => void;
   }
 
   let {
     groupId,
-    groupName,
+    groups,
+    path,
     interface: groupInterface,
     voice: initialVoice,
     embedded = false,
+    onEnterGroup,
+    onNavigate,
     onClose,
   }: Props = $props();
 
@@ -47,29 +54,40 @@
     "env.percussive": "ENV PERCUSSIVE",
     "noise.burst": "NOISE BURST",
     "voice.mix": "VOICE MIX",
+    "voice.group": "VOICE GROUP",
     "group.output": "GROUP OUTPUT",
   };
 
-  function inputList(kind: string): string[] {
-    if (kind === "group.input") return [];
-    if (kind === "group.output") {
+  function nodeGroup(node: VoiceNode): NodeGroup | undefined {
+    return node.group ? groups[node.group] : undefined;
+  }
+
+  function inputList(node: VoiceNode): string[] {
+    if (node.kind === "group.input") return [];
+    if (node.kind === "group.output") {
       return groupInterface.outputs.map((socket) => socket.id);
     }
-    if (kind === "env.percussive") return ["in"];
-    if (kind === "voice.mix") return ["in1", "in2"];
+    if (node.kind === "voice.group") {
+      return nodeGroup(node)?.interface.inputs.map((socket) => socket.id) ?? [];
+    }
+    if (node.kind === "env.percussive") return ["in"];
+    if (node.kind === "voice.mix") return ["in1", "in2"];
     return [];
   }
 
-  function outputList(kind: string): string[] {
-    if (kind === "group.output") return [];
-    if (kind === "group.input") {
+  function outputList(node: VoiceNode): string[] {
+    if (node.kind === "group.output") return [];
+    if (node.kind === "group.input") {
       return groupInterface.inputs.map((socket) => socket.id);
     }
+    if (node.kind === "voice.group") {
+      return nodeGroup(node)?.interface.outputs.map((socket) => socket.id) ?? [];
+    }
     if (
-      kind === "osc.partials" ||
-      kind === "env.percussive" ||
-      kind === "noise.burst" ||
-      kind === "voice.mix"
+      node.kind === "osc.partials" ||
+      node.kind === "env.percussive" ||
+      node.kind === "noise.burst" ||
+      node.kind === "voice.mix"
     ) {
       return ["out"];
     }
@@ -86,6 +104,10 @@
   let wire = $state<Wire | null>(null);
   let error = $state("");
   let saving = $state(false);
+  let newGroupId = $state("");
+  let groupChoices = $derived(
+    Object.values(groups).filter((group) => group.id !== groupId),
+  );
 
   let nodes = $derived(Object.values(voice.nodes));
   let positions = $derived.by(() => {
@@ -110,8 +132,10 @@
     const to = positions[connection.to.node];
     const target = voice.nodes[connection.to.node];
     if (!from || !to || !target) return "";
-    const outputs = outputList(voice.nodes[connection.from.node]?.kind ?? "");
-    const inputs = inputList(target.kind);
+    const source = voice.nodes[connection.from.node];
+    if (!source) return "";
+    const outputs = outputList(source);
+    const inputs = inputList(target);
     const outIndex = Math.max(0, outputs.indexOf(connection.from.port));
     const inIndex = Math.max(0, inputs.indexOf(connection.to.port));
     const x1 = from.x + NODE_WIDTH;
@@ -200,6 +224,19 @@
     selected = id;
   }
 
+  function addGroupNode() {
+    if (!newGroupId) return;
+    const id = `voice-${Date.now().toString(36)}`;
+    voice.nodes[id] = {
+      id,
+      kind: "voice.group",
+      params: {},
+      position: [80, 80],
+      group: newGroupId,
+    };
+    selected = id;
+  }
+
   function removeSelected() {
     if (!selected || selected === "voice-in" || selected === "out") return;
     delete voice.nodes[selected];
@@ -214,7 +251,7 @@
     removeSelected();
   }
 
-  async function save() {
+  async function save(close = true): Promise<boolean> {
     saving = true;
     error = "";
     try {
@@ -222,17 +259,33 @@
         nodes: voice.nodes,
         connections: voice.connections,
       });
-      onClose();
+      if (close) onClose();
+      return true;
     } catch (cause) {
       error = errorMessage(cause);
+      return false;
     } finally {
       saving = false;
     }
   }
 
+  async function enterGroup(node: VoiceNode) {
+    const group = nodeGroup(node);
+    if (!group) return;
+    if (await save(false)) onEnterGroup(group.id);
+  }
+
+  async function navigateTo(index: number) {
+    if (await save(false)) onNavigate(index);
+  }
+
+  async function leave() {
+    if (await save(false)) onClose();
+  }
+
   function handleKey(event: KeyboardEvent) {
     if (event.key === "Escape") {
-      onClose();
+      void leave();
       return;
     }
     if (
@@ -254,11 +307,19 @@
     <header class="voice-editor-head">
       <div>
         <div class="voice-editor-path">
-          <button class="voice-editor-crumb" onclick={onClose}>
+          <button class="voice-editor-crumb" onclick={() => void leave()}>
             {t("voice.trackPath")}
           </button>
-          <b>/</b>
-          <strong>{groupName}</strong>
+          {#each path as entry, index (entry.id)}
+            <b>/</b>
+            <button
+              class="voice-editor-crumb"
+              class:current={index === path.length - 1}
+              onclick={() => void navigateTo(index)}
+            >
+              {entry.name}
+            </button>
+          {/each}
         </div>
         <span>{t("voice.hint")}</span>
       </div>
@@ -266,7 +327,7 @@
         <button class="ghost small" disabled={saving} onclick={() => void save()}>
           {t("voice.apply")}
         </button>
-        <button class="ghost small" onclick={onClose}>{t("voice.close")}</button>
+        <button class="ghost small" onclick={() => void leave()}>{t("voice.close")}</button>
       </div>
     </header>
 
@@ -285,6 +346,15 @@
       </button>
       <button class="ghost small" onclick={() => addNode("group.output")}>
         + {t("voice.output")}
+      </button>
+      <select class="voice-group-select" bind:value={newGroupId} aria-label={t("voice.groupNode")}>
+        <option value="">{t("voice.groupNode")}</option>
+        {#each groupChoices as group (group.id)}
+          <option value={group.id}>{group.name}</option>
+        {/each}
+      </select>
+      <button class="ghost small" disabled={!newGroupId} onclick={addGroupNode}>
+        + {t("voice.groupNode")}
       </button>
       <button
         class="ghost small"
@@ -317,13 +387,22 @@
           style:width={`${NODE_WIDTH}px`}
           style:min-height={`${NODE_HEIGHT}px`}
           onmousedown={(event) => nodeMouseDown(event, node)}
+          ondblclick={() => void enterGroup(node)}
           role="group"
           tabindex="-1"
         >
           <div class="voice-node-head">{kindLabels[node.kind] ?? node.kind}</div>
           <div class="voice-node-id">{node.id}</div>
+          {#if node.kind === "voice.group"}
+            <div class="voice-node-group">
+              {nodeGroup(node)?.name ?? node.group ?? "—"}
+            </div>
+            <button class="ghost small" onclick={() => void enterGroup(node)}>
+              {t("graph.editGroup")}
+            </button>
+          {/if}
 
-          {#each outputList(node.kind) as port, index (port)}
+          {#each outputList(node) as port, index (port)}
             <button
               class="voice-port out"
               style:top={`${portY(node.kind, index) - 4}px`}
@@ -331,7 +410,7 @@
               onmousedown={(event) => startWire(event, node, port)}
             ></button>
           {/each}
-          {#each inputList(node.kind) as port, index (port)}
+          {#each inputList(node) as port, index (port)}
             <button
               class="voice-port in"
               style:top={`${portY(node.kind, index) - 4}px`}

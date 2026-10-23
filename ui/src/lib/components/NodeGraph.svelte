@@ -111,16 +111,16 @@
   let wireHover = $state<{ node: string; port: string } | null>(null);
   let addMenu = $state<AddMenu | null>(null);
   let nodeMenu = $state<NodeMenu | null>(null);
-  let editingVoiceNode = $state<string | null>(null);
+  type VoicePathEntry = { id: string; name: string };
+  let voicePath = $state<VoicePathEntry[]>([]);
   let spaceHeld = $state(false);
   let lastPointer = $state<Point>({ x: 0, y: 0 });
 
   let graph = $derived(track?.graph ?? null);
   let nodes = $derived(graph ? Object.values(graph.nodes) : ([] as GraphNode[]));
   let editingGroup = $derived.by(() => {
-    if (!editingVoiceNode) return undefined;
-    const node = graph?.nodes[editingVoiceNode];
-    return node ? groupFor(node) : undefined;
+    const current = voicePath.at(-1);
+    return current ? session.nodeGroups[current.id] : undefined;
   });
   let connections = $derived(graph?.connections ?? ([] as GraphConnection[]));
   let hasAdsr = $derived(nodes.some((node) => node.kind === "amp.adsr"));
@@ -257,6 +257,26 @@
   function groupFor(node: GraphNode): NodeGroup | undefined {
     if (!node.group) return undefined;
     return session.nodeGroups[node.group];
+  }
+
+  function openVoiceGroup(node: GraphNode) {
+    const group = groupFor(node);
+    if (!group) return;
+    voicePath = [{ id: group.id, name: group.name }];
+  }
+
+  function enterVoiceGroup(groupId: string) {
+    const group = session.nodeGroups[groupId];
+    if (!group) return;
+    voicePath = [...voicePath, { id: group.id, name: group.name }];
+  }
+
+  function navigateVoice(index: number) {
+    if (index < 0) {
+      voicePath = [];
+      return;
+    }
+    voicePath = voicePath.slice(0, index + 1);
   }
 
   function isDevice(node: GraphNode): boolean {
@@ -803,14 +823,19 @@
   {#if track}
     {@const owner = track}
     {#if editingGroup}
+      {#key editingGroup.id}
       <VoiceGraphEditor
         embedded
         groupId={editingGroup.id}
-        groupName={editingGroup.name}
+        groups={session.nodeGroups}
+        path={voicePath}
         interface={editingGroup.interface}
         voice={editingGroup.graph}
-        onClose={() => (editingVoiceNode = null)}
+        onEnterGroup={enterVoiceGroup}
+        onNavigate={navigateVoice}
+        onClose={() => (voicePath = [])}
       />
+      {/key}
     {:else}
     <div class="graph-toolbar">
       <span class="graph-hint">{t("graph.hint")}</span>
@@ -922,7 +947,7 @@
             onmousedown={(event) => nodeMouseDown(event, node)}
             oncontextmenu={(event) => openNodeMenu(event, node)}
             ondblclick={() => {
-              if (node.kind === "voice.group") editingVoiceNode = node.id;
+              if (node.kind === "voice.group") openVoiceGroup(node);
             }}
           >
             <div
@@ -981,7 +1006,7 @@
               <button
                 class="ghost small"
                 disabled={!groupFor(node)}
-                onclick={() => (editingVoiceNode = node.id)}
+                onclick={() => openVoiceGroup(node)}
               >
                 {t("graph.editGroup")}
               </button>
@@ -1045,7 +1070,7 @@
               </div>
               <button
                 class="ghost small"
-                onclick={() => (editingVoiceNode = node.id)}
+                onclick={() => openVoiceGroup(node)}
               >
                 {t("voice.edit")}
               </button>
