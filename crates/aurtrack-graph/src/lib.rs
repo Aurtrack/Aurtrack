@@ -309,9 +309,34 @@ impl VoiceGraph {
         for node in [input, osc, env, noise, mix, output] {
             nodes.insert(node.id.clone(), node);
         }
+        let positions = [
+            ("voice-in", [30.0, 140.0]),
+            ("osc", [300.0, 40.0]),
+            ("env", [580.0, 40.0]),
+            ("noise", [300.0, 220.0]),
+            ("mix", [850.0, 120.0]),
+            ("out", [1110.0, 120.0]),
+        ];
+        for (id, position) in positions {
+            if let Some(node) = nodes.get_mut(&NodeId::fixed(id)) {
+                node.position = Some(position);
+            }
+        }
         Self {
             nodes,
             connections: vec![
+                VoiceConnection::new(
+                    PortRef::fixed(NodeId::fixed("voice-in"), "pitch"),
+                    PortRef::fixed(NodeId::fixed("osc"), "pitch"),
+                ),
+                VoiceConnection::new(
+                    PortRef::fixed(NodeId::fixed("voice-in"), "velocity"),
+                    PortRef::fixed(NodeId::fixed("osc"), "velocity"),
+                ),
+                VoiceConnection::new(
+                    PortRef::fixed(NodeId::fixed("voice-in"), "velocity"),
+                    PortRef::fixed(NodeId::fixed("noise"), "velocity"),
+                ),
                 VoiceConnection::new(
                     PortRef::fixed(NodeId::fixed("osc"), "out"),
                     PortRef::fixed(NodeId::fixed("env"), "in"),
@@ -422,6 +447,8 @@ pub struct VoiceNode {
     pub kind: VoiceNodeKind,
     #[serde(default)]
     pub params: BTreeMap<String, f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<[f64; 2]>,
 }
 
 impl VoiceNode {
@@ -430,6 +457,7 @@ impl VoiceNode {
             id,
             kind,
             params: kind.default_params(),
+            position: None,
         }
     }
 }
@@ -466,7 +494,9 @@ impl VoiceNodeKind {
 
     pub const fn inputs(self) -> &'static [&'static str] {
         match self {
-            Self::VoiceInput | Self::OscPartials | Self::NoiseBurst => &[],
+            Self::VoiceInput => &[],
+            Self::OscPartials => &["pitch", "velocity"],
+            Self::NoiseBurst => &["velocity"],
             Self::EnvPercussive | Self::VoiceOutput => &["in"],
             Self::Mix => &["in1", "in2"],
         }
@@ -1639,7 +1669,7 @@ mod tests {
         let compiled = graph.compile_graph().unwrap();
         let voice = compiled.voice.unwrap();
         assert_eq!(voice.nodes.len(), 6);
-        assert_eq!(voice.connections.len(), 4);
+        assert_eq!(voice.connections.len(), 7);
     }
 
     #[test]

@@ -68,6 +68,7 @@ type Clipboard =
 const MUTATING_COMMANDS = new Set([
   "track.create",
   "track.remove",
+  "track.voice",
   "device.add",
   "device.remove",
   "param.set",
@@ -782,6 +783,18 @@ export class SessionStore {
       plugin_path: path,
       plugin_id: id,
     });
+  }
+
+  async setTrackVoice(
+    trackId: string,
+    voice: {
+      nodes: Record<string, unknown>;
+      connections: { from: { node: string; port: string }; to: { node: string; port: string } }[];
+    },
+  ): Promise<unknown> {
+    const result = await this.run("track.voice", { track_id: trackId, voice });
+    await this.refreshProject();
+    return result;
   }
 
   async setMasterPlugin(path: string, id: string): Promise<unknown> {

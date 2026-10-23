@@ -223,7 +223,7 @@ impl Track {
 
 fn compile_voice(voice: &VoiceGraph) -> Result<VoicePlan, GraphError> {
     let order = voice.topological_order()?;
-    let mut indices = BTreeMap::new();
+    let mut indices = BTreeMap::<(NodeId, String), usize>::new();
     let mut nodes = Vec::new();
     let mut output = None;
     for id in order {
@@ -238,14 +238,28 @@ fn compile_voice(voice: &VoiceGraph) -> Result<VoicePlan, GraphError> {
             .iter()
             .map(|connection| {
                 indices
-                    .get(connection.from.node())
+                    .get(&(
+                        connection.from.node().clone(),
+                        connection.from.port().to_string(),
+                    ))
                     .copied()
                     .ok_or(GraphError::VoiceUnknownNode)
             })
             .collect::<Result<Vec<_>, _>>()?;
+        if node.kind == VoiceNodeKind::VoiceInput {
+            for (port, op) in [
+                ("pitch", VoiceOp::Pitch),
+                ("velocity", VoiceOp::Velocity),
+                ("gate", VoiceOp::Gate),
+            ] {
+                let index = nodes.len();
+                nodes.push(VoiceNodePlan::new(op, Vec::new()));
+                indices.insert((id.clone(), port.to_string()), index);
+            }
+            continue;
+        }
         let param = |name: &str, default: f64| node.params.get(name).copied().unwrap_or(default);
         let op = match node.kind {
-            VoiceNodeKind::VoiceInput => VoiceOp::Pitch,
             VoiceNodeKind::OscPartials => {
                 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                 let partials = (param("partials", 12.0).round() as usize).clamp(1, 16);
@@ -271,7 +285,10 @@ fn compile_voice(voice: &VoiceGraph) -> Result<VoicePlan, GraphError> {
             },
             _ => return Err(GraphError::VoiceUnknownNode),
         };
-        indices.insert(id, nodes.len());
+        let index = nodes.len();
+        if node.kind != VoiceNodeKind::VoiceOutput {
+            indices.insert((id.clone(), "out".to_string()), index);
+        }
         nodes.push(VoiceNodePlan::new(op, inputs));
     }
     let output = output.ok_or(GraphError::VoiceTerminals)?;

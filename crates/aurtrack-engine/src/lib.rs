@@ -153,12 +153,13 @@ impl VoicePlan {
                     if context.local_time > duration || !context.gate {
                         0.0
                     } else {
+                        let velocity = node.inputs.first().map_or(1.0, |input| values[*input]);
                         let noise = ((context.seed.wrapping_mul(6_364_136_223_846_793_005) >> 40)
                             as f64
                             / 16_777_216.0)
                             * 2.0
                             - 1.0;
-                        noise * level * (-context.local_time / duration.max(0.001)).exp()
+                        noise * level * velocity * (-context.local_time / duration.max(0.001)).exp()
                     }
                 },
                 VoiceOp::Mix => node.inputs.iter().map(|input| values[*input]).sum(),

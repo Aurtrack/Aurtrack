@@ -52,6 +52,24 @@ export type GraphNode = {
   params: Record<string, number>;
   position?: [number, number];
   plugin?: { path: string; id: string; state?: string };
+  voice?: VoiceGraph;
+};
+
+export type VoiceNode = {
+  id: string;
+  kind: string;
+  params: Record<string, number>;
+  position?: [number, number];
+};
+
+export type VoiceConnection = {
+  from: { node: string; port: string };
+  to: { node: string; port: string };
+};
+
+export type VoiceGraph = {
+  nodes: Record<string, VoiceNode>;
+  connections: VoiceConnection[];
 };
 
 export type GraphConnection = {

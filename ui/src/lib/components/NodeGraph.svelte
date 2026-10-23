@@ -2,6 +2,7 @@
   import type { GraphConnection, GraphNode, Track } from "../api";
   import { formatNumber, t } from "../i18n.svelte";
   import NumberField from "./NumberField.svelte";
+  import VoiceGraphEditor from "./VoiceGraphEditor.svelte";
 
   interface Props {
     track: Track | null;
@@ -109,6 +110,7 @@
   let wireHover = $state<{ node: string; port: string } | null>(null);
   let addMenu = $state<AddMenu | null>(null);
   let nodeMenu = $state<NodeMenu | null>(null);
+  let editingVoiceNode = $state<string | null>(null);
   let spaceHeld = $state(false);
   let lastPointer = $state<Point>({ x: 0, y: 0 });
 
@@ -896,6 +898,9 @@
             style:width={`${position?.w ?? CARD_WIDTH}px`}
             onmousedown={(event) => nodeMouseDown(event, node)}
             oncontextmenu={(event) => openNodeMenu(event, node)}
+            ondblclick={() => {
+              if (node.kind === "instrument.piano") editingVoiceNode = node.id;
+            }}
           >
             <div
               class="graph-node-head"
@@ -1003,6 +1008,12 @@
                   />
                 </label>
               </div>
+              <button
+                class="ghost small"
+                onclick={() => (editingVoiceNode = node.id)}
+              >
+                {t("voice.edit")}
+              </button>
             {:else if node.kind === "amp.adsr"}
               <div class="graph-param-grid">
                 <label>
@@ -1200,3 +1211,14 @@
     <p class="empty">{t("graph.noTrack")}</p>
   {/if}
 </section>
+
+{#if track && editingVoiceNode}
+  {@const voiceNode = graph?.nodes[editingVoiceNode]}
+  {#if voiceNode?.voice}
+    <VoiceGraphEditor
+      trackId={track.id}
+      voice={voiceNode.voice}
+      onClose={() => (editingVoiceNode = null)}
+    />
+  {/if}
+{/if}

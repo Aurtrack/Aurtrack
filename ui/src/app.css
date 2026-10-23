@@ -1892,3 +1892,154 @@ button:disabled {
 .graph-context-menu button.danger {
   color: #8a3030;
 }
+
+/* 钢琴 Voice 子图编辑器。 */
+.voice-editor-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 90;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgb(20 28 38 / 35%);
+}
+
+.voice-editor {
+  display: flex;
+  width: min(1180px, 96vw);
+  max-height: 88vh;
+  flex-direction: column;
+  border: 1px solid var(--blue);
+  background: var(--paper);
+  box-shadow: 3px 3px 0 var(--line);
+}
+
+.voice-editor-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border-bottom: 1px solid var(--line);
+  padding: 10px 14px;
+}
+
+.voice-editor-head strong {
+  display: block;
+  color: var(--blue);
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+}
+
+.voice-editor-head span {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 8px;
+}
+
+.voice-editor-actions,
+.voice-editor-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.voice-editor-toolbar {
+  border-bottom: 1px solid var(--line);
+  padding: 7px 12px;
+}
+
+.voice-editor-board {
+  position: relative;
+  min-height: 560px;
+  overflow: auto;
+  background-color: #f7f8f9;
+  background-image: radial-gradient(var(--line) 0.7px, transparent 0.7px);
+  background-size: 18px 18px;
+}
+
+.voice-editor-wires {
+  position: absolute;
+  inset: 0;
+  width: 1400px;
+  height: 620px;
+  pointer-events: none;
+}
+
+.voice-editor-wires path {
+  fill: none;
+  stroke: var(--blue);
+  stroke-width: 1.4;
+}
+
+.voice-node {
+  position: absolute;
+  display: flex;
+  flex-direction: column;
+  border: 1px solid var(--line);
+  background: var(--paper);
+  box-shadow: 1px 1px 0 var(--line);
+  cursor: grab;
+}
+
+.voice-node.selected {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 1px var(--blue);
+}
+
+.voice-node-head {
+  border-bottom: 1px solid var(--line);
+  padding: 5px 8px;
+  color: var(--blue);
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.05em;
+}
+
+.voice-node-id {
+  padding: 3px 8px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 8px;
+}
+
+.voice-node-params {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 2px 8px;
+  padding: 6px 8px;
+  border-top: 1px solid var(--line);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 8px;
+}
+
+.voice-node-params strong {
+  color: var(--ink);
+  font-weight: normal;
+}
+
+.voice-port {
+  position: absolute;
+  width: 10px;
+  height: 10px;
+  border: 1px solid var(--blue);
+  border-radius: 50%;
+  background: var(--paper);
+}
+
+.voice-port.out {
+  right: -5px;
+}
+
+.voice-port.in {
+  left: -5px;
+}
+
+.voice-editor-tip {
+  border-top: 1px solid var(--line);
+  padding: 5px 12px;
+  color: var(--blue);
+  font-family: var(--mono);
+  font-size: 8px;
+}
