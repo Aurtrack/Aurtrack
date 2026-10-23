@@ -330,10 +330,10 @@ fn batch_note_edits_and_cross_track_clip_move_share_snapshots() {
 }
 
 #[test]
-fn describe_lists_forty_eight_commands() {
+fn describe_lists_fifty_commands() {
     let mut session = Session::default();
     let out = run(&mut session, "describe", json!({}));
-    assert_eq!(out["commands"].as_array().unwrap().len(), 48);
+    assert_eq!(out["commands"].as_array().unwrap().len(), 50);
     assert!(out["project"].is_null());
 }
 

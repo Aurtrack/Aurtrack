@@ -9,6 +9,7 @@ authors.workspace = true
 
 [dependencies]
 aurtrack-engine = { path = "../aurtrack-engine" }
+base64 = "0.23"
 clack-host = "0.2"
 clack-extensions = { version = "0.2", features = ["params", "state", "clack-host"] }
 rtrb = "0.4"

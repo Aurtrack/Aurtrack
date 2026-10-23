@@ -113,6 +113,8 @@ impl Runtime {
             "plugin.inspect" => Self::plugin_inspect(&request.args),
             "plugin.master" => self.plugin_master(&request.args),
             "plugin.master_off" => self.plugin_master_off(),
+            "plugin.state_save" => Self::plugin_state_save(&request.args),
+            "plugin.state_load" => Self::plugin_state_load(&request.args),
             "extension.list" => Self::extension_list(&request.args),
             "extension.call" => Self::extension_call(&request.args),
             _ => self.session.execute(request),
@@ -256,6 +258,41 @@ impl Runtime {
         }
         self.plugin_config = None;
         Ok(CommandResponse::ok(json!({ "loaded": false })))
+    }
+
+    fn plugin_state_save(args: &Value) -> Result<CommandResponse, CommandError> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct StateArgs {
+            path: String,
+            id: String,
+        }
+        let args: StateArgs = parse_args(args)?;
+        let state = aurtrack_host::save_state(std::path::Path::new(&args.path), &args.id)
+            .map_err(|error| CommandError::invalid_args(format!("保存插件状态失败：{error}")))?;
+        Ok(CommandResponse::ok(json!({
+            "path": args.path,
+            "id": args.id,
+            "state": state,
+        })))
+    }
+
+    fn plugin_state_load(args: &Value) -> Result<CommandResponse, CommandError> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct StateArgs {
+            path: String,
+            id: String,
+            state: String,
+        }
+        let args: StateArgs = parse_args(args)?;
+        aurtrack_host::restore_state(std::path::Path::new(&args.path), &args.id, &args.state)
+            .map_err(|error| CommandError::invalid_args(format!("恢复插件状态失败：{error}")))?;
+        Ok(CommandResponse::ok(json!({
+            "path": args.path,
+            "id": args.id,
+            "restored": true,
+        })))
     }
 
     fn extension_list(args: &Value) -> Result<CommandResponse, CommandError> {
@@ -533,11 +570,11 @@ mod tests {
     }
 
     #[test]
-    fn describe_lists_forty_eight_commands() {
+    fn describe_lists_fifty_commands() {
         let mut runtime = Runtime::new();
         let response = run(&mut runtime, "describe", json!({})).unwrap();
         let commands = response.data["commands"].as_array().unwrap();
-        assert_eq!(commands.len(), 48);
+        assert_eq!(commands.len(), 50);
         assert!(
             commands
                 .iter()

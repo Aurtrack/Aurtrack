@@ -647,6 +647,27 @@ fn plugin_master_off_schema() -> Value {
     object_schema(json!({}), &[])
 }
 
+fn plugin_state_save_schema() -> Value {
+    object_schema(
+        json!({
+            "path": { "type": "string", "description": "CLAP 动态库路径" },
+            "id": { "type": "string", "description": "插件描述符 ID" }
+        }),
+        &["path", "id"],
+    )
+}
+
+fn plugin_state_load_schema() -> Value {
+    object_schema(
+        json!({
+            "path": { "type": "string", "description": "CLAP 动态库路径" },
+            "id": { "type": "string", "description": "插件描述符 ID" },
+            "state": { "type": "string", "description": "base64 状态 blob" }
+        }),
+        &["path", "id", "state"],
+    )
+}
+
 fn extension_list_schema() -> Value {
     object_schema(
         json!({
@@ -707,7 +728,7 @@ fn transport_metronome_schema() -> Value {
     )
 }
 
-static COMMANDS: [CommandSpec; 48] = [
+static COMMANDS: [CommandSpec; 50] = [
     CommandSpec {
         id: "project.create",
         summary: "创建或替换当前工程",
@@ -869,6 +890,18 @@ static COMMANDS: [CommandSpec; 48] = [
         summary: "卸载实时主输出插件",
         undo: UndoKind::None,
         input_schema: plugin_master_off_schema,
+    },
+    CommandSpec {
+        id: "plugin.state_save",
+        summary: "读取 CLAP 插件状态为 base64",
+        undo: UndoKind::None,
+        input_schema: plugin_state_save_schema,
+    },
+    CommandSpec {
+        id: "plugin.state_load",
+        summary: "从 base64 恢复 CLAP 插件状态",
+        undo: UndoKind::None,
+        input_schema: plugin_state_load_schema,
     },
     CommandSpec {
         id: "extension.list",

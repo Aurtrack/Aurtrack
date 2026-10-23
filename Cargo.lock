@@ -342,6 +342,7 @@ name = "aurtrack-host"
 version = "0.0.0"
 dependencies = [
  "aurtrack-engine",
+ "base64 0.23.1",
  "clack-extensions",
  "clack-host",
  "rtrb",

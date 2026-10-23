@@ -16,6 +16,7 @@ use std::thread::JoinHandle;
 use std::time::Duration;
 
 use aurtrack_engine::BlockProcessor;
+use base64::Engine;
 use clack_extensions::params::{ParamInfoBuffer, PluginParams};
 use clack_extensions::state::PluginState;
 use clack_host::prelude::*;
@@ -77,6 +78,8 @@ pub enum HostError {
     InvalidBuffer,
     #[error("插件 ID 不合法")]
     InvalidPluginId,
+    #[error("插件状态错误：{0}")]
+    State(String),
     #[error("{0}")]
     Message(String),
 }
@@ -590,6 +593,69 @@ fn plugin_thread(
     active.store(false, Ordering::Release);
 }
 
+/// 读取插件 state 扩展并编码为 base64。
+pub fn save_state(path: &Path, plugin_id: &str) -> Result<String, HostError> {
+    let id = CString::new(plugin_id).map_err(|_| HostError::InvalidPluginId)?;
+    // SAFETY: 与 `scan_plugin` 相同，加载动态库会执行插件代码。
+    let entry = unsafe { PluginEntry::load(path) }.map_err(|error| error.to_string())?;
+    let host_info = HostInfo::new(
+        "Aurtrack",
+        "Aurtrack contributors",
+        "https://aurtrack.dev",
+        "0.0.0",
+    )
+    .map_err(|error| error.to_string())?;
+    let mut instance = PluginInstance::<ClapHost>::new(
+        |_| HostShared,
+        |_| HostMainThread,
+        &entry,
+        id.as_c_str(),
+        &host_info,
+    )
+    .map_err(|error| error.to_string())?;
+    let handle = instance.plugin_handle();
+    let state = handle
+        .get_extension::<PluginState>()
+        .ok_or_else(|| HostError::State("插件不支持 state 扩展".to_string()))?;
+    let mut bytes = Vec::new();
+    state
+        .save(&handle, &mut bytes)
+        .map_err(|error| HostError::State(error.to_string()))?;
+    Ok(base64::engine::general_purpose::STANDARD.encode(bytes))
+}
+
+/// 从 base64 state 恢复插件。
+pub fn restore_state(path: &Path, plugin_id: &str, state: &str) -> Result<(), HostError> {
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(state)
+        .map_err(|error| HostError::State(error.to_string()))?;
+    let id = CString::new(plugin_id).map_err(|_| HostError::InvalidPluginId)?;
+    // SAFETY: 与 `scan_plugin` 相同，加载动态库会执行插件代码。
+    let entry = unsafe { PluginEntry::load(path) }.map_err(|error| error.to_string())?;
+    let host_info = HostInfo::new(
+        "Aurtrack",
+        "Aurtrack contributors",
+        "https://aurtrack.dev",
+        "0.0.0",
+    )
+    .map_err(|error| error.to_string())?;
+    let mut instance = PluginInstance::<ClapHost>::new(
+        |_| HostShared,
+        |_| HostMainThread,
+        &entry,
+        id.as_c_str(),
+        &host_info,
+    )
+    .map_err(|error| error.to_string())?;
+    let handle = instance.plugin_handle();
+    let state_extension = handle
+        .get_extension::<PluginState>()
+        .ok_or_else(|| HostError::State("插件不支持 state 扩展".to_string()))?;
+    state_extension
+        .load(&handle, &mut bytes.as_slice())
+        .map_err(|error| HostError::State(error.to_string()))
+}
+
 /// 在离线缓冲上运行一个 CLAP 立体声效果器。
 ///
 /// 这是宿主的第一个闭环：验证加载、激活、块处理和停用。它不在实时音频线程里运行。
@@ -773,6 +839,17 @@ mod tests {
         }
         control.unload().unwrap();
         assert!(processed, "实时桥没有输出插件处理后的样本");
+    }
+
+    #[test]
+    fn fixture_plugin_state_round_trip() {
+        let path = Path::new("target/fixture-gain.clap");
+        if !path.exists() {
+            return;
+        }
+        let state = save_state(path, "com.aurtrack.fixture.gain").unwrap();
+        restore_state(path, "com.aurtrack.fixture.gain", &state).unwrap();
+        assert!(!state.is_empty());
     }
 
     #[test]
