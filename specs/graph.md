@@ -30,6 +30,25 @@ instrument.sine -> amp.adsr -> gain -> output
 instrument.silence -> output
 ```
 
+钢琴节点带 `voice` 子图：
+
+```json
+{
+  "id": "instrument",
+  "kind": "instrument.piano",
+  "params": { "partials": 10, "decay": 1.2 },
+  "voice": {
+    "nodes": {
+      "voice-in": { "id": "voice-in", "kind": "voice.input", "params": {} },
+      "osc": { "id": "osc", "kind": "osc.partials", "params": {} }
+    },
+    "connections": []
+  }
+}
+```
+
+Voice 节点类型：`voice.input`、`osc.partials`、`env.percussive`、`noise.burst`、`voice.mix`、`voice.output`。
+
 插件节点必须带 `plugin` 配置：
 
 ```json

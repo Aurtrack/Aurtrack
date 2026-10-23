@@ -29,10 +29,12 @@ use std::path::Path;
 
 use aurtrack_command::{CommandError, CommandRequest, CommandResponse, registry};
 use aurtrack_engine::{
-    AdsrPlan, FilterPlan, FilterSettings, GraphNodePlan, GraphOp, GraphPlan, NotePlan, PianoPlan,
-    PluginPlan, adsr_envelope, midi_to_hz, note_envelope,
+    AdsrPlan, FilterPlan, FilterSettings, GraphNodePlan, GraphOp, GraphPlan, NotePlan, PluginPlan,
+    VoiceNodePlan, VoiceOp, VoicePlan, adsr_envelope, midi_to_hz, note_envelope,
 };
-use aurtrack_graph::{Graph, GraphError, Node, NodeId, NodeKind, PORT_IN, PortRef};
+use aurtrack_graph::{
+    Graph, GraphError, Node, NodeId, NodeKind, PORT_IN, PortRef, VoiceGraph, VoiceNodeKind,
+};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -191,6 +193,19 @@ impl Track {
         if nodes.len() > aurtrack_engine::MAX_GRAPH_NODES {
             return Err(GraphError::TooManyNodes(nodes.len()));
         }
+        let mut piano = compiled.piano.map(|piano| {
+            aurtrack_engine::PianoPlan::new(
+                piano.partials,
+                piano.decay,
+                piano.brightness,
+                piano.hammer,
+            )
+        });
+        if let Some(piano) = piano.as_mut() {
+            if let Some(voice) = compiled.voice.as_ref() {
+                piano.voice = Some(compile_voice(voice)?);
+            }
+        }
         Ok((
             compiled.source_frequency,
             compiled.adsr,
@@ -200,17 +215,67 @@ impl Track {
                 plugin: compiled
                     .plugin
                     .map(|plugin| PluginPlan::new(plugin.path, plugin.id, plugin.state)),
-                piano: compiled.piano.map(|piano| {
-                    aurtrack_engine::PianoPlan::new(
-                        piano.partials,
-                        piano.decay,
-                        piano.brightness,
-                        piano.hammer,
-                    )
-                }),
+                piano,
             },
         ))
     }
+}
+
+fn compile_voice(voice: &VoiceGraph) -> Result<VoicePlan, GraphError> {
+    let order = voice.topological_order()?;
+    let mut indices = BTreeMap::new();
+    let mut nodes = Vec::new();
+    let mut output = None;
+    for id in order {
+        let node = voice.node(&id).ok_or(GraphError::VoiceUnknownNode)?;
+        let mut incoming: Vec<_> = voice
+            .connections
+            .iter()
+            .filter(|connection| connection.to.node() == &id)
+            .collect();
+        incoming.sort_by(|left, right| left.to.port().cmp(right.to.port()));
+        let inputs = incoming
+            .iter()
+            .map(|connection| {
+                indices
+                    .get(connection.from.node())
+                    .copied()
+                    .ok_or(GraphError::VoiceUnknownNode)
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let param = |name: &str, default: f64| node.params.get(name).copied().unwrap_or(default);
+        let op = match node.kind {
+            VoiceNodeKind::VoiceInput => VoiceOp::Pitch,
+            VoiceNodeKind::OscPartials => {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let partials = (param("partials", 12.0).round() as usize).clamp(1, 16);
+                VoiceOp::OscPartials {
+                    partials,
+                    inharmonicity: param("inharmonicity", 0.0004),
+                    brightness: param("brightness", 0.55),
+                    decay: param("decay", 1.4),
+                }
+            },
+            VoiceNodeKind::EnvPercussive => VoiceOp::EnvPercussive {
+                attack: param("attack", 0.004),
+                decay: param("decay", 1.8),
+            },
+            VoiceNodeKind::NoiseBurst => VoiceOp::NoiseBurst {
+                level: param("level", 0.15),
+                duration: param("duration", 0.008),
+            },
+            VoiceNodeKind::Mix => VoiceOp::Mix,
+            VoiceNodeKind::VoiceOutput => {
+                output = Some(nodes.len());
+                VoiceOp::Output
+            },
+            _ => return Err(GraphError::VoiceUnknownNode),
+        };
+        indices.insert(id, nodes.len());
+        nodes.push(VoiceNodePlan::new(op, inputs));
+    }
+    let output = output.ok_or(GraphError::VoiceTerminals)?;
+    Ok(VoicePlan::new(nodes, output))
 }
 
 /// 轨道上的一个片段。
@@ -301,6 +366,7 @@ impl Session {
             "project.master_plugin_off" => self.cmd_master_plugin_off(),
             "track.create" => self.cmd_track_create(&request.args),
             "track.remove" => self.cmd_track_remove(&request.args),
+            "track.voice" => self.cmd_track_voice(&request.args),
             "clip.create" => self.cmd_clip_create(&request.args),
             "clip.update" => self.cmd_clip_update(&request.args),
             "clip.remove" => self.cmd_clip_remove(&request.args),
@@ -840,6 +906,35 @@ impl Session {
         Ok(CommandResponse::ok(json!({
             "path": path,
             "project": self.project_summary(),
+        }))
+        .with_undo(token))
+    }
+
+    fn cmd_track_voice(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct VoiceArgs {
+            track_id: String,
+            voice: VoiceGraph,
+        }
+        let args: VoiceArgs = parse_args(args)?;
+        let token = self.snapshot("track.voice");
+        let project = self
+            .project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let track = project
+            .tracks
+            .iter_mut()
+            .find(|track| track.id == args.track_id)
+            .ok_or_else(|| CommandError::not_found(format!("找不到轨道：{}", args.track_id)))?;
+        track
+            .graph
+            .set_piano_voice(args.voice)
+            .map_err(graph_error)?;
+        Ok(CommandResponse::ok(json!({
+            "track_id": args.track_id,
+            "voice": "updated",
         }))
         .with_undo(token))
     }
@@ -2577,7 +2672,7 @@ fn render_project(
             sustain: settings.sustain,
             release: settings.release,
         });
-        let piano: Option<PianoPlan> = graph.piano;
+        let piano = graph.piano.as_ref();
         let piano_notes: Vec<NotePlan> = if piano.is_some() {
             track
                 .clips
@@ -2597,7 +2692,7 @@ fn render_project(
         let release = adsr.map_or(0.0, |envelope| envelope.release.max(0.001));
         for (index, slot) in mix.iter_mut().enumerate() {
             let time = start_seconds + index as f64 / sample_rate_f64;
-            let mut sample = if let Some(piano) = piano {
+            let mut sample = if let Some(piano) = piano.as_ref() {
                 piano.sample(&piano_notes, time)
             } else {
                 let mut sample = source_frequency.map_or(0.0, |frequency| {

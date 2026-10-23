@@ -330,10 +330,10 @@ fn batch_note_edits_and_cross_track_clip_move_share_snapshots() {
 }
 
 #[test]
-fn describe_lists_fifty_three_commands() {
+fn describe_lists_fifty_four_commands() {
     let mut session = Session::default();
     let out = run(&mut session, "describe", json!({}));
-    assert_eq!(out["commands"].as_array().unwrap().len(), 53);
+    assert_eq!(out["commands"].as_array().unwrap().len(), 54);
     assert!(out["project"].is_null());
 }
 
@@ -1122,6 +1122,11 @@ fn piano_track_renders_audible_wav() {
             "velocity": 0.8,
         }),
     );
+    let plan = session.project().unwrap().tracks[0]
+        .playback_graph()
+        .unwrap()
+        .2;
+    assert!(plan.piano.as_ref().unwrap().voice.is_some());
     let path = temp_path("piano");
     let rendered = run(
         &mut session,

@@ -1,6 +1,6 @@
 # 命令规范 v1.3
 
-这份文档定义 Aurtrack 的可运行命令面：53 条命令、统一的返回结构、寻址规则，以及 MCP 的映射方式。代码必须与本文一致。
+这份文档定义 Aurtrack 的可运行命令面：54 条命令、统一的返回结构、寻址规则，以及 MCP 的映射方式。代码必须与本文一致。
 
 工程格式 v4 用 music tick 存储位置（960 PPQ），轨道保存 `aurtrack-graph` 节点图。命令边界仍用秒，避免 UI 和 CLI 直接操作 tick。旧 v3 工程会被拒绝。
 
@@ -779,6 +779,20 @@
 }
 ```
 
+### 54. `track.voice`
+
+替换钢琴轨道的完整 VoiceGraph。只作用于 `instrument.piano`。
+
+```json
+{
+  "track_id": "track-1",
+  "voice": {
+    "nodes": {},
+    "connections": []
+  }
+}
+```
+
 ## MCP 映射
 
 工具名是命令 ID 把 `.` 换成 `_`：
@@ -790,6 +804,7 @@
 | `project.master_plugin` | `project_master_plugin` |
 | `project.master_plugin_off` | `project_master_plugin_off` |
 | `track.create` | `track_create` |
+| `track.voice` | `track_voice` |
 | `device.add` | `device_add` |
 | `node.add` | `node_add` |
 | `node.remove` | `node_remove` |

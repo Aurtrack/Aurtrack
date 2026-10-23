@@ -271,6 +271,258 @@ pub struct Node {
     position: Option<[f64; 2]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     plugin: Option<PluginConfig>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    voice: Option<VoiceGraph>,
+}
+
+/// 钢琴内部的 Voice 子图。每条连接表示一个音频或控制值。
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VoiceGraph {
+    pub nodes: BTreeMap<NodeId, VoiceNode>,
+    pub connections: Vec<VoiceConnection>,
+}
+
+impl Default for VoiceGraph {
+    fn default() -> Self {
+        Self::piano_default()
+    }
+}
+
+impl VoiceGraph {
+    pub fn piano_default() -> Self {
+        let input = VoiceNode::new(NodeId::fixed("voice-in"), VoiceNodeKind::VoiceInput);
+        let mut osc = VoiceNode::new(NodeId::fixed("osc"), VoiceNodeKind::OscPartials);
+        osc.params.insert("partials".to_string(), 10.0);
+        osc.params.insert("inharmonicity".to_string(), 0.0004);
+        osc.params.insert("brightness".to_string(), 0.5);
+        osc.params.insert("decay".to_string(), 1.2);
+        let mut env = VoiceNode::new(NodeId::fixed("env"), VoiceNodeKind::EnvPercussive);
+        env.params.insert("attack".to_string(), 0.004);
+        env.params.insert("decay".to_string(), 1.2);
+        let mut noise = VoiceNode::new(NodeId::fixed("noise"), VoiceNodeKind::NoiseBurst);
+        noise.params.insert("level".to_string(), 0.2);
+        noise.params.insert("duration".to_string(), 0.008);
+        let mix = VoiceNode::new(NodeId::fixed("mix"), VoiceNodeKind::Mix);
+        let output = VoiceNode::new(NodeId::fixed("out"), VoiceNodeKind::VoiceOutput);
+        let mut nodes = BTreeMap::new();
+        for node in [input, osc, env, noise, mix, output] {
+            nodes.insert(node.id.clone(), node);
+        }
+        Self {
+            nodes,
+            connections: vec![
+                VoiceConnection::new(
+                    PortRef::fixed(NodeId::fixed("osc"), "out"),
+                    PortRef::fixed(NodeId::fixed("env"), "in"),
+                ),
+                VoiceConnection::new(
+                    PortRef::fixed(NodeId::fixed("env"), "out"),
+                    PortRef::fixed(NodeId::fixed("mix"), "in1"),
+                ),
+                VoiceConnection::new(
+                    PortRef::fixed(NodeId::fixed("noise"), "out"),
+                    PortRef::fixed(NodeId::fixed("mix"), "in2"),
+                ),
+                VoiceConnection::new(
+                    PortRef::fixed(NodeId::fixed("mix"), "out"),
+                    PortRef::fixed(NodeId::fixed("out"), "in"),
+                ),
+            ],
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), GraphError> {
+        if self.nodes.is_empty() {
+            return Err(GraphError::EmptyVoiceGraph);
+        }
+        let inputs = self
+            .nodes
+            .values()
+            .filter(|node| node.kind == VoiceNodeKind::VoiceInput)
+            .count();
+        let outputs = self
+            .nodes
+            .values()
+            .filter(|node| node.kind == VoiceNodeKind::VoiceOutput)
+            .count();
+        if inputs != 1 || outputs != 1 {
+            return Err(GraphError::VoiceTerminals);
+        }
+        let mut occupied = BTreeSet::new();
+        for connection in &self.connections {
+            if !self.nodes.contains_key(&connection.from.node)
+                || !self.nodes.contains_key(&connection.to.node)
+            {
+                return Err(GraphError::VoiceUnknownNode);
+            }
+            let target = self
+                .nodes
+                .get(&connection.to.node)
+                .ok_or(GraphError::VoiceUnknownNode)?;
+            if !target.kind.has_input(&connection.to.port) {
+                return Err(GraphError::VoiceUnknownPort(connection.to.port.clone()));
+            }
+            let key = (connection.to.node.clone(), connection.to.port.clone());
+            if !occupied.insert(key) {
+                return Err(GraphError::PortOccupied);
+            }
+        }
+        self.topological_order()?;
+        Ok(())
+    }
+
+    pub fn topological_order(&self) -> Result<Vec<NodeId>, GraphError> {
+        let mut incoming = BTreeMap::<NodeId, usize>::new();
+        let mut outgoing = BTreeMap::<NodeId, Vec<NodeId>>::new();
+        for id in self.nodes.keys() {
+            incoming.insert(id.clone(), 0);
+        }
+        for connection in &self.connections {
+            *incoming
+                .get_mut(&connection.to.node)
+                .ok_or(GraphError::VoiceUnknownNode)? += 1;
+            outgoing
+                .entry(connection.from.node.clone())
+                .or_default()
+                .push(connection.to.node.clone());
+        }
+        let mut queue: VecDeque<NodeId> = incoming
+            .iter()
+            .filter(|(_, count)| **count == 0)
+            .map(|(id, _)| id.clone())
+            .collect();
+        let mut order = Vec::new();
+        while let Some(id) = queue.pop_front() {
+            order.push(id.clone());
+            for next in outgoing.get(&id).into_iter().flatten() {
+                let count = incoming.get_mut(next).ok_or(GraphError::VoiceUnknownNode)?;
+                *count -= 1;
+                if *count == 0 {
+                    queue.push_back(next.clone());
+                }
+            }
+        }
+        if order.len() != self.nodes.len() {
+            return Err(GraphError::Cycle);
+        }
+        Ok(order)
+    }
+
+    pub fn node(&self, id: &NodeId) -> Option<&VoiceNode> {
+        self.nodes.get(id)
+    }
+}
+
+/// Voice 子图节点。
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VoiceNode {
+    pub id: NodeId,
+    pub kind: VoiceNodeKind,
+    #[serde(default)]
+    pub params: BTreeMap<String, f64>,
+}
+
+impl VoiceNode {
+    fn new(id: NodeId, kind: VoiceNodeKind) -> Self {
+        Self {
+            id,
+            kind,
+            params: kind.default_params(),
+        }
+    }
+}
+
+/// Voice 子图节点类型。
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum VoiceNodeKind {
+    #[serde(rename = "voice.input")]
+    VoiceInput,
+    #[serde(rename = "osc.partials")]
+    OscPartials,
+    #[serde(rename = "env.percussive")]
+    EnvPercussive,
+    #[serde(rename = "noise.burst")]
+    NoiseBurst,
+    #[serde(rename = "voice.mix")]
+    Mix,
+    #[serde(rename = "voice.output")]
+    VoiceOutput,
+}
+
+impl VoiceNodeKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::VoiceInput => "voice.input",
+            Self::OscPartials => "osc.partials",
+            Self::EnvPercussive => "env.percussive",
+            Self::NoiseBurst => "noise.burst",
+            Self::Mix => "voice.mix",
+            Self::VoiceOutput => "voice.output",
+        }
+    }
+
+    pub const fn inputs(self) -> &'static [&'static str] {
+        match self {
+            Self::VoiceInput | Self::OscPartials | Self::NoiseBurst => &[],
+            Self::EnvPercussive | Self::VoiceOutput => &["in"],
+            Self::Mix => &["in1", "in2"],
+        }
+    }
+
+    pub const fn outputs(self) -> &'static [&'static str] {
+        match self {
+            Self::VoiceInput => &["pitch", "velocity", "gate"],
+            Self::VoiceOutput => &[],
+            Self::OscPartials | Self::EnvPercussive | Self::NoiseBurst | Self::Mix => &["out"],
+        }
+    }
+
+    pub fn has_input(self, port: &str) -> bool {
+        self.inputs().contains(&port)
+    }
+
+    pub fn has_output(self, port: &str) -> bool {
+        self.outputs().contains(&port)
+    }
+
+    fn default_params(self) -> BTreeMap<String, f64> {
+        let mut params = BTreeMap::new();
+        match self {
+            Self::OscPartials => {
+                params.insert("partials".to_string(), 12.0);
+                params.insert("inharmonicity".to_string(), 0.0004);
+                params.insert("brightness".to_string(), 0.55);
+                params.insert("decay".to_string(), 1.4);
+            },
+            Self::EnvPercussive => {
+                params.insert("attack".to_string(), 0.004);
+                params.insert("decay".to_string(), 1.8);
+            },
+            Self::NoiseBurst => {
+                params.insert("level".to_string(), 0.15);
+                params.insert("duration".to_string(), 0.008);
+            },
+            _ => {},
+        }
+        params
+    }
+}
+
+/// Voice 子图连接。
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VoiceConnection {
+    pub from: PortRef,
+    pub to: PortRef,
+}
+
+impl VoiceConnection {
+    fn new(from: PortRef, to: PortRef) -> Self {
+        Self { from, to }
+    }
 }
 
 /// 插件节点引用的 CLAP 插件和可选状态。
@@ -297,6 +549,7 @@ impl Node {
             params: kind.default_params(),
             position: None,
             plugin: None,
+            voice: (kind == NodeKind::InstrumentPiano).then(VoiceGraph::piano_default),
         }
     }
 
@@ -318,6 +571,19 @@ impl Node {
 
     pub fn plugin(&self) -> Option<&PluginConfig> {
         self.plugin.as_ref()
+    }
+
+    pub fn voice(&self) -> Option<&VoiceGraph> {
+        self.voice.as_ref()
+    }
+
+    pub fn set_voice(&mut self, voice: VoiceGraph) -> Result<(), GraphError> {
+        if self.kind != NodeKind::InstrumentPiano {
+            return Err(GraphError::NotPiano(self.kind));
+        }
+        voice.validate()?;
+        self.voice = Some(voice);
+        Ok(())
     }
 
     pub fn set_plugin(&mut self, plugin: Option<PluginConfig>) -> Result<(), GraphError> {
@@ -348,7 +614,42 @@ impl Node {
     pub fn set_param(&mut self, name: &str, value: f64) -> Result<(), GraphError> {
         self.validate_param(name, value)?;
         self.params.insert(name.to_string(), value);
+        if self.kind == NodeKind::InstrumentPiano {
+            self.sync_voice_param(name, value);
+        }
         Ok(())
+    }
+
+    fn sync_voice_param(&mut self, name: &str, value: f64) {
+        let Some(voice) = self.voice.as_mut() else {
+            return;
+        };
+        match name {
+            "partials" => {
+                if let Some(osc) = voice.nodes.get_mut(&NodeId::fixed("osc")) {
+                    osc.params.insert("partials".to_string(), value);
+                }
+            },
+            "decay" => {
+                if let Some(osc) = voice.nodes.get_mut(&NodeId::fixed("osc")) {
+                    osc.params.insert("decay".to_string(), value);
+                }
+                if let Some(env) = voice.nodes.get_mut(&NodeId::fixed("env")) {
+                    env.params.insert("decay".to_string(), value);
+                }
+            },
+            "brightness" => {
+                if let Some(osc) = voice.nodes.get_mut(&NodeId::fixed("osc")) {
+                    osc.params.insert("brightness".to_string(), value);
+                }
+            },
+            "hammer" => {
+                if let Some(noise) = voice.nodes.get_mut(&NodeId::fixed("noise")) {
+                    noise.params.insert("level".to_string(), value);
+                }
+            },
+            _ => {},
+        }
     }
 
     fn validate(&self) -> Result<(), GraphError> {
@@ -357,6 +658,12 @@ impl Node {
         }
         if self.kind != NodeKind::Plugin && self.plugin.is_some() {
             return Err(GraphError::NotPlugin(self.kind));
+        }
+        if self.kind == NodeKind::InstrumentPiano {
+            self.voice
+                .as_ref()
+                .ok_or(GraphError::EmptyVoiceGraph)?
+                .validate()?;
         }
         for (name, value) in &self.params {
             self.validate_param(name, *value)?;
@@ -487,6 +794,7 @@ pub struct CompiledGraph {
     pub output: usize,
     pub plugin: Option<PluginConfig>,
     pub piano: Option<PianoSettings>,
+    pub voice: Option<VoiceGraph>,
 }
 
 /// DAG 中的一个处理节点。
@@ -589,6 +897,15 @@ impl Graph {
 
     pub fn node(&self, id: &NodeId) -> Option<&Node> {
         self.nodes.get(id)
+    }
+
+    pub fn set_piano_voice(&mut self, voice: VoiceGraph) -> Result<(), GraphError> {
+        let node = self
+            .nodes
+            .values_mut()
+            .find(|node| node.kind() == NodeKind::InstrumentPiano)
+            .ok_or(GraphError::NotPiano(NodeKind::InstrumentPiano))?;
+        node.set_voice(voice)
     }
 
     pub fn connections(&self) -> &[Connection] {
@@ -1109,6 +1426,11 @@ impl Graph {
             inputs: Vec::new(),
         }];
         let mut plugin: Option<PluginConfig> = None;
+        let voice = self
+            .nodes
+            .values()
+            .find(|node| node.kind() == NodeKind::InstrumentPiano)
+            .and_then(|node| node.voice().cloned());
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let piano = self
             .nodes
@@ -1187,6 +1509,7 @@ impl Graph {
             output,
             plugin,
             piano,
+            voice,
         })
     }
 
@@ -1282,6 +1605,16 @@ pub enum GraphError {
     InvalidPlugin,
     #[error("一个轨道最多只能有一个插件节点")]
     MultiplePlugins,
+    #[error("Voice 子图不能为空")]
+    EmptyVoiceGraph,
+    #[error("Voice 子图必须恰好有一个 voice.input 和一个 voice.output")]
+    VoiceTerminals,
+    #[error("Voice 子图引用了不存在的节点")]
+    VoiceUnknownNode,
+    #[error("Voice 子图端口不存在：{0}")]
+    VoiceUnknownPort(String),
+    #[error("节点不是钢琴：{0:?}")]
+    NotPiano(NodeKind),
 }
 
 #[cfg(test)]
@@ -1297,6 +1630,16 @@ mod tests {
         assert!((compiled.gain - 1.0).abs() < 1e-9);
         assert!((compiled.adsr.unwrap().sustain - 0.75).abs() < 1e-9);
         assert_eq!(graph.topological_order().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn piano_node_has_default_voice_graph() {
+        let graph = Graph::empty_track(NodeKind::InstrumentPiano).unwrap();
+        graph.validate().unwrap();
+        let compiled = graph.compile_graph().unwrap();
+        let voice = compiled.voice.unwrap();
+        assert_eq!(voice.nodes.len(), 6);
+        assert_eq!(voice.connections.len(), 4);
     }
 
     #[test]

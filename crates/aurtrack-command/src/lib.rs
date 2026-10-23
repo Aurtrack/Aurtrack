@@ -213,6 +213,16 @@ fn track_create_schema() -> Value {
     )
 }
 
+fn track_voice_schema() -> Value {
+    object_schema(
+        json!({
+            "track_id": { "type": "string" },
+            "voice": { "type": "object", "description": "完整 VoiceGraph" }
+        }),
+        &["track_id", "voice"],
+    )
+}
+
 fn device_add_schema() -> Value {
     object_schema(
         json!({
@@ -757,7 +767,7 @@ fn transport_metronome_schema() -> Value {
     )
 }
 
-static COMMANDS: [CommandSpec; 53] = [
+static COMMANDS: [CommandSpec; 54] = [
     CommandSpec {
         id: "project.create",
         summary: "创建或替换当前工程",
@@ -895,6 +905,12 @@ static COMMANDS: [CommandSpec; 53] = [
         summary: "批量粘贴片段及音符到轨道",
         undo: UndoKind::Snapshot,
         input_schema: clip_paste_schema,
+    },
+    CommandSpec {
+        id: "track.voice",
+        summary: "替换轨道的钢琴 Voice 子图",
+        undo: UndoKind::Snapshot,
+        input_schema: track_voice_schema,
     },
     CommandSpec {
         id: "device.add",

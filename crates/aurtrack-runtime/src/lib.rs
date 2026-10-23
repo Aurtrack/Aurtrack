@@ -553,7 +553,7 @@ fn build_plan(
                 })
                 .collect();
             let plugin = graph.plugin.clone();
-            let piano = graph.piano;
+            let piano = graph.piano.clone();
             Ok(TrackPlan {
                 frequency,
                 gain: 1.0,
@@ -763,11 +763,11 @@ mod tests {
     }
 
     #[test]
-    fn describe_lists_fifty_three_commands() {
+    fn describe_lists_fifty_four_commands() {
         let mut runtime = Runtime::new();
         let response = run(&mut runtime, "describe", json!({})).unwrap();
         let commands = response.data["commands"].as_array().unwrap();
-        assert_eq!(commands.len(), 53);
+        assert_eq!(commands.len(), 54);
         assert!(
             commands
                 .iter()

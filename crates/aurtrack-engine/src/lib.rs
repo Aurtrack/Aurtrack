@@ -46,14 +46,162 @@ pub struct TrackPlan {
     pub piano: Option<PianoPlan>,
 }
 
+/// 单个音符的 Voice 上下文。
+#[derive(Debug, Clone, Copy)]
+pub struct VoiceContext {
+    pub pitch: f64,
+    pub velocity: f64,
+    pub local_time: f64,
+    pub gate: bool,
+    pub seed: u64,
+}
+
+/// Voice 子图编译结果。
+#[non_exhaustive]
+#[derive(Debug, Clone)]
+pub struct VoicePlan {
+    pub nodes: Vec<VoiceNodePlan>,
+    pub output: usize,
+}
+
+impl VoicePlan {
+    pub fn new(nodes: Vec<VoiceNodePlan>, output: usize) -> Self {
+        Self { nodes, output }
+    }
+}
+
+/// Voice 子图中的一个节点。
+#[non_exhaustive]
+#[derive(Debug, Clone)]
+pub struct VoiceNodePlan {
+    pub op: VoiceOp,
+    pub inputs: Vec<usize>,
+}
+
+impl VoiceNodePlan {
+    pub fn new(op: VoiceOp, inputs: Vec<usize>) -> Self {
+        Self { op, inputs }
+    }
+}
+
+/// Voice 子图节点操作。
+#[non_exhaustive]
+#[derive(Debug, Clone)]
+pub enum VoiceOp {
+    Pitch,
+    Velocity,
+    Gate,
+    OscPartials {
+        partials: usize,
+        inharmonicity: f64,
+        brightness: f64,
+        decay: f64,
+    },
+    EnvPercussive {
+        attack: f64,
+        decay: f64,
+    },
+    NoiseBurst {
+        level: f64,
+        duration: f64,
+    },
+    Mix,
+    Output,
+}
+
+impl VoicePlan {
+    pub fn sample(&self, context: VoiceContext) -> f64 {
+        if self.nodes.len() > 64 || self.output >= self.nodes.len() {
+            return 0.0;
+        }
+        let mut values = [0.0_f64; 64];
+        for (index, node) in self.nodes.iter().enumerate() {
+            values[index] = match node.op {
+                VoiceOp::Pitch => context.pitch,
+                VoiceOp::Velocity => context.velocity,
+                VoiceOp::Gate => f64::from(u8::from(context.gate)),
+                VoiceOp::OscPartials {
+                    partials,
+                    inharmonicity,
+                    brightness,
+                    decay,
+                } => {
+                    let pitch = node
+                        .inputs
+                        .first()
+                        .map_or(context.pitch, |input| values[*input]);
+                    let velocity = node
+                        .inputs
+                        .get(1)
+                        .map_or(context.velocity, |input| values[*input]);
+                    osc_partials(
+                        pitch,
+                        velocity,
+                        context.local_time,
+                        partials,
+                        inharmonicity,
+                        brightness,
+                        decay,
+                    )
+                },
+                VoiceOp::EnvPercussive { attack, decay } => {
+                    let input = node.inputs.first().map_or(0.0, |input| values[*input]);
+                    let attack_gain = (context.local_time / attack.max(0.0001)).min(1.0);
+                    input * attack_gain * (-context.local_time / decay.max(0.01)).exp()
+                },
+                VoiceOp::NoiseBurst { level, duration } => {
+                    if context.local_time > duration || !context.gate {
+                        0.0
+                    } else {
+                        let noise = ((context.seed.wrapping_mul(6_364_136_223_846_793_005) >> 40)
+                            as f64
+                            / 16_777_216.0)
+                            * 2.0
+                            - 1.0;
+                        noise * level * (-context.local_time / duration.max(0.001)).exp()
+                    }
+                },
+                VoiceOp::Mix => node.inputs.iter().map(|input| values[*input]).sum(),
+                VoiceOp::Output => node.inputs.first().map_or(0.0, |input| values[*input]),
+            };
+        }
+        values[self.output]
+    }
+}
+
+fn osc_partials(
+    pitch: f64,
+    velocity: f64,
+    time: f64,
+    partials: usize,
+    inharmonicity: f64,
+    brightness: f64,
+    decay: f64,
+) -> f64 {
+    let mut output = 0.0;
+    let velocity = velocity.clamp(0.0, 1.0).powf(brightness + 0.5);
+    for partial in 1..=partials {
+        let frequency =
+            pitch * partial as f64 * (1.0 + inharmonicity * (partial * partial) as f64).sqrt();
+        if frequency >= 20_000.0 {
+            break;
+        }
+        let envelope = (-time * (0.8 + partial as f64 * 0.35) / decay.max(0.05)).exp();
+        output +=
+            (std::f64::consts::TAU * frequency * time).sin() * envelope * velocity / partial as f64;
+    }
+    output * 0.18
+}
+
 /// 加法钢琴音色。
 #[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct PianoPlan {
     pub partials: usize,
     pub decay: f64,
     pub brightness: f64,
     pub hammer: f64,
+    pub voice: Option<VoicePlan>,
 }
 
 impl PianoPlan {
@@ -63,6 +211,7 @@ impl PianoPlan {
             decay,
             brightness,
             hammer,
+            voice: None,
         }
     }
 
@@ -71,6 +220,16 @@ impl PianoPlan {
         for note in notes {
             let local = time - note.start;
             if local < 0.0 || local > note.duration + 0.5 {
+                continue;
+            }
+            if let Some(voice) = &self.voice {
+                output += voice.sample(VoiceContext {
+                    pitch: note.frequency,
+                    velocity: note.velocity,
+                    local_time: local,
+                    gate: local <= note.duration,
+                    seed: note.start.to_bits() ^ note.frequency.to_bits() ^ note.velocity.to_bits(),
+                });
                 continue;
             }
             let attack = (local / 0.004).min(1.0);
@@ -779,7 +938,7 @@ impl Playback {
     fn sample_track(plan: &PlaybackPlan, track: &TrackPlan, position: u64) -> f64 {
         let sample_rate = f64::from(plan.sample_rate).max(1.0);
         let time = position as f64 / sample_rate;
-        let mut voice = if let Some(piano) = track.piano {
+        let mut voice = if let Some(piano) = &track.piano {
             piano.sample(&track.notes, time)
         } else {
             0.0
@@ -867,6 +1026,48 @@ mod tests {
                 notes: Vec::new(),
             }],
         }
+    }
+
+    #[test]
+    fn voice_plan_renders_partials_and_noise() {
+        let plan = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(
+                    VoiceOp::OscPartials {
+                        partials: 8,
+                        inharmonicity: 0.0004,
+                        brightness: 0.5,
+                        decay: 1.4,
+                    },
+                    vec![],
+                ),
+                VoiceNodePlan::new(
+                    VoiceOp::EnvPercussive {
+                        attack: 0.004,
+                        decay: 1.8,
+                    },
+                    vec![0],
+                ),
+                VoiceNodePlan::new(
+                    VoiceOp::NoiseBurst {
+                        level: 0.2,
+                        duration: 0.008,
+                    },
+                    vec![],
+                ),
+                VoiceNodePlan::new(VoiceOp::Mix, vec![1, 2]),
+                VoiceNodePlan::new(VoiceOp::Output, vec![3]),
+            ],
+            4,
+        );
+        let sample = plan.sample(VoiceContext {
+            pitch: 261.63,
+            velocity: 0.8,
+            local_time: 0.002,
+            gate: true,
+            seed: 7,
+        });
+        assert!(sample.abs() > 0.0001);
     }
 
     #[test]
