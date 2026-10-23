@@ -201,9 +201,9 @@ impl Track {
             let group = groups
                 .get(group_id)
                 .ok_or_else(|| GraphError::GroupMissing(group_id.clone()))?;
-            group.validate()?;
+            group.validate_with_groups(groups)?;
             let mut piano = aurtrack_engine::PianoPlan::new(10, 1.2, 0.5, 0.2);
-            piano.voice = Some(compile_voice(&group.graph, &group.interface)?);
+            piano.voice = Some(compile_voice(&group.graph, &group.interface, groups)?);
             Some(piano)
         } else {
             None
@@ -226,6 +226,17 @@ impl Track {
 fn compile_voice(
     voice: &VoiceGraph,
     interface: &NodeGroupInterface,
+    groups: &BTreeMap<String, NodeGroup>,
+) -> Result<VoicePlan, GraphError> {
+    compile_voice_inner(voice, interface, groups, &mut Vec::new(), None)
+}
+
+fn compile_voice_inner(
+    voice: &VoiceGraph,
+    interface: &NodeGroupInterface,
+    groups: &BTreeMap<String, NodeGroup>,
+    stack: &mut Vec<String>,
+    input_bindings: Option<&BTreeMap<String, usize>>,
 ) -> Result<VoicePlan, GraphError> {
     let order = voice.topological_order()?;
     let mut indices = BTreeMap::<(NodeId, String), usize>::new();
@@ -252,6 +263,16 @@ fn compile_voice(
             })
             .collect::<Result<Vec<_>, _>>()?;
         if node.kind == VoiceNodeKind::GroupInput {
+            if let Some(bindings) = input_bindings {
+                for socket in &interface.inputs {
+                    let index = bindings
+                        .get(&socket.id)
+                        .copied()
+                        .ok_or(GraphError::VoiceUnknownNode)?;
+                    indices.insert((id.clone(), socket.id.clone()), index);
+                }
+                continue;
+            }
             for socket in &interface.inputs {
                 let op = match (socket.ty, socket.id.as_str()) {
                     (NodeGroupSocketType::Float, "pitch") => VoiceOp::Pitch,
@@ -263,6 +284,40 @@ fn compile_voice(
                 nodes.push(VoiceNodePlan::new(op, Vec::new()));
                 indices.insert((id.clone(), socket.id.clone()), index);
             }
+            continue;
+        }
+        if node.kind == VoiceNodeKind::Group {
+            let group_id = node.group.as_deref().ok_or(GraphError::EmptyGroupId)?;
+            if stack.iter().any(|item| item == group_id) {
+                return Err(GraphError::GroupCycle(group_id.to_string()));
+            }
+            let group = groups
+                .get(group_id)
+                .ok_or_else(|| GraphError::GroupMissing(group_id.to_string()))?;
+            let mut bindings = BTreeMap::new();
+            for connection in &incoming {
+                let input = indices
+                    .get(&(
+                        connection.from.node().clone(),
+                        connection.from.port().to_string(),
+                    ))
+                    .copied()
+                    .ok_or(GraphError::VoiceUnknownNode)?;
+                bindings.insert(connection.to.port().to_string(), input);
+            }
+            stack.push(group_id.to_string());
+            let child = compile_voice_inner(
+                &group.graph,
+                &group.interface,
+                groups,
+                stack,
+                Some(&bindings),
+            )?;
+            stack.pop();
+            let offset = nodes.len();
+            nodes.extend(child.nodes);
+            let child_output = offset + child.output;
+            indices.insert((id.clone(), "out".to_string()), child_output);
             continue;
         }
         let param = |name: &str, default: f64| node.params.get(name).copied().unwrap_or(default);
@@ -1058,13 +1113,14 @@ impl Session {
             .project
             .as_mut()
             .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let groups = project.node_groups.clone();
         let group = project
             .node_groups
             .get_mut(&args.group_id)
             .ok_or_else(|| CommandError::not_found(format!("找不到节点组：{}", args.group_id)))?;
         let previous = group.interface.clone();
         group.interface = args.interface;
-        if let Err(error) = group.validate() {
+        if let Err(error) = group.validate_with_groups(&groups) {
             group.interface = previous;
             return Err(graph_error(error));
         }
@@ -1084,12 +1140,13 @@ impl Session {
             .project
             .as_mut()
             .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let groups = project.node_groups.clone();
         let group = project
             .node_groups
             .get_mut(&args.group_id)
             .ok_or_else(|| CommandError::not_found(format!("找不到节点组：{}", args.group_id)))?;
         args.voice
-            .validate_with_interface(&group.interface)
+            .validate_with_groups(&group.interface, &groups)
             .map_err(graph_error)?;
         group.graph = args.voice;
         Ok(CommandResponse::ok(json!({

@@ -60,6 +60,7 @@ export type VoiceNode = {
   kind: string;
   params: Record<string, number>;
   position?: [number, number];
+  group?: string;
 };
 
 export type VoiceConnection = {

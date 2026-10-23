@@ -68,7 +68,22 @@ instrument.silence -> output
 }
 ```
 
-组节点只引用组 ID；同一个组可以被多条轨道复用。Voice 节点类型：`group.input`、`osc.partials`、`env.percussive`、`noise.burst`、`voice.mix`、`group.output`。
+组节点只引用组 ID；同一个组可以被多条轨道复用。
+
+组内部可以再放组节点：
+
+```json
+{
+  "id": "nested",
+  "kind": "voice.group",
+  "params": {},
+  "group": "aux.voice"
+}
+```
+
+嵌套组的端口来自被引用组的接口；编译器递归展开，循环引用会被拒绝。
+
+Voice 节点类型：`group.input`、`osc.partials`、`env.percussive`、`noise.burst`、`voice.mix`、`voice.group`、`group.output`。
 
 插件节点必须带 `plugin` 配置：
 
