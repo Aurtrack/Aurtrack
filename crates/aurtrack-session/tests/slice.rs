@@ -1168,6 +1168,51 @@ fn piano_tracks_share_one_node_group() {
 }
 
 #[test]
+fn nested_group_compiles_into_voice_plan() {
+    let mut session = Session::default();
+    run(&mut session, "project.create", json!({ "name": "nested" }));
+    run(
+        &mut session,
+        "track.create",
+        json!({ "name": "piano", "source": "piano" }),
+    );
+    run(
+        &mut session,
+        "group.create",
+        json!({ "name": "Aux", "group_id": "aux.voice" }),
+    );
+    let project = session.project().unwrap().clone();
+    let mut voice = serde_json::to_value(&project.node_groups["piano.voice"].graph).unwrap();
+    let connections = voice["connections"].as_array_mut().unwrap();
+    connections.retain(|connection| connection["to"]["port"] != "audio");
+    connections.push(json!({
+        "from": { "node": "voice-in", "port": "pitch" },
+        "to": { "node": "nested", "port": "pitch" }
+    }));
+    connections.push(json!({
+        "from": { "node": "nested", "port": "audio" },
+        "to": { "node": "out", "port": "audio" }
+    }));
+    voice["nodes"]["nested"] = json!({
+        "id": "nested",
+        "kind": "voice.group",
+        "params": {},
+        "group": "aux.voice"
+    });
+    run(
+        &mut session,
+        "group.voice",
+        json!({ "group_id": "piano.voice", "voice": voice }),
+    );
+    let project = session.project().unwrap().clone();
+    let plan = project.tracks[0]
+        .playback_graph(&project.node_groups)
+        .unwrap()
+        .2;
+    assert!(plan.piano.unwrap().voice.unwrap().nodes.len() > 6);
+}
+
+#[test]
 fn piano_track_renders_audible_wav() {
     let mut session = Session::default();
     run(&mut session, "project.create", json!({ "name": "piano" }));

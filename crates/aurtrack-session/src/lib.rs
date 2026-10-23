@@ -263,17 +263,11 @@ fn compile_voice_inner(
             })
             .collect::<Result<Vec<_>, _>>()?;
         if node.kind == VoiceNodeKind::GroupInput {
-            if let Some(bindings) = input_bindings {
-                for socket in &interface.inputs {
-                    let index = bindings
-                        .get(&socket.id)
-                        .copied()
-                        .ok_or(GraphError::VoiceUnknownNode)?;
-                    indices.insert((id.clone(), socket.id.clone()), index);
-                }
-                continue;
-            }
             for socket in &interface.inputs {
+                if let Some(index) = input_bindings.and_then(|bindings| bindings.get(&socket.id)) {
+                    indices.insert((id.clone(), socket.id.clone()), *index);
+                    continue;
+                }
                 let op = match (socket.ty, socket.id.as_str()) {
                     (NodeGroupSocketType::Float, "pitch") => VoiceOp::Pitch,
                     (NodeGroupSocketType::Float, "velocity") => VoiceOp::Velocity,
@@ -317,7 +311,9 @@ fn compile_voice_inner(
             let offset = nodes.len();
             nodes.extend(child.nodes);
             let child_output = offset + child.output;
-            indices.insert((id.clone(), "out".to_string()), child_output);
+            for socket in &group.interface.outputs {
+                indices.insert((id.clone(), socket.id.clone()), child_output);
+            }
             continue;
         }
         let param = |name: &str, default: f64| node.params.get(name).copied().unwrap_or(default);
