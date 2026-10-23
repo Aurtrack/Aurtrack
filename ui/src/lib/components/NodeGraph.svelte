@@ -1,6 +1,7 @@
 <script lang="ts">
-  import type { GraphConnection, GraphNode, Track } from "../api";
+  import type { GraphConnection, GraphNode, NodeGroup, Track } from "../api";
   import { formatNumber, t } from "../i18n.svelte";
+  import { session } from "../session.svelte";
   import NumberField from "./NumberField.svelte";
   import VoiceGraphEditor from "./VoiceGraphEditor.svelte";
 
@@ -162,6 +163,7 @@
     if (kind === "amp.adsr") return 184;
     if (kind === "filter.lowpass") return 132;
     if (kind === "instrument.piano") return 184;
+    if (kind === "voice.group") return 120;
     if (kind === "gain") return 104;
     if (kind === "mix") return 104;
     if (kind === "plugin") return 120;
@@ -237,6 +239,7 @@
     if (node.kind === "instrument.sine") return t("graph.sine");
     if (node.kind === "instrument.silence") return t("graph.silence");
     if (node.kind === "instrument.piano") return t("graph.piano");
+    if (node.kind === "voice.group") return t("graph.group");
     if (node.kind === "amp.adsr") return t("graph.adsr");
     if (node.kind === "filter.lowpass") return t("graph.filter");
     if (node.kind === "gain") return t("graph.gain");
@@ -244,6 +247,11 @@
     if (node.kind === "plugin") return t("graph.plugin");
     if (node.kind === "output") return t("graph.output");
     return node.kind.toUpperCase();
+  }
+
+  function groupFor(node: GraphNode): NodeGroup | undefined {
+    if (!node.group) return undefined;
+    return session.nodeGroups[node.group];
   }
 
   function isDevice(node: GraphNode): boolean {
@@ -899,7 +907,7 @@
             onmousedown={(event) => nodeMouseDown(event, node)}
             oncontextmenu={(event) => openNodeMenu(event, node)}
             ondblclick={() => {
-              if (node.kind === "instrument.piano") editingVoiceNode = node.id;
+              if (node.kind === "voice.group") editingVoiceNode = node.id;
             }}
           >
             <div
@@ -950,6 +958,18 @@
                 <span>{t("graph.silenceSource")}</span>
                 <strong>0</strong>
               </div>
+            {:else if node.kind === "voice.group"}
+              <div class="graph-param-row">
+                <span>{t("graph.group")}</span>
+                <strong>{groupFor(node)?.name ?? node.group ?? "—"}</strong>
+              </div>
+              <button
+                class="ghost small"
+                disabled={!groupFor(node)}
+                onclick={() => (editingVoiceNode = node.id)}
+              >
+                {t("graph.editGroup")}
+              </button>
             {:else if node.kind === "instrument.piano"}
               <div class="graph-param-grid">
                 <label>
@@ -1214,10 +1234,11 @@
 
 {#if track && editingVoiceNode}
   {@const voiceNode = graph?.nodes[editingVoiceNode]}
-  {#if voiceNode?.voice}
+  {@const group = voiceNode ? groupFor(voiceNode) : undefined}
+  {#if group}
     <VoiceGraphEditor
-      trackId={track.id}
-      voice={voiceNode.voice}
+      groupId={group.id}
+      voice={group.graph}
       onClose={() => (editingVoiceNode = null)}
     />
   {/if}

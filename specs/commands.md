@@ -779,13 +779,13 @@
 }
 ```
 
-### 54. `track.voice`
+### 54. `group.voice`
 
-替换钢琴轨道的完整 VoiceGraph。只作用于 `instrument.piano`。
+替换工程级节点组的完整 VoiceGraph。
 
 ```json
 {
-  "track_id": "track-1",
+  "group_id": "piano.voice",
   "voice": {
     "nodes": {},
     "connections": []
@@ -804,7 +804,7 @@
 | `project.master_plugin` | `project_master_plugin` |
 | `project.master_plugin_off` | `project_master_plugin_off` |
 | `track.create` | `track_create` |
-| `track.voice` | `track_voice` |
+| `group.voice` | `group_voice` |
 | `device.add` | `device_add` |
 | `node.add` | `node_add` |
 | `node.remove` | `node_remove` |

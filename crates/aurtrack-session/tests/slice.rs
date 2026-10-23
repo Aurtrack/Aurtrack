@@ -1092,9 +1092,46 @@ fn plugin_node_reaches_engine_plan() {
             node["kind"] == "plugin" && node["plugin"]["id"] == "com.example.effect"
         })
     );
-    let track = session.project().unwrap().tracks[0].clone();
-    let (_, _, plan) = track.playback_graph().unwrap();
+    let project = session.project().unwrap().clone();
+    let track = &project.tracks[0];
+    let (_, _, plan) = track.playback_graph(&project.node_groups).unwrap();
     assert_eq!(plan.plugin.as_ref().unwrap().id, "com.example.effect");
+}
+
+#[test]
+fn piano_tracks_share_one_node_group() {
+    let mut session = Session::default();
+    run(&mut session, "project.create", json!({ "name": "groups" }));
+    for name in ["a", "b"] {
+        run(
+            &mut session,
+            "track.create",
+            json!({ "name": name, "source": "piano" }),
+        );
+    }
+    let project = session.project().unwrap().clone();
+    assert_eq!(project.node_groups.len(), 1);
+    let group_ids: Vec<String> = project
+        .tracks
+        .iter()
+        .map(|track| {
+            track
+                .graph
+                .nodes()
+                .find(|node| node.kind() == aurtrack_graph::NodeKind::VoiceGroup)
+                .and_then(aurtrack_graph::Node::group)
+                .unwrap()
+                .to_string()
+        })
+        .collect();
+    assert_eq!(group_ids, ["piano.voice", "piano.voice"]);
+    let voice = serde_json::to_value(&project.node_groups["piano.voice"].graph).unwrap();
+    run(
+        &mut session,
+        "group.voice",
+        json!({ "group_id": "piano.voice", "voice": voice }),
+    );
+    assert_eq!(session.project().unwrap().node_groups.len(), 1);
 }
 
 #[test]
@@ -1122,8 +1159,9 @@ fn piano_track_renders_audible_wav() {
             "velocity": 0.8,
         }),
     );
-    let plan = session.project().unwrap().tracks[0]
-        .playback_graph()
+    let project = session.project().unwrap().clone();
+    let plan = project.tracks[0]
+        .playback_graph(&project.node_groups)
         .unwrap()
         .2;
     assert!(plan.piano.as_ref().unwrap().voice.is_some());

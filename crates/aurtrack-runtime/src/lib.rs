@@ -532,7 +532,7 @@ fn build_plan(
         .iter()
         .map(|track| {
             let (frequency, adsr_settings, graph) = track
-                .playback_graph()
+                .playback_graph(&project.node_groups)
                 .map_err(|error| CommandError::invalid_args(format!("节点图错误：{error}")))?;
             let adsr = adsr_settings.map(|settings| AdsrPlan {
                 attack: settings.attack,
@@ -722,6 +722,7 @@ mod tests {
             length_bars: 2,
             loop_start_tick: 0,
             loop_end_tick: 8 * TICKS_PER_QUARTER,
+            node_groups: std::collections::BTreeMap::new(),
             tracks: vec![Track {
                 id: "track-1".to_string(),
                 name: "lead".to_string(),

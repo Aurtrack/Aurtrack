@@ -17,6 +17,7 @@ import {
   transportSeek,
   transportState,
   transportStop,
+  type NodeGroup,
   type Note,
   type Project,
   type ProjectState,
@@ -68,7 +69,7 @@ type Clipboard =
 const MUTATING_COMMANDS = new Set([
   "track.create",
   "track.remove",
-  "track.voice",
+  "group.voice",
   "device.add",
   "device.remove",
   "param.set",
@@ -785,14 +786,18 @@ export class SessionStore {
     });
   }
 
-  async setTrackVoice(
-    trackId: string,
+  get nodeGroups(): Record<string, NodeGroup> {
+    return this.project?.node_groups ?? {};
+  }
+
+  async setGroupVoice(
+    groupId: string,
     voice: {
       nodes: Record<string, unknown>;
       connections: { from: { node: string; port: string }; to: { node: string; port: string } }[];
     },
   ): Promise<unknown> {
-    const result = await this.run("track.voice", { track_id: trackId, voice });
+    const result = await this.run("group.voice", { group_id: groupId, voice });
     await this.refreshProject();
     return result;
   }

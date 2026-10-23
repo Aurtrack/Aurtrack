@@ -30,24 +30,45 @@ instrument.sine -> amp.adsr -> gain -> output
 instrument.silence -> output
 ```
 
-钢琴节点带 `voice` 子图：
+轨道图里的钢琴是一个组节点：
 
 ```json
 {
   "id": "instrument",
-  "kind": "instrument.piano",
-  "params": { "partials": 10, "decay": 1.2 },
-  "voice": {
-    "nodes": {
-      "voice-in": { "id": "voice-in", "kind": "voice.input", "params": {} },
-      "osc": { "id": "osc", "kind": "osc.partials", "params": {} }
-    },
-    "connections": []
+  "kind": "voice.group",
+  "params": {},
+  "group": "piano.voice"
+}
+```
+
+节点组是工程级 datablock，和轨道图平级：
+
+```json
+{
+  "node_groups": {
+    "piano.voice": {
+      "id": "piano.voice",
+      "name": "Piano Voice",
+      "interface": {
+        "inputs": [
+          { "id": "pitch", "name": "Pitch", "type": "float" },
+          { "id": "velocity", "name": "Velocity", "type": "float" },
+          { "id": "gate", "name": "Gate", "type": "gate" }
+        ],
+        "outputs": [
+          { "id": "audio", "name": "Audio", "type": "audio" }
+        ]
+      },
+      "graph": {
+        "nodes": {},
+        "connections": []
+      }
+    }
   }
 }
 ```
 
-Voice 节点类型：`voice.input`、`osc.partials`、`env.percussive`、`noise.burst`、`voice.mix`、`voice.output`。
+组节点只引用组 ID；同一个组可以被多条轨道复用。Voice 节点类型：`group.input`、`osc.partials`、`env.percussive`、`noise.burst`、`voice.mix`、`group.output`。
 
 插件节点必须带 `plugin` 配置：
 

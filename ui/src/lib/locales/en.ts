@@ -165,6 +165,8 @@ export const en: Record<MessageKey, Message> = {
   "graph.resonance": "RES %",
   "graph.sine": "SINE",
   "graph.piano": "PIANO",
+  "graph.group": "PIANO GROUP",
+  "graph.editGroup": "ENTER GROUP",
   "graph.partials": "PARTIALS",
   "graph.decay": "DECAY",
   "graph.brightness": "BRIGHT",

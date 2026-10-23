@@ -33,7 +33,8 @@ use aurtrack_engine::{
     VoiceNodePlan, VoiceOp, VoicePlan, adsr_envelope, midi_to_hz, note_envelope,
 };
 use aurtrack_graph::{
-    Graph, GraphError, Node, NodeId, NodeKind, PORT_IN, PortRef, VoiceGraph, VoiceNodeKind,
+    Graph, GraphError, Node, NodeGroup, NodeId, NodeKind, PORT_IN, PortRef, VoiceGraph,
+    VoiceNodeKind,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -73,6 +74,8 @@ pub struct Project {
     pub loop_start_tick: u64,
     pub loop_end_tick: u64,
     pub tracks: Vec<Track>,
+    #[serde(default)]
+    pub node_groups: BTreeMap<String, NodeGroup>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub master_plugin: Option<MasterPlugin>,
 }
@@ -143,7 +146,7 @@ impl Track {
                     .and_then(|node| node.param("frequency"))
                     .unwrap_or(440.0),
             },
-            Some(NodeKind::InstrumentPiano) => Source::Piano,
+            Some(NodeKind::InstrumentPiano | NodeKind::VoiceGroup) => Source::Piano,
             _ => Source::Silence,
         }
     }
@@ -167,6 +170,7 @@ impl Track {
 
     pub fn playback_graph(
         &self,
+        groups: &BTreeMap<String, NodeGroup>,
     ) -> Result<(Option<f64>, Option<aurtrack_graph::AdsrSettings>, GraphPlan), GraphError> {
         let compiled = self.graph.compile_graph()?;
         let nodes: Vec<GraphNodePlan> = compiled
@@ -193,19 +197,16 @@ impl Track {
         if nodes.len() > aurtrack_engine::MAX_GRAPH_NODES {
             return Err(GraphError::TooManyNodes(nodes.len()));
         }
-        let mut piano = compiled.piano.map(|piano| {
-            aurtrack_engine::PianoPlan::new(
-                piano.partials,
-                piano.decay,
-                piano.brightness,
-                piano.hammer,
-            )
-        });
-        if let Some(piano) = piano.as_mut() {
-            if let Some(voice) = compiled.voice.as_ref() {
-                piano.voice = Some(compile_voice(voice)?);
-            }
-        }
+        let piano = if let Some(group_id) = compiled.group.as_ref() {
+            let group = groups
+                .get(group_id)
+                .ok_or_else(|| GraphError::GroupMissing(group_id.clone()))?;
+            let mut piano = aurtrack_engine::PianoPlan::new(10, 1.2, 0.5, 0.2);
+            piano.voice = Some(compile_voice(&group.graph)?);
+            Some(piano)
+        } else {
+            None
+        };
         Ok((
             compiled.source_frequency,
             compiled.adsr,
@@ -246,7 +247,7 @@ fn compile_voice(voice: &VoiceGraph) -> Result<VoicePlan, GraphError> {
                     .ok_or(GraphError::VoiceUnknownNode)
             })
             .collect::<Result<Vec<_>, _>>()?;
-        if node.kind == VoiceNodeKind::VoiceInput {
+        if node.kind == VoiceNodeKind::GroupInput {
             for (port, op) in [
                 ("pitch", VoiceOp::Pitch),
                 ("velocity", VoiceOp::Velocity),
@@ -279,14 +280,14 @@ fn compile_voice(voice: &VoiceGraph) -> Result<VoicePlan, GraphError> {
                 duration: param("duration", 0.008),
             },
             VoiceNodeKind::Mix => VoiceOp::Mix,
-            VoiceNodeKind::VoiceOutput => {
+            VoiceNodeKind::GroupOutput => {
                 output = Some(nodes.len());
                 VoiceOp::Output
             },
             _ => return Err(GraphError::VoiceUnknownNode),
         };
         let index = nodes.len();
-        if node.kind != VoiceNodeKind::VoiceOutput {
+        if node.kind != VoiceNodeKind::GroupOutput {
             indices.insert((id.clone(), "out".to_string()), index);
         }
         nodes.push(VoiceNodePlan::new(op, inputs));
@@ -383,7 +384,7 @@ impl Session {
             "project.master_plugin_off" => self.cmd_master_plugin_off(),
             "track.create" => self.cmd_track_create(&request.args),
             "track.remove" => self.cmd_track_remove(&request.args),
-            "track.voice" => self.cmd_track_voice(&request.args),
+            "group.voice" => self.cmd_group_voice(&request.args),
             "clip.create" => self.cmd_clip_create(&request.args),
             "clip.update" => self.cmd_clip_update(&request.args),
             "clip.remove" => self.cmd_clip_remove(&request.args),
@@ -455,6 +456,7 @@ impl Session {
             loop_start_tick: 0,
             loop_end_tick: 0,
             tracks: Vec::new(),
+            node_groups: BTreeMap::from([("piano.voice".to_string(), NodeGroup::piano_default())]),
             master_plugin: None,
         };
         project.loop_end_tick = project.length_ticks();
@@ -542,7 +544,7 @@ impl Session {
             .sample_rate;
         let (instrument, frequency) = match args.source.as_deref().unwrap_or("silence") {
             "silence" => (NodeKind::InstrumentSilence, None),
-            "piano" => (NodeKind::InstrumentPiano, None),
+            "piano" => (NodeKind::VoiceGroup, None),
             "sine" => {
                 let frequency = args.frequency.unwrap_or(440.0);
                 if !frequency.is_finite() || !(20.0..=20_000.0).contains(&frequency) {
@@ -561,7 +563,11 @@ impl Session {
                 )));
             },
         };
-        let mut graph = Graph::empty_track(instrument).map_err(graph_error)?;
+        let mut graph = if instrument == NodeKind::VoiceGroup {
+            Graph::group_track("piano.voice").map_err(graph_error)?
+        } else {
+            Graph::empty_track(instrument).map_err(graph_error)?
+        };
         if let Some(frequency) = frequency {
             graph
                 .set_param(
@@ -927,30 +933,27 @@ impl Session {
         .with_undo(token))
     }
 
-    fn cmd_track_voice(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+    fn cmd_group_voice(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct VoiceArgs {
-            track_id: String,
+            group_id: String,
             voice: VoiceGraph,
         }
         let args: VoiceArgs = parse_args(args)?;
-        let token = self.snapshot("track.voice");
+        let token = self.snapshot("group.voice");
         let project = self
             .project
             .as_mut()
             .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
-        let track = project
-            .tracks
-            .iter_mut()
-            .find(|track| track.id == args.track_id)
-            .ok_or_else(|| CommandError::not_found(format!("找不到轨道：{}", args.track_id)))?;
-        track
-            .graph
-            .set_piano_voice(args.voice)
-            .map_err(graph_error)?;
+        let group = project
+            .node_groups
+            .get_mut(&args.group_id)
+            .ok_or_else(|| CommandError::not_found(format!("找不到节点组：{}", args.group_id)))?;
+        args.voice.validate().map_err(graph_error)?;
+        group.graph = args.voice;
         Ok(CommandResponse::ok(json!({
-            "track_id": args.track_id,
+            "group_id": args.group_id,
             "voice": "updated",
         }))
         .with_undo(token))
@@ -2286,6 +2289,7 @@ fn project_view(project: &Project) -> Value {
         "loop_start_tick": project.loop_start_tick,
         "loop_end_tick": project.loop_end_tick,
         "master_plugin": project.master_plugin,
+        "node_groups": &project.node_groups,
         "tracks": project.tracks.iter().map(|track| json!({
             "id": &track.id,
             "name": &track.name,
@@ -2681,8 +2685,9 @@ fn render_project(
     let frames = (duration_seconds * sample_rate_f64).round() as usize;
     let mut mix = vec![0.0_f32; frames];
     for track in &project.tracks {
-        let (source_frequency, adsr_settings, graph) =
-            track.playback_graph().map_err(graph_error)?;
+        let (source_frequency, adsr_settings, graph) = track
+            .playback_graph(&project.node_groups)
+            .map_err(graph_error)?;
         let adsr = adsr_settings.map(|settings| AdsrPlan {
             attack: settings.attack,
             decay: settings.decay,

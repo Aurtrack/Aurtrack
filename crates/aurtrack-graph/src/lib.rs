@@ -72,6 +72,8 @@ pub enum NodeKind {
     InstrumentSilence,
     #[serde(rename = "instrument.piano")]
     InstrumentPiano,
+    #[serde(rename = "voice.group")]
+    VoiceGroup,
     #[serde(rename = "amp.adsr")]
     AmpAdsr,
     #[serde(rename = "filter.lowpass")]
@@ -92,6 +94,7 @@ impl NodeKind {
             Self::InstrumentSine => "instrument.sine",
             Self::InstrumentSilence => "instrument.silence",
             Self::InstrumentPiano => "instrument.piano",
+            Self::VoiceGroup => "voice.group",
             Self::AmpAdsr => "amp.adsr",
             Self::FilterLowpass => "filter.lowpass",
             Self::Gain => "gain",
@@ -104,7 +107,10 @@ impl NodeKind {
     pub const fn is_instrument(self) -> bool {
         matches!(
             self,
-            Self::InstrumentSine | Self::InstrumentSilence | Self::InstrumentPiano
+            Self::InstrumentSine
+                | Self::InstrumentSilence
+                | Self::InstrumentPiano
+                | Self::VoiceGroup
         )
     }
 
@@ -117,7 +123,10 @@ impl NodeKind {
 
     pub const fn inputs(self) -> &'static [&'static str] {
         match self {
-            Self::InstrumentSine | Self::InstrumentSilence | Self::InstrumentPiano => &[],
+            Self::InstrumentSine
+            | Self::InstrumentSilence
+            | Self::InstrumentPiano
+            | Self::VoiceGroup => &[],
             Self::Mix => &["in1", "in2"],
             Self::AmpAdsr | Self::FilterLowpass | Self::Gain | Self::Plugin | Self::Output => {
                 &[PORT_IN]
@@ -131,6 +140,7 @@ impl NodeKind {
             Self::InstrumentSine
             | Self::InstrumentSilence
             | Self::InstrumentPiano
+            | Self::VoiceGroup
             | Self::AmpAdsr
             | Self::FilterLowpass
             | Self::Gain
@@ -151,7 +161,11 @@ impl NodeKind {
         match self {
             Self::InstrumentSine => &SINE_PARAMS,
             Self::InstrumentPiano => &PIANO_PARAMS,
-            Self::InstrumentSilence | Self::Mix | Self::Plugin | Self::Output => &[],
+            Self::InstrumentSilence
+            | Self::VoiceGroup
+            | Self::Mix
+            | Self::Plugin
+            | Self::Output => &[],
             Self::AmpAdsr => &ADSR_PARAMS,
             Self::FilterLowpass => &FILTER_PARAMS,
             Self::Gain => &GAIN_PARAMS,
@@ -272,7 +286,99 @@ pub struct Node {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     plugin: Option<PluginConfig>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    voice: Option<VoiceGraph>,
+    group: Option<String>,
+}
+
+/// 工程级节点组。组树和接口分开存放，组节点只引用 `id`。
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NodeGroup {
+    pub id: String,
+    pub name: String,
+    pub interface: NodeGroupInterface,
+    pub graph: VoiceGraph,
+}
+
+impl NodeGroup {
+    pub fn new(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        interface: NodeGroupInterface,
+        graph: VoiceGraph,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+            interface,
+            graph,
+        }
+    }
+
+    pub fn piano_default() -> Self {
+        Self {
+            id: "piano.voice".to_string(),
+            name: "Piano Voice".to_string(),
+            interface: NodeGroupInterface::piano(),
+            graph: VoiceGraph::piano_default(),
+        }
+    }
+}
+
+/// 节点组对外暴露的接口。
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NodeGroupInterface {
+    pub inputs: Vec<NodeGroupSocket>,
+    pub outputs: Vec<NodeGroupSocket>,
+}
+
+impl NodeGroupInterface {
+    pub fn piano() -> Self {
+        Self {
+            inputs: vec![
+                NodeGroupSocket::new("pitch", "Pitch", NodeGroupSocketType::Float),
+                NodeGroupSocket::new("velocity", "Velocity", NodeGroupSocketType::Float),
+                NodeGroupSocket::new("gate", "Gate", NodeGroupSocketType::Gate),
+            ],
+            outputs: vec![NodeGroupSocket::new(
+                "audio",
+                "Audio",
+                NodeGroupSocketType::Audio,
+            )],
+        }
+    }
+}
+
+/// 组接口上的一个 socket。
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct NodeGroupSocket {
+    pub id: String,
+    pub name: String,
+    #[serde(rename = "type")]
+    pub ty: NodeGroupSocketType,
+}
+
+impl NodeGroupSocket {
+    pub fn new(id: &str, name: &str, ty: NodeGroupSocketType) -> Self {
+        Self {
+            id: id.to_string(),
+            name: name.to_string(),
+            ty,
+        }
+    }
+}
+
+/// 组接口 socket 类型。
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum NodeGroupSocketType {
+    #[serde(rename = "float")]
+    Float,
+    #[serde(rename = "gate")]
+    Gate,
+    #[serde(rename = "audio")]
+    Audio,
 }
 
 /// 钢琴内部的 Voice 子图。每条连接表示一个音频或控制值。
@@ -291,7 +397,7 @@ impl Default for VoiceGraph {
 
 impl VoiceGraph {
     pub fn piano_default() -> Self {
-        let input = VoiceNode::new(NodeId::fixed("voice-in"), VoiceNodeKind::VoiceInput);
+        let input = VoiceNode::new(NodeId::fixed("voice-in"), VoiceNodeKind::GroupInput);
         let mut osc = VoiceNode::new(NodeId::fixed("osc"), VoiceNodeKind::OscPartials);
         osc.params.insert("partials".to_string(), 10.0);
         osc.params.insert("inharmonicity".to_string(), 0.0004);
@@ -304,7 +410,7 @@ impl VoiceGraph {
         noise.params.insert("level".to_string(), 0.2);
         noise.params.insert("duration".to_string(), 0.008);
         let mix = VoiceNode::new(NodeId::fixed("mix"), VoiceNodeKind::Mix);
-        let output = VoiceNode::new(NodeId::fixed("out"), VoiceNodeKind::VoiceOutput);
+        let output = VoiceNode::new(NodeId::fixed("out"), VoiceNodeKind::GroupOutput);
         let mut nodes = BTreeMap::new();
         for node in [input, osc, env, noise, mix, output] {
             nodes.insert(node.id.clone(), node);
@@ -351,7 +457,7 @@ impl VoiceGraph {
                 ),
                 VoiceConnection::new(
                     PortRef::fixed(NodeId::fixed("mix"), "out"),
-                    PortRef::fixed(NodeId::fixed("out"), "in"),
+                    PortRef::fixed(NodeId::fixed("out"), "audio"),
                 ),
             ],
         }
@@ -364,12 +470,12 @@ impl VoiceGraph {
         let inputs = self
             .nodes
             .values()
-            .filter(|node| node.kind == VoiceNodeKind::VoiceInput)
+            .filter(|node| node.kind == VoiceNodeKind::GroupInput)
             .count();
         let outputs = self
             .nodes
             .values()
-            .filter(|node| node.kind == VoiceNodeKind::VoiceOutput)
+            .filter(|node| node.kind == VoiceNodeKind::GroupOutput)
             .count();
         if inputs != 1 || outputs != 1 {
             return Err(GraphError::VoiceTerminals);
@@ -466,8 +572,8 @@ impl VoiceNode {
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum VoiceNodeKind {
-    #[serde(rename = "voice.input")]
-    VoiceInput,
+    #[serde(rename = "group.input")]
+    GroupInput,
     #[serde(rename = "osc.partials")]
     OscPartials,
     #[serde(rename = "env.percussive")]
@@ -476,36 +582,37 @@ pub enum VoiceNodeKind {
     NoiseBurst,
     #[serde(rename = "voice.mix")]
     Mix,
-    #[serde(rename = "voice.output")]
-    VoiceOutput,
+    #[serde(rename = "group.output")]
+    GroupOutput,
 }
 
 impl VoiceNodeKind {
     pub const fn as_str(self) -> &'static str {
         match self {
-            Self::VoiceInput => "voice.input",
+            Self::GroupInput => "group.input",
             Self::OscPartials => "osc.partials",
             Self::EnvPercussive => "env.percussive",
             Self::NoiseBurst => "noise.burst",
             Self::Mix => "voice.mix",
-            Self::VoiceOutput => "voice.output",
+            Self::GroupOutput => "group.output",
         }
     }
 
     pub const fn inputs(self) -> &'static [&'static str] {
         match self {
-            Self::VoiceInput => &[],
+            Self::GroupInput => &[],
             Self::OscPartials => &["pitch", "velocity"],
             Self::NoiseBurst => &["velocity"],
-            Self::EnvPercussive | Self::VoiceOutput => &["in"],
+            Self::EnvPercussive => &["in"],
+            Self::GroupOutput => &["audio"],
             Self::Mix => &["in1", "in2"],
         }
     }
 
     pub const fn outputs(self) -> &'static [&'static str] {
         match self {
-            Self::VoiceInput => &["pitch", "velocity", "gate"],
-            Self::VoiceOutput => &[],
+            Self::GroupInput => &["pitch", "velocity", "gate"],
+            Self::GroupOutput => &[],
             Self::OscPartials | Self::EnvPercussive | Self::NoiseBurst | Self::Mix => &["out"],
         }
     }
@@ -579,7 +686,7 @@ impl Node {
             params: kind.default_params(),
             position: None,
             plugin: None,
-            voice: (kind == NodeKind::InstrumentPiano).then(VoiceGraph::piano_default),
+            group: None,
         }
     }
 
@@ -603,16 +710,19 @@ impl Node {
         self.plugin.as_ref()
     }
 
-    pub fn voice(&self) -> Option<&VoiceGraph> {
-        self.voice.as_ref()
+    pub fn group(&self) -> Option<&str> {
+        self.group.as_deref()
     }
 
-    pub fn set_voice(&mut self, voice: VoiceGraph) -> Result<(), GraphError> {
-        if self.kind != NodeKind::InstrumentPiano {
-            return Err(GraphError::NotPiano(self.kind));
+    pub fn set_group(&mut self, group: impl Into<String>) -> Result<(), GraphError> {
+        if self.kind != NodeKind::VoiceGroup {
+            return Err(GraphError::NotGroup(self.kind));
         }
-        voice.validate()?;
-        self.voice = Some(voice);
+        let group = group.into();
+        if group.trim().is_empty() {
+            return Err(GraphError::EmptyGroupId);
+        }
+        self.group = Some(group);
         Ok(())
     }
 
@@ -644,42 +754,7 @@ impl Node {
     pub fn set_param(&mut self, name: &str, value: f64) -> Result<(), GraphError> {
         self.validate_param(name, value)?;
         self.params.insert(name.to_string(), value);
-        if self.kind == NodeKind::InstrumentPiano {
-            self.sync_voice_param(name, value);
-        }
         Ok(())
-    }
-
-    fn sync_voice_param(&mut self, name: &str, value: f64) {
-        let Some(voice) = self.voice.as_mut() else {
-            return;
-        };
-        match name {
-            "partials" => {
-                if let Some(osc) = voice.nodes.get_mut(&NodeId::fixed("osc")) {
-                    osc.params.insert("partials".to_string(), value);
-                }
-            },
-            "decay" => {
-                if let Some(osc) = voice.nodes.get_mut(&NodeId::fixed("osc")) {
-                    osc.params.insert("decay".to_string(), value);
-                }
-                if let Some(env) = voice.nodes.get_mut(&NodeId::fixed("env")) {
-                    env.params.insert("decay".to_string(), value);
-                }
-            },
-            "brightness" => {
-                if let Some(osc) = voice.nodes.get_mut(&NodeId::fixed("osc")) {
-                    osc.params.insert("brightness".to_string(), value);
-                }
-            },
-            "hammer" => {
-                if let Some(noise) = voice.nodes.get_mut(&NodeId::fixed("noise")) {
-                    noise.params.insert("level".to_string(), value);
-                }
-            },
-            _ => {},
-        }
     }
 
     fn validate(&self) -> Result<(), GraphError> {
@@ -689,11 +764,8 @@ impl Node {
         if self.kind != NodeKind::Plugin && self.plugin.is_some() {
             return Err(GraphError::NotPlugin(self.kind));
         }
-        if self.kind == NodeKind::InstrumentPiano {
-            self.voice
-                .as_ref()
-                .ok_or(GraphError::EmptyVoiceGraph)?
-                .validate()?;
+        if self.kind == NodeKind::VoiceGroup && self.group.is_none() {
+            return Err(GraphError::EmptyGroupId);
         }
         for (name, value) in &self.params {
             self.validate_param(name, *value)?;
@@ -823,8 +895,7 @@ pub struct CompiledGraph {
     pub nodes: Vec<CompiledNode>,
     pub output: usize,
     pub plugin: Option<PluginConfig>,
-    pub piano: Option<PianoSettings>,
-    pub voice: Option<VoiceGraph>,
+    pub group: Option<String>,
 }
 
 /// DAG 中的一个处理节点。
@@ -911,6 +982,12 @@ impl Graph {
         Ok(Self { nodes, connections })
     }
 
+    pub fn group_track(group: &str) -> Result<Self, GraphError> {
+        let mut graph = Self::empty_track(NodeKind::VoiceGroup)?;
+        graph.set_group(group)?;
+        Ok(graph)
+    }
+
     pub fn nodes(&self) -> impl Iterator<Item = &Node> {
         self.nodes.values()
     }
@@ -929,13 +1006,13 @@ impl Graph {
         self.nodes.get(id)
     }
 
-    pub fn set_piano_voice(&mut self, voice: VoiceGraph) -> Result<(), GraphError> {
+    pub fn set_group(&mut self, group: &str) -> Result<(), GraphError> {
         let node = self
             .nodes
             .values_mut()
-            .find(|node| node.kind() == NodeKind::InstrumentPiano)
-            .ok_or(GraphError::NotPiano(NodeKind::InstrumentPiano))?;
-        node.set_voice(voice)
+            .find(|node| node.kind() == NodeKind::VoiceGroup)
+            .ok_or(GraphError::NotGroup(NodeKind::VoiceGroup))?;
+        node.set_group(group)
     }
 
     pub fn connections(&self) -> &[Connection] {
@@ -1314,7 +1391,7 @@ impl Graph {
                 NodeKind::InstrumentSine => {
                     source_frequency = node.param("frequency");
                 },
-                NodeKind::InstrumentSilence | NodeKind::InstrumentPiano => {
+                NodeKind::InstrumentSilence | NodeKind::InstrumentPiano | NodeKind::VoiceGroup => {
                     source_frequency = None;
                 },
                 NodeKind::AmpAdsr => {
@@ -1456,22 +1533,7 @@ impl Graph {
             inputs: Vec::new(),
         }];
         let mut plugin: Option<PluginConfig> = None;
-        let voice = self
-            .nodes
-            .values()
-            .find(|node| node.kind() == NodeKind::InstrumentPiano)
-            .and_then(|node| node.voice().cloned());
-        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-        let piano = self
-            .nodes
-            .values()
-            .find(|node| node.kind() == NodeKind::InstrumentPiano)
-            .map(|node| PianoSettings {
-                partials: (node.param("partials").unwrap_or(10.0).round() as usize).clamp(1, 16),
-                decay: node.param("decay").unwrap_or(1.2),
-                brightness: node.param("brightness").unwrap_or(0.5),
-                hammer: node.param("hammer").unwrap_or(0.2),
-            });
+        let group = instrument.group().map(str::to_string);
         let mut output = 0;
         for id in audio_ids {
             let node = self
@@ -1513,6 +1575,7 @@ impl Graph {
                 NodeKind::InstrumentSine
                 | NodeKind::InstrumentSilence
                 | NodeKind::InstrumentPiano
+                | NodeKind::VoiceGroup
                 | NodeKind::AmpAdsr => {
                     return Err(GraphError::AdsrOrder);
                 },
@@ -1538,8 +1601,7 @@ impl Graph {
             nodes,
             output,
             plugin,
-            piano,
-            voice,
+            group,
         })
     }
 
@@ -1645,6 +1707,12 @@ pub enum GraphError {
     VoiceUnknownPort(String),
     #[error("节点不是钢琴：{0:?}")]
     NotPiano(NodeKind),
+    #[error("节点不是组节点：{0:?}")]
+    NotGroup(NodeKind),
+    #[error("组节点必须引用一个节点组")]
+    EmptyGroupId,
+    #[error("找不到节点组：{0}")]
+    GroupMissing(String),
 }
 
 #[cfg(test)]
@@ -1663,13 +1731,14 @@ mod tests {
     }
 
     #[test]
-    fn piano_node_has_default_voice_graph() {
-        let graph = Graph::empty_track(NodeKind::InstrumentPiano).unwrap();
+    fn piano_group_node_references_voice_group() {
+        let graph = Graph::group_track("piano.voice").unwrap();
         graph.validate().unwrap();
         let compiled = graph.compile_graph().unwrap();
-        let voice = compiled.voice.unwrap();
-        assert_eq!(voice.nodes.len(), 6);
-        assert_eq!(voice.connections.len(), 7);
+        assert_eq!(compiled.group.as_deref(), Some("piano.voice"));
+        let group = NodeGroup::piano_default();
+        assert_eq!(group.interface.inputs.len(), 3);
+        assert_eq!(group.graph.nodes.len(), 6);
     }
 
     #[test]

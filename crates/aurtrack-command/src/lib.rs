@@ -213,13 +213,13 @@ fn track_create_schema() -> Value {
     )
 }
 
-fn track_voice_schema() -> Value {
+fn group_voice_schema() -> Value {
     object_schema(
         json!({
-            "track_id": { "type": "string" },
+            "group_id": { "type": "string" },
             "voice": { "type": "object", "description": "完整 VoiceGraph" }
         }),
-        &["track_id", "voice"],
+        &["group_id", "voice"],
     )
 }
 
@@ -907,10 +907,10 @@ static COMMANDS: [CommandSpec; 54] = [
         input_schema: clip_paste_schema,
     },
     CommandSpec {
-        id: "track.voice",
-        summary: "替换轨道的钢琴 Voice 子图",
+        id: "group.voice",
+        summary: "替换节点组的 Voice 图",
         undo: UndoKind::Snapshot,
-        input_schema: track_voice_schema,
+        input_schema: group_voice_schema,
     },
     CommandSpec {
         id: "device.add",

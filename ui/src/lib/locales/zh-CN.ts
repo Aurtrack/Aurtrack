@@ -161,6 +161,8 @@ export const zhCN = {
   "graph.sine": "SINE",
   "graph.silence": "SILENCE",
   "graph.piano": "PIANO",
+  "graph.group": "PIANO GROUP",
+  "graph.editGroup": "进入节点组",
   "graph.partials": "泛音数",
   "graph.decay": "衰减",
   "graph.brightness": "亮度",

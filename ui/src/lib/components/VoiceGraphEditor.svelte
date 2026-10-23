@@ -5,12 +5,12 @@
   import { session } from "../session.svelte";
 
   interface Props {
-    trackId: string;
+    groupId: string;
     voice: VoiceGraph;
     onClose: () => void;
   }
 
-  let { trackId, voice: initialVoice, onClose }: Props = $props();
+  let { groupId, voice: initialVoice, onClose }: Props = $props();
 
   const NODE_WIDTH = 190;
   const NODE_HEIGHT = 92;
@@ -27,21 +27,21 @@
   type Wire = { node: string; port: string; x: number; y: number };
 
   const kindLabels: Record<string, string> = {
-    "voice.input": "VOICE INPUT",
+    "group.input": "GROUP INPUT",
     "osc.partials": "OSC PARTIALS",
     "env.percussive": "ENV PERCUSSIVE",
     "noise.burst": "NOISE BURST",
     "voice.mix": "VOICE MIX",
-    "voice.output": "VOICE OUTPUT",
+    "group.output": "GROUP OUTPUT",
   };
 
   const inputPorts: Record<string, string[]> = {
     "env.percussive": ["in"],
     "voice.mix": ["in1", "in2"],
-    "voice.output": ["in"],
+    "group.output": ["audio"],
   };
   const outputPorts: Record<string, string[]> = {
-    "voice.input": ["pitch", "velocity", "gate"],
+    "group.input": ["pitch", "velocity", "gate"],
     "osc.partials": ["out"],
     "env.percussive": ["out"],
     "noise.burst": ["out"],
@@ -198,7 +198,7 @@
     saving = true;
     error = "";
     try {
-      await session.setTrackVoice(trackId, {
+      await session.setGroupVoice(groupId, {
         nodes: voice.nodes,
         connections: voice.connections,
       });
@@ -257,7 +257,7 @@
       <button class="ghost small" onclick={() => addNode("voice.mix")}>
         + {t("voice.mix")}
       </button>
-      <button class="ghost small" onclick={() => addNode("voice.output")}>
+      <button class="ghost small" onclick={() => addNode("group.output")}>
         + {t("voice.output")}
       </button>
       <button

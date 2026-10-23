@@ -52,7 +52,7 @@ export type GraphNode = {
   params: Record<string, number>;
   position?: [number, number];
   plugin?: { path: string; id: string; state?: string };
-  voice?: VoiceGraph;
+  group?: string;
 };
 
 export type VoiceNode = {
@@ -70,6 +70,22 @@ export type VoiceConnection = {
 export type VoiceGraph = {
   nodes: Record<string, VoiceNode>;
   connections: VoiceConnection[];
+};
+
+export type NodeGroupSocket = {
+  id: string;
+  name: string;
+  type: "float" | "gate" | "audio";
+};
+
+export type NodeGroup = {
+  id: string;
+  name: string;
+  interface: {
+    inputs: NodeGroupSocket[];
+    outputs: NodeGroupSocket[];
+  };
+  graph: VoiceGraph;
 };
 
 export type GraphConnection = {
@@ -104,6 +120,7 @@ export type Project = {
   loop_start_tick: number;
   loop_end_tick: number;
   tracks: Track[];
+  node_groups: Record<string, NodeGroup>;
 };
 
 export type ProjectState = {
