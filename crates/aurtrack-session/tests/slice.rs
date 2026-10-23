@@ -1060,3 +1060,39 @@ fn master_plugin_is_saved_and_restored_with_project() {
     let cleared = run(&mut session, "project.state", json!({}));
     assert!(cleared["project"]["master_plugin"].is_null());
 }
+
+#[test]
+fn plugin_node_reaches_engine_plan() {
+    let mut session = Session::default();
+    run(
+        &mut session,
+        "project.create",
+        json!({ "name": "plugin-node" }),
+    );
+    let track = run(
+        &mut session,
+        "track.create",
+        json!({ "name": "lead", "source": "sine" }),
+    );
+    let track_id = track["track_id"].as_str().unwrap().to_string();
+    run(
+        &mut session,
+        "device.add",
+        json!({
+            "track_id": track_id,
+            "kind": "plugin",
+            "plugin_path": "D:/Plugins/effect.clap",
+            "plugin_id": "com.example.effect"
+        }),
+    );
+    let project = run(&mut session, "project.state", json!({}));
+    let nodes = &project["project"]["tracks"][0]["graph"]["nodes"];
+    assert!(
+        nodes.as_object().unwrap().values().any(|node| {
+            node["kind"] == "plugin" && node["plugin"]["id"] == "com.example.effect"
+        })
+    );
+    let track = session.project().unwrap().tracks[0].clone();
+    let (_, _, plan) = track.playback_graph().unwrap();
+    assert_eq!(plan.plugin.as_ref().unwrap().id, "com.example.effect");
+}

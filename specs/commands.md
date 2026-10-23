@@ -81,9 +81,12 @@
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 | --- | --- | --- | --- | --- |
 | `track_id` | string | 是 | | 目标轨道 |
-| `kind` | string | 是 | | `gain`、`amp.adsr`、`filter.lowpass` 或 `mix` |
+| `kind` | string | 是 | | `gain`、`amp.adsr`、`filter.lowpass`、`mix` 或 `plugin` |
 | `params` | object | 否 | | `gain` 范围 0 到 4；ADSR / 低通参数见下表 |
 | `position` | number[2] | 否 | | 节点画布坐标，仅 `node.add` 使用 |
+| `plugin_path` | string | `plugin` 时必填 | | CLAP 动态库路径 |
+| `plugin_id` | string | `plugin` 时必填 | | CLAP 描述符 ID |
+| `plugin_state` | string | 否 | | base64 状态 blob |
 
 返回：
 

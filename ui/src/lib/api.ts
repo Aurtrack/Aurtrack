@@ -50,6 +50,7 @@ export type GraphNode = {
   kind: string;
   params: Record<string, number>;
   position?: [number, number];
+  plugin?: { path: string; id: string; state?: string };
 };
 
 export type GraphConnection = {

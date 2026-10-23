@@ -78,6 +78,8 @@ pub enum NodeKind {
     Gain,
     #[serde(rename = "mix")]
     Mix,
+    #[serde(rename = "plugin")]
+    Plugin,
     #[serde(rename = "output")]
     Output,
 }
@@ -91,6 +93,7 @@ impl NodeKind {
             Self::FilterLowpass => "filter.lowpass",
             Self::Gain => "gain",
             Self::Mix => "mix",
+            Self::Plugin => "plugin",
             Self::Output => "output",
         }
     }
@@ -102,7 +105,7 @@ impl NodeKind {
     pub const fn is_device(self) -> bool {
         matches!(
             self,
-            Self::AmpAdsr | Self::FilterLowpass | Self::Gain | Self::Mix
+            Self::AmpAdsr | Self::FilterLowpass | Self::Gain | Self::Mix | Self::Plugin
         )
     }
 
@@ -110,7 +113,9 @@ impl NodeKind {
         match self {
             Self::InstrumentSine | Self::InstrumentSilence => &[],
             Self::Mix => &["in1", "in2"],
-            Self::AmpAdsr | Self::FilterLowpass | Self::Gain | Self::Output => &[PORT_IN],
+            Self::AmpAdsr | Self::FilterLowpass | Self::Gain | Self::Plugin | Self::Output => {
+                &[PORT_IN]
+            },
         }
     }
 
@@ -122,7 +127,8 @@ impl NodeKind {
             | Self::AmpAdsr
             | Self::FilterLowpass
             | Self::Gain
-            | Self::Mix => &[PORT_OUT],
+            | Self::Mix
+            | Self::Plugin => &[PORT_OUT],
         }
     }
 
@@ -137,7 +143,7 @@ impl NodeKind {
     pub fn param_specs(self) -> &'static [ParamSpec] {
         match self {
             Self::InstrumentSine => &SINE_PARAMS,
-            Self::InstrumentSilence | Self::Mix | Self::Output => &[],
+            Self::InstrumentSilence | Self::Mix | Self::Plugin | Self::Output => &[],
             Self::AmpAdsr => &ADSR_PARAMS,
             Self::FilterLowpass => &FILTER_PARAMS,
             Self::Gain => &GAIN_PARAMS,
@@ -228,6 +234,24 @@ pub struct Node {
     params: BTreeMap<String, f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     position: Option<[f64; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    plugin: Option<PluginConfig>,
+}
+
+/// 插件节点引用的 CLAP 插件和可选状态。
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PluginConfig {
+    pub path: String,
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
+}
+
+impl PluginConfig {
+    pub fn new(path: String, id: String, state: Option<String>) -> Self {
+        Self { path, id, state }
+    }
 }
 
 impl Node {
@@ -237,6 +261,7 @@ impl Node {
             kind,
             params: kind.default_params(),
             position: None,
+            plugin: None,
         }
     }
 
@@ -254,6 +279,23 @@ impl Node {
 
     pub fn position(&self) -> Option<[f64; 2]> {
         self.position
+    }
+
+    pub fn plugin(&self) -> Option<&PluginConfig> {
+        self.plugin.as_ref()
+    }
+
+    pub fn set_plugin(&mut self, plugin: Option<PluginConfig>) -> Result<(), GraphError> {
+        if self.kind != NodeKind::Plugin {
+            return Err(GraphError::NotPlugin(self.kind));
+        }
+        if let Some(plugin) = &plugin {
+            if plugin.path.trim().is_empty() || plugin.id.trim().is_empty() {
+                return Err(GraphError::InvalidPlugin);
+            }
+        }
+        self.plugin = plugin;
+        Ok(())
     }
 
     pub fn set_position(&mut self, x: f64, y: f64) -> Result<(), GraphError> {
@@ -275,6 +317,12 @@ impl Node {
     }
 
     fn validate(&self) -> Result<(), GraphError> {
+        if self.kind == NodeKind::Plugin && self.plugin.is_none() {
+            return Err(GraphError::InvalidPlugin);
+        }
+        if self.kind != NodeKind::Plugin && self.plugin.is_some() {
+            return Err(GraphError::NotPlugin(self.kind));
+        }
         for (name, value) in &self.params {
             self.validate_param(name, *value)?;
         }
@@ -392,6 +440,7 @@ pub struct CompiledGraph {
     pub adsr: Option<AdsrSettings>,
     pub nodes: Vec<CompiledNode>,
     pub output: usize,
+    pub plugin: Option<PluginConfig>,
 }
 
 /// DAG 中的一个处理节点。
@@ -410,7 +459,14 @@ pub enum CompiledOp {
     Filter(FilterSettings),
     Gain(f64),
     Mix,
+    Plugin,
     Output,
+}
+
+impl CompiledOp {
+    pub const fn is_plugin(&self) -> bool {
+        matches!(self, Self::Plugin)
+    }
 }
 
 /// 节点、端口和连接。
@@ -886,6 +942,7 @@ impl Graph {
                     gain *= node.param("gain").unwrap_or(1.0);
                 },
                 NodeKind::Mix => return Err(GraphError::NotLinear),
+                NodeKind::Plugin => {},
                 NodeKind::Output => break,
             }
             let next = self
@@ -1005,6 +1062,7 @@ impl Graph {
             op: CompiledOp::Voice,
             inputs: Vec::new(),
         }];
+        let mut plugin: Option<PluginConfig> = None;
         let mut output = 0;
         for id in audio_ids {
             let node = self
@@ -1033,6 +1091,15 @@ impl Graph {
                 }),
                 NodeKind::Gain => CompiledOp::Gain(node.param("gain").unwrap_or(1.0)),
                 NodeKind::Mix => CompiledOp::Mix,
+                NodeKind::Plugin => {
+                    if let Some(config) = node.plugin() {
+                        if plugin.is_some() {
+                            return Err(GraphError::MultiplePlugins);
+                        }
+                        plugin = Some(config.clone());
+                    }
+                    CompiledOp::Plugin
+                },
                 NodeKind::Output => CompiledOp::Output,
                 NodeKind::InstrumentSine | NodeKind::InstrumentSilence | NodeKind::AmpAdsr => {
                     return Err(GraphError::AdsrOrder);
@@ -1058,6 +1125,7 @@ impl Graph {
             adsr,
             nodes,
             output,
+            plugin,
         })
     }
 
@@ -1147,6 +1215,12 @@ pub enum GraphError {
     NotInstrument(NodeKind),
     #[error("节点不是设备：{0:?}")]
     NotDevice(NodeKind),
+    #[error("节点不是插件节点：{0:?}")]
+    NotPlugin(NodeKind),
+    #[error("插件路径和 ID 不能为空")]
+    InvalidPlugin,
+    #[error("一个轨道最多只能有一个插件节点")]
+    MultiplePlugins,
 }
 
 #[cfg(test)]
@@ -1162,6 +1236,42 @@ mod tests {
         assert!((compiled.gain - 1.0).abs() < 1e-9);
         assert!((compiled.adsr.unwrap().sustain - 0.75).abs() < 1e-9);
         assert_eq!(graph.topological_order().unwrap().len(), 4);
+    }
+
+    #[test]
+    fn plugin_node_compiles_with_config() {
+        let mut graph = Graph::empty_track(NodeKind::InstrumentSine).unwrap();
+        let instrument = NodeId::fixed("instrument");
+        let output = NodeId::fixed("output");
+        graph
+            .disconnect(
+                &PortRef::fixed(instrument.clone(), PORT_OUT),
+                &PortRef::fixed(output.clone(), PORT_IN),
+            )
+            .unwrap();
+        let mut plugin = Node::new(NodeId::fixed("plugin"), NodeKind::Plugin);
+        plugin
+            .set_plugin(Some(PluginConfig::new(
+                "D:/Plugins/effect.clap".to_string(),
+                "com.example.effect".to_string(),
+                None,
+            )))
+            .unwrap();
+        graph.add_node(plugin).unwrap();
+        graph
+            .connect(
+                PortRef::fixed(instrument, PORT_OUT),
+                PortRef::fixed(NodeId::fixed("plugin"), PORT_IN),
+            )
+            .unwrap();
+        graph
+            .connect(
+                PortRef::fixed(NodeId::fixed("plugin"), PORT_OUT),
+                PortRef::fixed(output, PORT_IN),
+            )
+            .unwrap();
+        let compiled = graph.compile_graph().unwrap();
+        assert_eq!(compiled.plugin.unwrap().id, "com.example.effect");
     }
 
     #[test]

@@ -772,6 +772,18 @@ export class SessionStore {
     return this.run("plugin.inspect", { path, id });
   }
 
+  async addPluginNode(path: string, id: string): Promise<unknown> {
+    if (!this.selectedTrackId) {
+      throw new Error("先选择一条轨道");
+    }
+    return this.run("device.add", {
+      track_id: this.selectedTrackId,
+      kind: "plugin",
+      plugin_path: path,
+      plugin_id: id,
+    });
+  }
+
   async setMasterPlugin(path: string, id: string): Promise<unknown> {
     return this.run("plugin.master", { path, id });
   }

@@ -1,4 +1,4 @@
-# 节点图规范 v0.4
+# 节点图规范 v0.5
 
 这份文档定义 `aurtrack-graph` 的 DAG 节点图。已接入工程格式 v4；支持 fan-out、`mix` 和自由连线。
 
@@ -14,6 +14,7 @@
 | `filter.lowpass` | `in` | `out` | `cutoff` 20–20000 Hz，`resonance` 0–0.95 |
 | `gain` | `in` | `out` | `gain` 0–4，默认 1 |
 | `mix` | `in1`, `in2` | `out` | 无；两个输入相加 |
+| `plugin` | `in` | `out` | 无；`plugin` 字段保存 CLAP 路径、ID 和可选 state |
 | `output` | `in` | 无 | 无 |
 
 默认轨道链：
@@ -27,6 +28,23 @@ instrument.sine -> amp.adsr -> gain -> output
 ```text
 instrument.silence -> output
 ```
+
+插件节点必须带 `plugin` 配置：
+
+```json
+{
+  "id": "device-1",
+  "kind": "plugin",
+  "params": {},
+  "plugin": {
+    "path": "D:/Plugins/effect.clap",
+    "id": "com.example.effect",
+    "state": "AAECAwQ="
+  }
+}
+```
+
+一个轨道最多一个插件节点；实时播放时按轨道分块处理，离线渲染仍走干声直通。
 
 低通默认值：`cutoff = 1200`、`resonance = 0.2`。
 

@@ -105,7 +105,7 @@ impl Drop for AudioHandle {
 /// 这里让线程持有它，主线程只拿元数据。丢弃句柄会唤醒线程并释放音频流，
 /// 避免切换设备或重开输出后留下旧流。
 pub fn spawn(playback: Arc<Playback>) -> Result<AudioHandle, AudioError> {
-    spawn_with_master(playback, None)
+    spawn_with_processors(playback, None, Vec::new())
 }
 
 /// 打开音频设备，并在主输出后挂一个实时块处理器。
@@ -113,25 +113,36 @@ pub fn spawn_with_master(
     playback: Arc<Playback>,
     master: Option<Box<dyn BlockProcessor>>,
 ) -> Result<AudioHandle, AudioError> {
+    spawn_with_processors(playback, master, Vec::new())
+}
+
+/// 打开音频设备，先按轨处理，再经过主输出处理器。
+pub fn spawn_with_processors(
+    playback: Arc<Playback>,
+    master: Option<Box<dyn BlockProcessor>>,
+    tracks: Vec<Box<dyn BlockProcessor>>,
+) -> Result<AudioHandle, AudioError> {
     let (sender, receiver) = std::sync::mpsc::channel();
     let (stop, stop_signal) = std::sync::mpsc::channel();
     let healthy = Arc::new(AtomicBool::new(true));
     let stream_health = Arc::clone(&healthy);
     let thread = std::thread::Builder::new()
         .name("aurtrack-audio".to_string())
-        .spawn(move || match start(playback, master, &stream_health) {
-            Ok(output) => {
-                let metadata = (output.sample_rate(), output.device_name().to_string());
-                if sender.send(Ok(metadata)).is_err() {
-                    return;
-                }
-                let _ = stop_signal.recv();
-                drop(output);
+        .spawn(
+            move || match start(playback, master, tracks, &stream_health) {
+                Ok(output) => {
+                    let metadata = (output.sample_rate(), output.device_name().to_string());
+                    if sender.send(Ok(metadata)).is_err() {
+                        return;
+                    }
+                    let _ = stop_signal.recv();
+                    drop(output);
+                },
+                Err(error) => {
+                    let _ = sender.send(Err(error));
+                },
             },
-            Err(error) => {
-                let _ = sender.send(Err(error));
-            },
-        })
+        )
         .map_err(|error| AudioError::Build(error.to_string()))?;
 
     match receiver.recv() {
@@ -167,6 +178,7 @@ impl AudioOutput {
 fn start(
     playback: Arc<Playback>,
     master: Option<Box<dyn BlockProcessor>>,
+    tracks: Vec<Box<dyn BlockProcessor>>,
     healthy: &Arc<AtomicBool>,
 ) -> Result<AudioOutput, AudioError> {
     let host = cpal::default_host();
@@ -185,9 +197,15 @@ fn start(
     };
 
     let stream = match sample_format {
-        SampleFormat::F32 => build::<f32>(&device, &config, playback, master, channels, healthy)?,
-        SampleFormat::I16 => build::<i16>(&device, &config, playback, master, channels, healthy)?,
-        SampleFormat::U16 => build::<u16>(&device, &config, playback, master, channels, healthy)?,
+        SampleFormat::F32 => build::<f32>(
+            &device, &config, playback, master, tracks, channels, healthy,
+        )?,
+        SampleFormat::I16 => build::<i16>(
+            &device, &config, playback, master, tracks, channels, healthy,
+        )?,
+        SampleFormat::U16 => build::<u16>(
+            &device, &config, playback, master, tracks, channels, healthy,
+        )?,
         other => return Err(AudioError::UnsupportedFormat(other)),
     };
 
@@ -207,6 +225,7 @@ fn build<T>(
     config: &cpal::StreamConfig,
     playback: Arc<Playback>,
     mut master: Option<Box<dyn BlockProcessor>>,
+    mut tracks: Vec<Box<dyn BlockProcessor>>,
     channels: usize,
     healthy: &Arc<AtomicBool>,
 ) -> Result<Stream, AudioError>
@@ -220,7 +239,13 @@ where
     let mut right = vec![0.0_f32; 8192];
     let mut output_left = vec![0.0_f32; 8192];
     let mut output_right = vec![0.0_f32; 8192];
+    let track_count = tracks.len();
+    let mut stems = vec![0.0_f32; 8192 * track_count];
+    let mut mix = vec![0.0_f32; 8192];
     if let Some(processor) = master.as_mut() {
+        let _ = processor.prepare(config.sample_rate.0, scratch.len());
+    }
+    for processor in &mut tracks {
         let _ = processor.prepare(config.sample_rate.0, scratch.len());
     }
     let stream = device
@@ -231,7 +256,42 @@ where
                 let mut offset = 0;
                 while offset < frames {
                     let chunk = (frames - offset).min(scratch.len());
-                    playback.render(&mut scratch[..chunk]);
+                    if track_count == 0 {
+                        playback.render(&mut scratch[..chunk]);
+                    } else {
+                        playback.render_stems(
+                            &mut stems[..chunk * track_count],
+                            chunk,
+                            track_count,
+                        );
+                        mix[..chunk].fill(0.0);
+                        for (track_index, processor) in tracks.iter_mut().enumerate() {
+                            let start = track_index * chunk;
+                            let stem = &stems[start..start + chunk];
+                            left[..chunk].copy_from_slice(stem);
+                            right[..chunk].copy_from_slice(stem);
+                            output_left[..chunk].fill(0.0);
+                            output_right[..chunk].fill(0.0);
+                            if processor
+                                .process(
+                                    &left[..chunk],
+                                    &right[..chunk],
+                                    &mut output_left[..chunk],
+                                    &mut output_right[..chunk],
+                                )
+                                .is_ok()
+                            {
+                                for index in 0..chunk {
+                                    mix[index] += (output_left[index] + output_right[index]) * 0.5;
+                                }
+                            } else {
+                                for index in 0..chunk {
+                                    mix[index] += stem[index];
+                                }
+                            }
+                        }
+                        scratch[..chunk].copy_from_slice(&mix[..chunk]);
+                    }
                     if let Some(processor) = master.as_mut() {
                         left[..chunk].copy_from_slice(&scratch[..chunk]);
                         right[..chunk].copy_from_slice(&scratch[..chunk]);

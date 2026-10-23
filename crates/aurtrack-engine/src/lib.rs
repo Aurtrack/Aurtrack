@@ -42,6 +42,22 @@ pub struct TrackPlan {
     pub filters: Vec<FilterPlan>,
     pub graph: Option<GraphPlan>,
     pub notes: Vec<NotePlan>,
+    pub plugin: Option<PluginPlan>,
+}
+
+/// 轨道插件引用；实际处理器由宿主线程持有。
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PluginPlan {
+    pub path: String,
+    pub id: String,
+    pub state: Option<String>,
+}
+
+impl PluginPlan {
+    pub fn new(path: String, id: String, state: Option<String>) -> Self {
+        Self { path, id, state }
+    }
 }
 
 /// 宿主音频处理器的内部契约。
@@ -169,6 +185,7 @@ pub enum GraphOp {
     Filter(FilterPlan),
     Gain(f64),
     Mix,
+    Plugin,
     Output,
 }
 
@@ -177,6 +194,7 @@ pub enum GraphOp {
 pub struct GraphPlan {
     pub nodes: Vec<GraphNodePlan>,
     pub output: usize,
+    pub plugin: Option<PluginPlan>,
 }
 
 impl GraphPlan {
@@ -196,6 +214,7 @@ impl GraphPlan {
                     node.inputs.first().map_or(0.0, |input| values[*input]) * gain
                 },
                 GraphOp::Mix => node.inputs.iter().map(|input| values[*input]).sum(),
+                GraphOp::Plugin => node.inputs.first().map_or(0.0, |input| values[*input]),
                 GraphOp::Output => node.inputs.first().map_or(0.0, |input| values[*input]),
             };
             values[index] = value;
@@ -540,6 +559,134 @@ impl Playback {
         }
     }
 
+    /// 分轨块渲染：输出按轨道优先排列，`stems[track * frames + frame]`。
+    ///
+    /// 音频回调在每轨插件处理后再混音。轨道数超过计划时，多出的槽保持静音。
+    pub fn render_stems(&self, stems: &mut [f32], frames: usize, track_count: usize) {
+        let needed = frames.saturating_mul(track_count);
+        if needed == 0 || stems.len() < needed {
+            return;
+        }
+        if !self.playing.load(Ordering::Acquire) {
+            stems[..needed].fill(0.0);
+            return;
+        }
+        let plan = self.plan.load();
+        let sample_rate = f64::from(plan.sample_rate).max(1.0);
+        let loop_start_frames = (plan.loop_start_seconds * sample_rate).round() as u64;
+        let loop_end_frames = (plan.loop_seconds * sample_rate)
+            .round()
+            .max(loop_start_frames.saturating_add(1) as f64) as u64;
+        let fade_frames = (DECLICK_FADE_SECONDS * sample_rate).round().max(1.0) as u64;
+        let loop_fade = if loop_end_frames.saturating_sub(loop_start_frames) > fade_frames * 2 {
+            fade_frames
+        } else {
+            0
+        };
+        let loop_advance_start = loop_start_frames + loop_fade;
+        let master_gain = f64::from_bits(self.master_gain.load(Ordering::Relaxed));
+        let stop_requested = self.stop_requested.load(Ordering::Acquire);
+        let target_gain = if stop_requested { 0.0 } else { 1.0 };
+        let gain_step = 1.0 / fade_frames as f64;
+        let mut gain = f64::from_bits(self.transport_gain.load(Ordering::Relaxed));
+        let mut position = self.position.load(Ordering::Relaxed);
+        let mut stage = self.seek_stage.load(Ordering::Acquire);
+        let mut target = if stage == FADE_IN {
+            self.fade_target.load(Ordering::Acquire)
+        } else {
+            self.seek_target.load(Ordering::Acquire)
+        };
+        let mut elapsed = self.fade_elapsed.load(Ordering::Relaxed);
+        if stop_requested && gain <= 0.0 {
+            self.playing.store(false, Ordering::Release);
+            self.stop_requested.store(false, Ordering::Release);
+            stems[..needed].fill(0.0);
+            return;
+        }
+        if stage == FADE_IDLE && target != NO_SEEK {
+            stage = FADE_OUT;
+            elapsed = 0;
+        } else if stage == FADE_OUT && target == NO_SEEK {
+            stage = FADE_IDLE;
+            elapsed = 0;
+        }
+        for frame in 0..frames {
+            let seek_gain = if stage == FADE_OUT {
+                Some(1.0 - (elapsed + 1) as f64 / fade_frames as f64)
+            } else if stage == FADE_IN {
+                Some((elapsed + 1) as f64 / fade_frames as f64)
+            } else {
+                None
+            };
+            let frame_gain = seek_gain.unwrap_or(1.0) * gain * master_gain;
+            for track_index in 0..track_count {
+                let sample = plan.tracks.get(track_index).map_or(0.0, |track| {
+                    Self::sample_track_with_loop(
+                        &plan,
+                        track,
+                        position,
+                        loop_start_frames,
+                        loop_end_frames,
+                        loop_fade,
+                    )
+                });
+                stems[track_index * frames + frame] = (sample * frame_gain) as f32;
+            }
+            if seek_gain.is_some() {
+                elapsed += 1;
+                if elapsed >= fade_frames {
+                    if stage == FADE_OUT {
+                        target = self.seek_target.load(Ordering::Acquire);
+                        if target == NO_SEEK {
+                            stage = FADE_IDLE;
+                            elapsed = 0;
+                        } else {
+                            position = target;
+                            self.fade_target.store(target, Ordering::Release);
+                            stage = FADE_IN;
+                            elapsed = 0;
+                        }
+                    } else {
+                        stage = FADE_IDLE;
+                        elapsed = 0;
+                        let latest = self.seek_target.load(Ordering::Acquire);
+                        if latest != NO_SEEK && latest != target {
+                            target = latest;
+                            stage = FADE_OUT;
+                        } else {
+                            target = NO_SEEK;
+                            self.seek_target.store(NO_SEEK, Ordering::Release);
+                            self.fade_target.store(NO_SEEK, Ordering::Release);
+                        }
+                    }
+                }
+            }
+            if stop_requested {
+                gain = (gain - gain_step).max(0.0);
+                if gain <= 0.0 {
+                    self.playing.store(false, Ordering::Release);
+                    self.stop_requested.store(false, Ordering::Release);
+                    for track_index in 0..track_count {
+                        stems[track_index * frames + frame + 1..(track_index + 1) * frames]
+                            .fill(0.0);
+                    }
+                    break;
+                }
+            } else if gain < target_gain {
+                gain = (gain + gain_step).min(target_gain);
+            }
+            position = advance(position, loop_end_frames, loop_advance_start);
+        }
+        self.position.store(position, Ordering::Release);
+        self.transport_gain.store(gain.to_bits(), Ordering::Release);
+        if stage != FADE_IDLE {
+            self.seek_stage.store(stage, Ordering::Release);
+            self.fade_elapsed.store(elapsed, Ordering::Release);
+        } else if self.seek_stage.load(Ordering::Acquire) == FADE_IDLE {
+            self.fade_elapsed.store(0, Ordering::Release);
+        }
+    }
+
     fn sample_with_loop(
         plan: &PlaybackPlan,
         position: u64,
@@ -563,40 +710,66 @@ impl Playback {
     }
 
     fn sample_at(plan: &PlaybackPlan, position: u64, master_gain: f64) -> f64 {
+        let sample = plan
+            .tracks
+            .iter()
+            .map(|track| Self::sample_track(plan, track, position))
+            .sum::<f64>();
+        (sample * master_gain).clamp(-1.0, 1.0)
+    }
+
+    fn sample_track(plan: &PlaybackPlan, track: &TrackPlan, position: u64) -> f64 {
         let sample_rate = f64::from(plan.sample_rate).max(1.0);
         let time = position as f64 / sample_rate;
-        let mut sample = 0.0;
-        for track in &plan.tracks {
-            let mut voice = 0.0;
-            if let Some(frequency) = track.frequency {
-                voice += (std::f64::consts::TAU * frequency * time).sin() * 0.25;
-            }
-            let release = track
-                .adsr
-                .map_or(0.0, |adsr| adsr.release.max(MIN_ENVELOPE_SECONDS));
-            for note in &track.notes {
-                if time >= note.start && time < note.start + note.duration + release {
-                    let local = time - note.start;
-                    let envelope = track.adsr.map_or_else(
-                        || note_envelope(local, note.duration),
-                        |adsr| adsr_envelope(local, note.duration, adsr),
-                    );
-                    voice += (std::f64::consts::TAU * note.frequency * local).sin()
-                        * note.velocity
-                        * envelope
-                        * 0.25;
-                }
-            }
-            if let Some(graph) = &track.graph {
-                sample += graph.sample(voice, plan.sample_rate);
-                continue;
-            }
-            for filter in &track.filters {
-                voice = filter.process(plan.sample_rate, voice);
-            }
-            sample += voice * track.gain;
+        let mut voice = 0.0;
+        if let Some(frequency) = track.frequency {
+            voice += (std::f64::consts::TAU * frequency * time).sin() * 0.25;
         }
-        (sample * master_gain).clamp(-1.0, 1.0)
+        let release = track
+            .adsr
+            .map_or(0.0, |adsr| adsr.release.max(MIN_ENVELOPE_SECONDS));
+        for note in &track.notes {
+            if time >= note.start && time < note.start + note.duration + release {
+                let local = time - note.start;
+                let envelope = track.adsr.map_or_else(
+                    || note_envelope(local, note.duration),
+                    |adsr| adsr_envelope(local, note.duration, adsr),
+                );
+                voice += (std::f64::consts::TAU * note.frequency * local).sin()
+                    * note.velocity
+                    * envelope
+                    * 0.25;
+            }
+        }
+        if let Some(graph) = &track.graph {
+            return graph.sample(voice, plan.sample_rate);
+        }
+        for filter in &track.filters {
+            voice = filter.process(plan.sample_rate, voice);
+        }
+        voice * track.gain
+    }
+
+    fn sample_track_with_loop(
+        plan: &PlaybackPlan,
+        track: &TrackPlan,
+        position: u64,
+        loop_start: u64,
+        loop_end: u64,
+        loop_fade: u64,
+    ) -> f64 {
+        if loop_fade == 0 {
+            return Self::sample_track(plan, track, position);
+        }
+        let start = loop_end.saturating_sub(loop_fade);
+        if position < start || position >= loop_end {
+            return Self::sample_track(plan, track, position);
+        }
+        let offset = position - start;
+        let blend = (offset + 1) as f64 / loop_fade as f64;
+        let tail = Self::sample_track(plan, track, position);
+        let head = Self::sample_track(plan, track, loop_start + offset);
+        tail * (1.0 - blend) + head * blend
     }
 }
 
@@ -625,9 +798,34 @@ mod tests {
                 adsr: None,
                 filters: Vec::new(),
                 graph: None,
+                plugin: None,
                 notes: Vec::new(),
             }],
         }
+    }
+
+    #[test]
+    fn render_stems_keeps_tracks_separate() {
+        let mut plan = plan();
+        plan.tracks.push(TrackPlan {
+            frequency: Some(220.0),
+            gain: 0.5,
+            adsr: None,
+            filters: Vec::new(),
+            graph: None,
+            plugin: None,
+            notes: Vec::new(),
+        });
+        let playback = Playback::new(48_000);
+        playback.set_plan(plan);
+        playback.play();
+        let frames = 256;
+        let mut stems = vec![0.0_f32; frames * 2];
+        playback.render_stems(&mut stems, frames, 2);
+        assert!(stems[..frames].iter().any(|sample| *sample != 0.0));
+        assert!(stems[frames..].iter().any(|sample| *sample != 0.0));
+        assert!((stems[10] - stems[frames + 10]).abs() > 1.0e-6);
+        assert!(playback.position_seconds() > 0.0);
     }
 
     #[test]
@@ -682,6 +880,7 @@ mod tests {
                 adsr: None,
                 filters: Vec::new(),
                 graph: None,
+                plugin: None,
                 notes: Vec::new(),
             }],
         });
@@ -730,6 +929,7 @@ mod tests {
                 adsr: None,
                 filters: Vec::new(),
                 graph: None,
+                plugin: None,
                 notes: vec![NotePlan {
                     start: 0.0,
                     duration: 1.0,
@@ -817,6 +1017,7 @@ mod tests {
                 }),
                 filters: Vec::new(),
                 graph: None,
+                plugin: None,
                 notes: vec![NotePlan {
                     start: 0.0,
                     duration: 0.05,
@@ -845,6 +1046,7 @@ mod tests {
                 adsr: None,
                 filters: Vec::new(),
                 graph: None,
+                plugin: None,
                 notes: vec![NotePlan {
                     start: 0.0,
                     duration: 0.25,
@@ -910,6 +1112,7 @@ mod tests {
                 adsr: None,
                 filters: Vec::new(),
                 graph: None,
+                plugin: None,
                 notes: Vec::new(),
             }],
         });
@@ -938,6 +1141,7 @@ mod tests {
                     adsr: None,
                     filters: Vec::new(),
                     graph: None,
+                    plugin: None,
                     notes: Vec::new(),
                 })
                 .collect(),
@@ -962,6 +1166,7 @@ mod tests {
                 adsr: None,
                 filters: Vec::new(),
                 graph: None,
+                plugin: None,
                 notes: vec![NotePlan {
                     start: 2.0,
                     duration: 1.0,

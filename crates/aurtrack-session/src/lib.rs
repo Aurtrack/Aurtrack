@@ -29,8 +29,8 @@ use std::path::Path;
 
 use aurtrack_command::{CommandError, CommandRequest, CommandResponse, registry};
 use aurtrack_engine::{
-    AdsrPlan, FilterPlan, FilterSettings, GraphNodePlan, GraphOp, GraphPlan, adsr_envelope,
-    midi_to_hz, note_envelope,
+    AdsrPlan, FilterPlan, FilterSettings, GraphNodePlan, GraphOp, GraphPlan, PluginPlan,
+    adsr_envelope, midi_to_hz, note_envelope,
 };
 use aurtrack_graph::{Graph, GraphError, Node, NodeId, NodeKind, PORT_IN, PortRef};
 use serde::de::DeserializeOwned;
@@ -177,6 +177,7 @@ impl Track {
                     ),
                     aurtrack_graph::CompiledOp::Gain(gain) => GraphOp::Gain(*gain),
                     aurtrack_graph::CompiledOp::Mix => GraphOp::Mix,
+                    aurtrack_graph::CompiledOp::Plugin => GraphOp::Plugin,
                     aurtrack_graph::CompiledOp::Output => GraphOp::Output,
                     _ => return Err(GraphError::NotConnected),
                 };
@@ -195,6 +196,9 @@ impl Track {
             GraphPlan {
                 nodes,
                 output: compiled.output,
+                plugin: compiled
+                    .plugin
+                    .map(|plugin| PluginPlan::new(plugin.path, plugin.id, plugin.state)),
             },
         ))
     }
@@ -511,6 +515,7 @@ impl Session {
             "amp.adsr" => NodeKind::AmpAdsr,
             "filter.lowpass" => NodeKind::FilterLowpass,
             "mix" => NodeKind::Mix,
+            "plugin" => NodeKind::Plugin,
             other => {
                 return Err(CommandError::invalid_args(format!(
                     "不支持的 kind：{other}"
@@ -553,6 +558,21 @@ impl Session {
         }
         if let Some([x, y]) = args.position {
             node.set_position(x, y).map_err(graph_error)?;
+        }
+        if kind == NodeKind::Plugin {
+            let path = args.plugin_path.unwrap_or_default();
+            let id = args.plugin_id.unwrap_or_default();
+            if path.trim().is_empty() || id.trim().is_empty() {
+                return Err(CommandError::invalid_args(
+                    "plugin 节点需要 plugin_path 和 plugin_id",
+                ));
+            }
+            node.set_plugin(Some(aurtrack_graph::PluginConfig::new(
+                path,
+                id,
+                args.plugin_state,
+            )))
+            .map_err(graph_error)?;
         }
         let free = command == "node.add";
         let project = self
@@ -2677,6 +2697,12 @@ struct DeviceAddArgs {
     params: Option<BTreeMap<String, f64>>,
     #[serde(default)]
     position: Option<[f64; 2]>,
+    #[serde(default)]
+    plugin_path: Option<String>,
+    #[serde(default)]
+    plugin_id: Option<String>,
+    #[serde(default)]
+    plugin_state: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

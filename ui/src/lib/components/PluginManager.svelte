@@ -67,6 +67,16 @@
     }
   }
 
+  async function addToTrack(plugin: Plugin) {
+    result = "";
+    try {
+      const data = await session.addPluginNode(plugin.path, plugin.id);
+      result = JSON.stringify(data, null, 2);
+    } catch (cause) {
+      result = errorMessage(cause);
+    }
+  }
+
   async function useAsMaster(plugin: Plugin) {
     result = "";
     try {
@@ -143,6 +153,9 @@
                 <div class="plugin-commands">
                   <button class="ghost small" onclick={() => void inspect(plugin)}>
                     {t("plugins.inspect")}
+                  </button>
+                  <button class="ghost small" onclick={() => void addToTrack(plugin)}>
+                    {t("plugins.insertTrack")}
                   </button>
                   <button class="ghost small" onclick={() => void useAsMaster(plugin)}>
                     {t("plugins.master")}

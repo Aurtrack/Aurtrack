@@ -158,6 +158,7 @@
     if (kind === "filter.lowpass") return 132;
     if (kind === "gain") return 104;
     if (kind === "mix") return 104;
+    if (kind === "plugin") return 120;
     if (kind === "output") return 80;
     return 90;
   }
@@ -233,6 +234,7 @@
     if (node.kind === "filter.lowpass") return t("graph.filter");
     if (node.kind === "gain") return t("graph.gain");
     if (node.kind === "mix") return t("graph.mix");
+    if (node.kind === "plugin") return t("graph.plugin");
     if (node.kind === "output") return t("graph.output");
     return node.kind.toUpperCase();
   }
@@ -242,7 +244,8 @@
       node.kind === "amp.adsr" ||
       node.kind === "filter.lowpass" ||
       node.kind === "gain" ||
-      node.kind === "mix"
+      node.kind === "mix" ||
+      node.kind === "plugin"
     );
   }
 
@@ -1003,6 +1006,11 @@
               <div class="graph-param-row">
                 <span>{t("graph.mixInputs")}</span>
                 <strong>in1 + in2</strong>
+              </div>
+            {:else if node.kind === "plugin"}
+              <div class="graph-param-row">
+                <span>{t("graph.plugin")}</span>
+                <strong>{node.plugin?.id ?? "未配置"}</strong>
               </div>
             {:else}
               <div class="graph-param-row">

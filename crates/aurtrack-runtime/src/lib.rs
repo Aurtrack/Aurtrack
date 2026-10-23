@@ -45,6 +45,7 @@ pub struct Runtime {
     metronome: bool,
     plugin_bridge: Option<aurtrack_host::PluginBridgeControl>,
     plugin_config: Option<(std::path::PathBuf, String)>,
+    track_bridges: Vec<Option<aurtrack_host::PluginBridgeControl>>,
 }
 
 impl Default for Runtime {
@@ -63,19 +64,65 @@ impl Runtime {
             metronome: false,
             plugin_bridge: None,
             plugin_config: None,
+            track_bridges: Vec::new(),
         }
     }
 
     /// 惰性打开默认输出设备；音频流出错后会丢弃旧句柄并重新打开。
     pub fn ensure_audio(&mut self) -> Result<(), CommandError> {
+        self.ensure_audio_with_tracks(Vec::new())
+    }
+
+    /// 打开音频输出，并按轨道准备插件处理器。
+    ///
+    /// 每个轨道都必须有一个处理器项，未挂插件的轨道使用直通，保证分轨槽位对齐。
+    pub fn ensure_audio_with_tracks(
+        &mut self,
+        track_configs: Vec<Option<aurtrack_graph::PluginConfig>>,
+    ) -> Result<(), CommandError> {
         if self.audio.as_ref().is_some_and(AudioHandle::is_healthy) {
             return Ok(());
         }
         self.audio = None;
         self.plugin_bridge = None;
+        self.track_bridges.clear();
         let (bridge, port) = aurtrack_host::PluginBridgeControl::new();
-        let handle = aurtrack_io::spawn_with_master(self.playback.clone(), Some(Box::new(port)))
-            .map_err(|error| CommandError::new("audio_unavailable", error.to_string()))?;
+        let has_track_plugins = track_configs.iter().any(Option::is_some);
+        let mut track_processors: Vec<Box<dyn aurtrack_engine::BlockProcessor>> = Vec::new();
+        if has_track_plugins {
+            for config in track_configs {
+                let Some(config) = config else {
+                    track_processors.push(Box::new(PassthroughProcessor));
+                    self.track_bridges.push(None);
+                    continue;
+                };
+                let (track_bridge, track_port) = aurtrack_host::PluginBridgeControl::new();
+                let state = config
+                    .state
+                    .as_deref()
+                    .map(aurtrack_host::decode_state)
+                    .transpose()
+                    .map_err(|error| {
+                        CommandError::invalid_args(format!("插件状态不合法：{error}"))
+                    })?;
+                track_bridge
+                    .load_with_state(
+                        std::path::PathBuf::from(&config.path),
+                        config.id,
+                        self.sample_rate,
+                        state,
+                    )
+                    .map_err(|error| CommandError::new("plugin_unavailable", error))?;
+                track_processors.push(Box::new(track_port));
+                self.track_bridges.push(Some(track_bridge));
+            }
+        }
+        let handle = aurtrack_io::spawn_with_processors(
+            self.playback.clone(),
+            Some(Box::new(port)),
+            track_processors,
+        )
+        .map_err(|error| CommandError::new("audio_unavailable", error.to_string()))?;
         self.sample_rate = handle.sample_rate();
         self.audio = Some(handle);
         self.plugin_bridge = Some(bridge);
@@ -131,8 +178,32 @@ impl Runtime {
         if !self.playback.is_playing() {
             self.audio = None;
             self.plugin_bridge = None;
+            self.track_bridges.clear();
         }
-        self.ensure_audio()?;
+        let mut track_configs = self
+            .session
+            .project()
+            .map(|project| {
+                project
+                    .tracks
+                    .iter()
+                    .map(|track| {
+                        track
+                            .graph
+                            .compile_graph()
+                            .map(|compiled| compiled.plugin)
+                            .map_err(|error| {
+                                CommandError::invalid_args(format!("编译轨道插件失败：{error}"))
+                            })
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+            })
+            .transpose()?
+            .unwrap_or_default();
+        if self.metronome {
+            track_configs.push(None);
+        }
+        self.ensure_audio_with_tracks(track_configs)?;
         let wanted_plugin = self
             .session
             .project()
@@ -481,6 +552,7 @@ fn build_plan(
                     })
                 })
                 .collect();
+            let plugin = graph.plugin.clone();
             Ok(TrackPlan {
                 frequency,
                 gain: 1.0,
@@ -488,6 +560,7 @@ fn build_plan(
                 filters: Vec::new(),
                 graph: Some(graph),
                 notes,
+                plugin,
             })
         })
         .collect::<Result<Vec<_>, CommandError>>()?;
@@ -515,6 +588,7 @@ fn build_plan(
             filters: Vec::new(),
             graph: None,
             notes,
+            plugin: None,
         });
     }
     Ok(PlaybackPlan {
@@ -524,6 +598,29 @@ fn build_plan(
         length_seconds: project.length_seconds(),
         tracks,
     })
+}
+
+#[derive(Debug, Default)]
+struct PassthroughProcessor;
+
+impl aurtrack_engine::BlockProcessor for PassthroughProcessor {
+    fn prepare(&mut self, _sample_rate: u32, _max_block_frames: usize) -> Result<(), String> {
+        Ok(())
+    }
+
+    fn reset(&mut self) {}
+
+    fn process(
+        &mut self,
+        input_left: &[f32],
+        input_right: &[f32],
+        output_left: &mut [f32],
+        output_right: &mut [f32],
+    ) -> Result<(), String> {
+        output_left.copy_from_slice(input_left);
+        output_right.copy_from_slice(input_right);
+        Ok(())
+    }
 }
 
 fn extension_directory(path: Option<String>) -> Result<std::path::PathBuf, CommandError> {
