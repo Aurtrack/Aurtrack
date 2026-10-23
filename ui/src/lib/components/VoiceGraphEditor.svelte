@@ -300,7 +300,7 @@
           {#each outputList(node.kind) as port, index (port)}
             <button
               class="voice-port out"
-              style:top={`${portY(node.kind, index) - 5}px`}
+              style:top={`${portY(node.kind, index) - 4}px`}
               aria-label={port}
               onmousedown={(event) => startWire(event, node, port)}
             ></button>
@@ -308,7 +308,7 @@
           {#each inputList(node.kind) as port, index (port)}
             <button
               class="voice-port in"
-              style:top={`${portY(node.kind, index) - 5}px`}
+              style:top={`${portY(node.kind, index) - 4}px`}
               aria-label={port}
               onmousedown={(event) => finishWire(event, node, port)}
             ></button>
