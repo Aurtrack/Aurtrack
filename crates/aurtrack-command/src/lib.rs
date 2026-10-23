@@ -647,6 +647,16 @@ fn plugin_master_off_schema() -> Value {
     object_schema(json!({}), &[])
 }
 
+fn plugin_param_schema() -> Value {
+    object_schema(
+        json!({
+            "id": { "type": "integer", "minimum": 0, "description": "CLAP 参数 ID" },
+            "value": { "type": "number", "description": "参数 plain value" }
+        }),
+        &["id", "value"],
+    )
+}
+
 fn plugin_state_save_schema() -> Value {
     object_schema(
         json!({
@@ -728,7 +738,7 @@ fn transport_metronome_schema() -> Value {
     )
 }
 
-static COMMANDS: [CommandSpec; 50] = [
+static COMMANDS: [CommandSpec; 51] = [
     CommandSpec {
         id: "project.create",
         summary: "创建或替换当前工程",
@@ -890,6 +900,12 @@ static COMMANDS: [CommandSpec; 50] = [
         summary: "卸载实时主输出插件",
         undo: UndoKind::None,
         input_schema: plugin_master_off_schema,
+    },
+    CommandSpec {
+        id: "plugin.param",
+        summary: "向实时主输出插件写入参数",
+        undo: UndoKind::None,
+        input_schema: plugin_param_schema,
     },
     CommandSpec {
         id: "plugin.state_save",

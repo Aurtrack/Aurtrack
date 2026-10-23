@@ -19,6 +19,7 @@ use aurtrack_engine::BlockProcessor;
 use base64::Engine;
 use clack_extensions::params::{ParamInfoBuffer, PluginParams};
 use clack_extensions::state::PluginState;
+use clack_host::events::event_types::ParamValueEvent;
 use clack_host::prelude::*;
 use rtrb::{Consumer, Producer, RingBuffer};
 use serde::Serialize;
@@ -297,6 +298,7 @@ impl ClapProcessor {
         input_right: &[f32],
         output_left: &mut [f32],
         output_right: &mut [f32],
+        parameters: &[(u32, f64)],
     ) -> Result<(), HostError> {
         let frames = input_left
             .len()
@@ -333,7 +335,13 @@ impl ClapProcessor {
                         .map(|buffer| &mut buffer[..count]),
                 ),
             }]);
-            let input_events = InputEvents::empty();
+            let mut event_buffer = EventBuffer::with_capacity(parameters.len().max(1));
+            for (parameter_id, value) in parameters {
+                let event =
+                    ParamValueEvent::new(0, ClapId::new(*parameter_id), Pckn::match_all(), *value);
+                event_buffer.push(&event);
+            }
+            let input_events = InputEvents::from_buffer(&event_buffer);
             let mut output_events = OutputEvents::void();
             processor
                 .process(
@@ -436,6 +444,10 @@ enum PluginCommand {
     Unload {
         reply: Sender<Result<(), String>>,
     },
+    Param {
+        id: u32,
+        value: f64,
+    },
     Shutdown,
 }
 
@@ -500,6 +512,12 @@ impl PluginBridgeControl {
         answer.recv().map_err(|_| "插件线程没有响应".to_string())?
     }
 
+    pub fn set_parameter(&self, id: u32, value: f64) -> Result<(), String> {
+        self.commands
+            .send(PluginCommand::Param { id, value })
+            .map_err(|_| "插件线程已经退出".to_string())
+    }
+
     pub fn unload(&self) -> Result<(), String> {
         let (reply, answer) = mpsc::channel();
         self.commands
@@ -529,6 +547,7 @@ fn plugin_thread(
     active: Arc<AtomicBool>,
 ) {
     let mut processor: Option<ClapProcessor> = None;
+    let mut pending_parameters: Vec<(u32, f64)> = Vec::new();
     loop {
         match commands.try_recv() {
             Ok(PluginCommand::Load {
@@ -548,7 +567,11 @@ fn plugin_thread(
             Ok(PluginCommand::Unload { reply }) => {
                 active.store(false, Ordering::Release);
                 processor = None;
+                pending_parameters.clear();
                 let _ = reply.send(Ok(()));
+            },
+            Ok(PluginCommand::Param { id, value }) => {
+                pending_parameters.push((id, value));
             },
             Ok(PluginCommand::Shutdown) | Err(mpsc::TryRecvError::Disconnected) => break,
             Err(mpsc::TryRecvError::Empty) => {},
@@ -569,12 +592,14 @@ fn plugin_thread(
         }
         let mut output_left = [0.0_f32; BLOCK_FRAMES];
         let mut output_right = [0.0_f32; BLOCK_FRAMES];
+        let parameters = std::mem::take(&mut pending_parameters);
         if active_processor
             .process(
                 &input_left,
                 &input_right,
                 &mut output_left,
                 &mut output_right,
+                &parameters,
             )
             .is_err()
         {

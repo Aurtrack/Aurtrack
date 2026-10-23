@@ -1,6 +1,6 @@
 # 命令规范 v1.3
 
-这份文档定义 Aurtrack 的可运行命令面：50 条命令、统一的返回结构、寻址规则，以及 MCP 的映射方式。代码必须与本文一致。
+这份文档定义 Aurtrack 的可运行命令面：51 条命令、统一的返回结构、寻址规则，以及 MCP 的映射方式。代码必须与本文一致。
 
 工程格式 v4 用 music tick 存储位置（960 PPQ），轨道保存 `aurtrack-graph` 节点图。命令边界仍用秒，避免 UI 和 CLI 直接操作 tick。旧 v3 工程会被拒绝。
 
@@ -704,7 +704,15 @@
 {}
 ```
 
-### 47. `plugin.state_save`
+### 47. `plugin.param`
+
+向已挂载的实时主输出插件写参数。参数 ID 来自 `plugin.inspect`。
+
+```json
+{ "id": 1, "value": 0.75 }
+```
+
+### 48. `plugin.state_save`
 
 读取插件 state 扩展，返回 base64 blob。
 
@@ -712,7 +720,7 @@
 { "path": "D:/Plugins/CLAP/effect.clap", "id": "com.example.effect" }
 ```
 
-### 48. `plugin.state_load`
+### 49. `plugin.state_load`
 
 从 base64 blob 恢复插件状态。
 
@@ -724,7 +732,7 @@
 }
 ```
 
-### 49. `extension.list`
+### 50. `extension.list`
 
 扫描应用扩展目录。扩展是外部进程，清单见 `specs/extensions.md`。
 
@@ -732,7 +740,7 @@
 { "path": "D:/Extensions" }
 ```
 
-### 50. `extension.call`
+### 51. `extension.call`
 
 调用扩展命令。请求通过 JSON stdin 传入，扩展的 stdout 必须是一个 JSON 对象。
 
@@ -766,6 +774,7 @@
 | `plugin.inspect` | `plugin_inspect` |
 | `plugin.master` | `plugin_master` |
 | `plugin.master_off` | `plugin_master_off` |
+| `plugin.param` | `plugin_param` |
 | `plugin.state_save` | `plugin_state_save` |
 | `plugin.state_load` | `plugin_state_load` |
 | `extension.list` | `extension_list` |

@@ -113,6 +113,7 @@ impl Runtime {
             "plugin.inspect" => Self::plugin_inspect(&request.args),
             "plugin.master" => self.plugin_master(&request.args),
             "plugin.master_off" => self.plugin_master_off(),
+            "plugin.param" => self.plugin_param(&request.args),
             "plugin.state_save" => Self::plugin_state_save(&request.args),
             "plugin.state_load" => Self::plugin_state_load(&request.args),
             "extension.list" => Self::extension_list(&request.args),
@@ -258,6 +259,32 @@ impl Runtime {
         }
         self.plugin_config = None;
         Ok(CommandResponse::ok(json!({ "loaded": false })))
+    }
+
+    fn plugin_param(&self, args: &Value) -> Result<CommandResponse, CommandError> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct ParamArgs {
+            id: u32,
+            value: f64,
+        }
+        let args: ParamArgs = parse_args(args)?;
+        if !args.value.is_finite() {
+            return Err(CommandError::invalid_args("value 必须是有限数"));
+        }
+        let Some(bridge) = self.plugin_bridge.as_ref() else {
+            return Err(CommandError::not_found("主输出没有加载插件"));
+        };
+        if !bridge.is_loaded() {
+            return Err(CommandError::not_found("主输出没有加载插件"));
+        }
+        bridge
+            .set_parameter(args.id, args.value)
+            .map_err(|error| CommandError::new("plugin_unavailable", error))?;
+        Ok(CommandResponse::ok(json!({
+            "parameter": args.id,
+            "value": args.value,
+        })))
     }
 
     fn plugin_state_save(args: &Value) -> Result<CommandResponse, CommandError> {
@@ -570,11 +597,11 @@ mod tests {
     }
 
     #[test]
-    fn describe_lists_fifty_commands() {
+    fn describe_lists_fifty_one_commands() {
         let mut runtime = Runtime::new();
         let response = run(&mut runtime, "describe", json!({})).unwrap();
         let commands = response.data["commands"].as_array().unwrap();
-        assert_eq!(commands.len(), 50);
+        assert_eq!(commands.len(), 51);
         assert!(
             commands
                 .iter()
