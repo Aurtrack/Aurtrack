@@ -27,7 +27,7 @@ function applyDocumentLocale(value: Locale): void {
 }
 
 let current = $state<Locale>(readStoredLocale());
-applyDocumentLocale(current);
+applyDocumentLocale(readStoredLocale());
 
 export function getLocale(): Locale {
   return current;

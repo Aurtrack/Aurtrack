@@ -1,13 +1,15 @@
 @echo off
 chcp 65001 >nul
 cd /d "%~dp0"
+set "npm_config_update_notifier=false"
+set "NO_COLOR=1"
 
 echo.
 echo === Aurtrack 窗口 ===
 echo.
 
 echo [1/3] 安装前端依赖...
-call pnpm install
+call pnpm install --config.update-notifier=false --reporter=append-only
 if errorlevel 1 (
     echo 安装失败，把上面的错误发给我。
     pause
