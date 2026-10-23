@@ -1,6 +1,6 @@
 # 命令规范 v1.3
 
-这份文档定义 Aurtrack 的可运行命令面：42 条命令、统一的返回结构、寻址规则，以及 MCP 的映射方式。代码必须与本文一致。
+这份文档定义 Aurtrack 的可运行命令面：45 条命令、统一的返回结构、寻址规则，以及 MCP 的映射方式。代码必须与本文一致。
 
 工程格式 v4 用 music tick 存储位置（960 PPQ），轨道保存 `aurtrack-graph` 节点图。命令边界仍用秒，避免 UI 和 CLI 直接操作 tick。旧 v3 工程会被拒绝。
 
@@ -672,6 +672,34 @@
 }
 ```
 
+### 43. `plugin.scan`
+
+扫描 CLAP 插件目录，返回描述符和坏插件列表。省略 `path` 时使用 `<配置目录>/Aurtrack/plugins`。
+
+```json
+{ "path": "D:/Plugins/CLAP" }
+```
+
+### 44. `extension.list`
+
+扫描应用扩展目录。扩展是外部进程，清单见 `specs/extensions.md`。
+
+```json
+{ "path": "D:/Extensions" }
+```
+
+### 45. `extension.call`
+
+调用扩展命令。请求通过 JSON stdin 传入，扩展的 stdout 必须是一个 JSON 对象。
+
+```json
+{
+  "extension": "com.example.hello",
+  "command": "hello",
+  "args": { "name": "Aurtrack" }
+}
+```
+
 ## MCP 映射
 
 工具名是命令 ID 把 `.` 换成 `_`：
@@ -690,6 +718,9 @@
 | `node.position` | `node_position` |
 | `node.remove_many` | `node_remove_many` |
 | `node.duplicate` | `node_duplicate` |
+| `plugin.scan` | `plugin_scan` |
+| `extension.list` | `extension_list` |
+| `extension.call` | `extension_call` |
 | `param.set` | `param_set` |
 | `render.segment` | `render_segment` |
 | `transport.play` | `transport_play` |

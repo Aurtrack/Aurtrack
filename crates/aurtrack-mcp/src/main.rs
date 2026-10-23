@@ -183,7 +183,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn initialize_and_list_forty_two_tools() {
+    fn initialize_and_list_forty_five_tools() {
         let mut backend = Backend::local();
         let init = handle_line(
             &mut backend,
@@ -198,7 +198,7 @@ mod tests {
         )
         .unwrap();
         let value: Value = serde_json::from_str(&list).unwrap();
-        assert_eq!(value["result"]["tools"].as_array().unwrap().len(), 42);
+        assert_eq!(value["result"]["tools"].as_array().unwrap().len(), 45);
     }
 
     #[test]

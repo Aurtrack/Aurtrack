@@ -95,6 +95,9 @@ impl Runtime {
             "transport.state" => Ok(self.transport_state()),
             "transport.gain" => self.transport_gain(&request.args),
             "transport.metronome" => self.transport_metronome(&request.args),
+            "plugin.scan" => Self::plugin_scan(&request.args),
+            "extension.list" => Self::extension_list(&request.args),
+            "extension.call" => Self::extension_call(&request.args),
             _ => self.session.execute(request),
         }
     }
@@ -155,6 +158,79 @@ impl Runtime {
         }
         self.playback.set_master_gain(args.gain);
         Ok(CommandResponse::ok(json!({ "gain": args.gain })))
+    }
+
+    fn plugin_scan(args: &Value) -> Result<CommandResponse, CommandError> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct ScanArgs {
+            #[serde(default)]
+            path: Option<String>,
+        }
+        let args: ScanArgs = parse_args(args)?;
+        let directory = args
+            .path
+            .map(std::path::PathBuf::from)
+            .or_else(aurtrack_host::default_plugin_directory)
+            .ok_or_else(|| CommandError::invalid_args("找不到默认插件目录"))?;
+        let report = aurtrack_host::scan_directory(&directory)
+            .map_err(|error| CommandError::invalid_args(format!("扫描插件失败：{error}")))?;
+        Ok(CommandResponse::ok(json!({
+            "directory": directory.display().to_string(),
+            "plugins": report.plugins,
+            "failures": report.failures,
+        })))
+    }
+
+    fn extension_list(args: &Value) -> Result<CommandResponse, CommandError> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct ListArgs {
+            #[serde(default)]
+            path: Option<String>,
+        }
+        let args: ListArgs = parse_args(args)?;
+        let directory = extension_directory(args.path)?;
+        let report = aurtrack_extension::scan_extensions(&directory)
+            .map_err(|error| CommandError::invalid_args(format!("扫描扩展失败：{error}")))?;
+        Ok(CommandResponse::ok(json!({
+            "directory": directory.display().to_string(),
+            "extensions": report.extensions,
+            "failures": report.failures,
+        })))
+    }
+
+    fn extension_call(args: &Value) -> Result<CommandResponse, CommandError> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct CallArgs {
+            extension: String,
+            command: String,
+            #[serde(default)]
+            args: Option<Value>,
+            #[serde(default)]
+            path: Option<String>,
+        }
+        let args: CallArgs = parse_args(args)?;
+        let directory = extension_directory(args.path)?;
+        let report = aurtrack_extension::scan_extensions(&directory)
+            .map_err(|error| CommandError::invalid_args(format!("扫描扩展失败：{error}")))?;
+        let extension = report
+            .extensions
+            .iter()
+            .find(|extension| extension.id == args.extension)
+            .ok_or_else(|| CommandError::not_found(format!("找不到扩展：{}", args.extension)))?;
+        let result = aurtrack_extension::run_extension_command(
+            extension,
+            &args.command,
+            args.args.as_ref().unwrap_or(&Value::Null),
+        )
+        .map_err(|error| CommandError::invalid_args(format!("扩展执行失败：{error}")))?;
+        Ok(CommandResponse::ok(json!({
+            "extension": args.extension,
+            "command": args.command,
+            "result": result,
+        })))
     }
 
     fn transport_metronome(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
@@ -243,6 +319,12 @@ fn build_plan(
         length_seconds: project.length_seconds(),
         tracks,
     })
+}
+
+fn extension_directory(path: Option<String>) -> Result<std::path::PathBuf, CommandError> {
+    path.map(std::path::PathBuf::from)
+        .or_else(aurtrack_extension::default_extension_directory)
+        .ok_or_else(|| CommandError::invalid_args("找不到默认扩展目录"))
 }
 
 fn parse_args<T: DeserializeOwned>(args: &Value) -> Result<T, CommandError> {
@@ -375,11 +457,11 @@ mod tests {
     }
 
     #[test]
-    fn describe_lists_forty_two_commands() {
+    fn describe_lists_forty_five_commands() {
         let mut runtime = Runtime::new();
         let response = run(&mut runtime, "describe", json!({})).unwrap();
         let commands = response.data["commands"].as_array().unwrap();
-        assert_eq!(commands.len(), 42);
+        assert_eq!(commands.len(), 45);
         assert!(
             commands
                 .iter()

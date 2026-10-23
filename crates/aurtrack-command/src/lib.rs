@@ -614,6 +614,36 @@ fn nodes_remove_schema() -> Value {
     )
 }
 
+fn plugin_scan_schema() -> Value {
+    object_schema(
+        json!({
+            "path": { "type": "string", "description": "插件目录；省略时使用默认目录" }
+        }),
+        &[],
+    )
+}
+
+fn extension_list_schema() -> Value {
+    object_schema(
+        json!({
+            "path": { "type": "string", "description": "扩展目录；省略时使用默认目录" }
+        }),
+        &[],
+    )
+}
+
+fn extension_call_schema() -> Value {
+    object_schema(
+        json!({
+            "extension": { "type": "string" },
+            "command": { "type": "string" },
+            "args": {},
+            "path": { "type": "string", "description": "扩展目录；省略时使用默认目录" }
+        }),
+        &["extension", "command"],
+    )
+}
+
 fn transport_play_schema() -> Value {
     object_schema(json!({}), &[])
 }
@@ -653,7 +683,7 @@ fn transport_metronome_schema() -> Value {
     )
 }
 
-static COMMANDS: [CommandSpec; 42] = [
+static COMMANDS: [CommandSpec; 45] = [
     CommandSpec {
         id: "project.create",
         summary: "创建或替换当前工程",
@@ -791,6 +821,24 @@ static COMMANDS: [CommandSpec; 42] = [
         summary: "从轨道删除一个设备",
         undo: UndoKind::Snapshot,
         input_schema: device_remove_schema,
+    },
+    CommandSpec {
+        id: "plugin.scan",
+        summary: "扫描 CLAP 插件目录",
+        undo: UndoKind::None,
+        input_schema: plugin_scan_schema,
+    },
+    CommandSpec {
+        id: "extension.list",
+        summary: "扫描 Aurtrack 应用扩展",
+        undo: UndoKind::None,
+        input_schema: extension_list_schema,
+    },
+    CommandSpec {
+        id: "extension.call",
+        summary: "调用应用扩展命令",
+        undo: UndoKind::None,
+        input_schema: extension_call_schema,
     },
     CommandSpec {
         id: "node.add",

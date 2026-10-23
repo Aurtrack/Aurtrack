@@ -24,3 +24,6 @@ shells/desktop/gen/
 
 # Vite 构建输出。
 /ui/dist
+
+# Crate-local test fixtures.
+crates/*/target/
