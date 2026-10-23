@@ -322,6 +322,61 @@ impl NodeGroup {
             graph: VoiceGraph::piano_default(),
         }
     }
+
+    pub fn empty(id: impl Into<String>, name: impl Into<String>) -> Self {
+        let interface = NodeGroupInterface::piano();
+        Self {
+            id: id.into(),
+            name: name.into(),
+            graph: VoiceGraph::shell(&interface),
+            interface,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), GraphError> {
+        if self.id.trim().is_empty() || self.name.trim().is_empty() {
+            return Err(GraphError::EmptyGroupId);
+        }
+        let mut ids = BTreeSet::new();
+        for socket in self.interface.inputs.iter().chain(&self.interface.outputs) {
+            if socket.id.trim().is_empty() || !ids.insert(socket.id.as_str()) {
+                return Err(GraphError::DuplicateGroupSocket(socket.id.clone()));
+            }
+        }
+        if self
+            .interface
+            .outputs
+            .iter()
+            .all(|socket| socket.ty != NodeGroupSocketType::Audio)
+        {
+            return Err(GraphError::GroupAudioOutput);
+        }
+        self.graph.validate_with_interface(&self.interface)
+    }
+}
+
+pub fn input_ports(kind: VoiceNodeKind, interface: &NodeGroupInterface) -> Vec<&str> {
+    match kind {
+        VoiceNodeKind::GroupInput => Vec::new(),
+        VoiceNodeKind::GroupOutput => interface
+            .outputs
+            .iter()
+            .map(|socket| socket.id.as_str())
+            .collect(),
+        _ => kind.inputs().to_vec(),
+    }
+}
+
+pub fn output_ports(kind: VoiceNodeKind, interface: &NodeGroupInterface) -> Vec<&str> {
+    match kind {
+        VoiceNodeKind::GroupInput => interface
+            .inputs
+            .iter()
+            .map(|socket| socket.id.as_str())
+            .collect(),
+        VoiceNodeKind::GroupOutput => Vec::new(),
+        _ => kind.outputs().to_vec(),
+    }
 }
 
 /// 节点组对外暴露的接口。
@@ -396,6 +451,25 @@ impl Default for VoiceGraph {
 }
 
 impl VoiceGraph {
+    pub fn shell(interface: &NodeGroupInterface) -> Self {
+        let input = VoiceNode::new(NodeId::fixed("voice-in"), VoiceNodeKind::GroupInput);
+        let output = VoiceNode::new(NodeId::fixed("out"), VoiceNodeKind::GroupOutput);
+        let mut nodes = BTreeMap::new();
+        nodes.insert(input.id.clone(), input);
+        nodes.insert(output.id.clone(), output);
+        if let Some(node) = nodes.get_mut(&NodeId::fixed("voice-in")) {
+            node.position = Some([40.0, 100.0]);
+        }
+        if let Some(node) = nodes.get_mut(&NodeId::fixed("out")) {
+            node.position = Some([360.0, 100.0]);
+        }
+        let _ = interface;
+        Self {
+            nodes,
+            connections: Vec::new(),
+        }
+    }
+
     pub fn piano_default() -> Self {
         let input = VoiceNode::new(NodeId::fixed("voice-in"), VoiceNodeKind::GroupInput);
         let mut osc = VoiceNode::new(NodeId::fixed("osc"), VoiceNodeKind::OscPartials);
@@ -464,6 +538,13 @@ impl VoiceGraph {
     }
 
     pub fn validate(&self) -> Result<(), GraphError> {
+        self.validate_with_interface(&NodeGroupInterface::piano())
+    }
+
+    pub fn validate_with_interface(
+        &self,
+        interface: &NodeGroupInterface,
+    ) -> Result<(), GraphError> {
         if self.nodes.is_empty() {
             return Err(GraphError::EmptyVoiceGraph);
         }
@@ -482,16 +563,18 @@ impl VoiceGraph {
         }
         let mut occupied = BTreeSet::new();
         for connection in &self.connections {
-            if !self.nodes.contains_key(&connection.from.node)
-                || !self.nodes.contains_key(&connection.to.node)
-            {
-                return Err(GraphError::VoiceUnknownNode);
-            }
+            let source = self
+                .nodes
+                .get(&connection.from.node)
+                .ok_or(GraphError::VoiceUnknownNode)?;
             let target = self
                 .nodes
                 .get(&connection.to.node)
                 .ok_or(GraphError::VoiceUnknownNode)?;
-            if !target.kind.has_input(&connection.to.port) {
+            if !output_ports(source.kind, interface).contains(&connection.from.port.as_str()) {
+                return Err(GraphError::VoiceUnknownPort(connection.from.port.clone()));
+            }
+            if !input_ports(target.kind, interface).contains(&connection.to.port.as_str()) {
                 return Err(GraphError::VoiceUnknownPort(connection.to.port.clone()));
             }
             let key = (connection.to.node.clone(), connection.to.port.clone());
@@ -1713,6 +1796,10 @@ pub enum GraphError {
     EmptyGroupId,
     #[error("找不到节点组：{0}")]
     GroupMissing(String),
+    #[error("组接口 socket 重复：{0}")]
+    DuplicateGroupSocket(String),
+    #[error("节点组必须有一个 audio 输出")]
+    GroupAudioOutput,
 }
 
 #[cfg(test)]

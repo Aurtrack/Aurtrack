@@ -168,6 +168,7 @@ export const zhCN = {
   "graph.brightness": "亮度",
   "graph.hammer": "击弦",
   "voice.title": "钢琴音色子图",
+  "voice.trackPath": "轨道图",
   "voice.hint": "双击钢琴节点进入 · 拖动节点 · 点输出再点输入连线 · X 删除",
   "voice.edit": "编辑音色",
   "voice.apply": "应用",

@@ -1,16 +1,31 @@
 <script lang="ts">
-  import type { VoiceConnection, VoiceGraph, VoiceNode } from "../api";
+  import type {
+    NodeGroupInterface,
+    VoiceConnection,
+    VoiceGraph,
+    VoiceNode,
+  } from "../api";
   import { errorMessage } from "../api";
   import { t } from "../i18n.svelte";
   import { session } from "../session.svelte";
 
   interface Props {
     groupId: string;
+    groupName: string;
+    interface: NodeGroupInterface;
     voice: VoiceGraph;
+    embedded?: boolean;
     onClose: () => void;
   }
 
-  let { groupId, voice: initialVoice, onClose }: Props = $props();
+  let {
+    groupId,
+    groupName,
+    interface: groupInterface,
+    voice: initialVoice,
+    embedded = false,
+    onClose,
+  }: Props = $props();
 
   const NODE_WIDTH = 190;
   const NODE_HEIGHT = 92;
@@ -35,18 +50,31 @@
     "group.output": "GROUP OUTPUT",
   };
 
-  const inputPorts: Record<string, string[]> = {
-    "env.percussive": ["in"],
-    "voice.mix": ["in1", "in2"],
-    "group.output": ["audio"],
-  };
-  const outputPorts: Record<string, string[]> = {
-    "group.input": ["pitch", "velocity", "gate"],
-    "osc.partials": ["out"],
-    "env.percussive": ["out"],
-    "noise.burst": ["out"],
-    "voice.mix": ["out"],
-  };
+  function inputList(kind: string): string[] {
+    if (kind === "group.input") return [];
+    if (kind === "group.output") {
+      return groupInterface.outputs.map((socket) => socket.id);
+    }
+    if (kind === "env.percussive") return ["in"];
+    if (kind === "voice.mix") return ["in1", "in2"];
+    return [];
+  }
+
+  function outputList(kind: string): string[] {
+    if (kind === "group.output") return [];
+    if (kind === "group.input") {
+      return groupInterface.inputs.map((socket) => socket.id);
+    }
+    if (
+      kind === "osc.partials" ||
+      kind === "env.percussive" ||
+      kind === "noise.burst" ||
+      kind === "voice.mix"
+    ) {
+      return ["out"];
+    }
+    return [];
+  }
 
   // 编辑器只在打开时创建，初始快照之后由本地编辑状态接管。
   // svelte-ignore state_referenced_locally
@@ -72,14 +100,6 @@
     });
     return result;
   });
-
-  function inputList(kind: string): string[] {
-    return inputPorts[kind] ?? [];
-  }
-
-  function outputList(kind: string): string[] {
-    return outputPorts[kind] ?? [];
-  }
 
   function portY(kind: string, index: number): number {
     return 34 + index * 24;
@@ -229,11 +249,17 @@
 
 <svelte:window onmousemove={move} onmouseup={end} onkeydown={handleKey} />
 
-<div class="voice-editor-backdrop">
-  <section class="voice-editor" role="dialog" aria-modal="true">
+<div class="voice-editor-host" class:embedded>
+  <section class="voice-editor" class:embedded role="dialog" aria-modal={!embedded}>
     <header class="voice-editor-head">
       <div>
-        <strong>{t("voice.title")}</strong>
+        <div class="voice-editor-path">
+          <button class="voice-editor-crumb" onclick={onClose}>
+            {t("voice.trackPath")}
+          </button>
+          <b>/</b>
+          <strong>{groupName}</strong>
+        </div>
         <span>{t("voice.hint")}</span>
       </div>
       <div class="voice-editor-actions">

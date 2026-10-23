@@ -91,6 +91,7 @@ pub enum VoiceOp {
     Pitch,
     Velocity,
     Gate,
+    Constant(f64),
     OscPartials {
         partials: usize,
         inharmonicity: f64,
@@ -120,6 +121,7 @@ impl VoicePlan {
                 VoiceOp::Pitch => context.pitch,
                 VoiceOp::Velocity => context.velocity,
                 VoiceOp::Gate => f64::from(u8::from(context.gate)),
+                VoiceOp::Constant(value) => value,
                 VoiceOp::OscPartials {
                     partials,
                     inharmonicity,

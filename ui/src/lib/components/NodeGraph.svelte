@@ -117,6 +117,11 @@
 
   let graph = $derived(track?.graph ?? null);
   let nodes = $derived(graph ? Object.values(graph.nodes) : ([] as GraphNode[]));
+  let editingGroup = $derived.by(() => {
+    if (!editingVoiceNode) return undefined;
+    const node = graph?.nodes[editingVoiceNode];
+    return node ? groupFor(node) : undefined;
+  });
   let connections = $derived(graph?.connections ?? ([] as GraphConnection[]));
   let hasAdsr = $derived(nodes.some((node) => node.kind === "amp.adsr"));
   let autoLayout = $derived.by(() => buildLayout(nodes, connections));
@@ -797,6 +802,16 @@
 
   {#if track}
     {@const owner = track}
+    {#if editingGroup}
+      <VoiceGraphEditor
+        embedded
+        groupId={editingGroup.id}
+        groupName={editingGroup.name}
+        interface={editingGroup.interface}
+        voice={editingGroup.graph}
+        onClose={() => (editingVoiceNode = null)}
+      />
+    {:else}
     <div class="graph-toolbar">
       <span class="graph-hint">{t("graph.hint")}</span>
       <span class="rule"></span>
@@ -1222,6 +1237,7 @@
         </div>
       {/if}
     </div>
+    {/if}
 
     <div class="section-foot">
       <span>{t("graph.foot")}</span>
@@ -1232,14 +1248,3 @@
   {/if}
 </section>
 
-{#if track && editingVoiceNode}
-  {@const voiceNode = graph?.nodes[editingVoiceNode]}
-  {@const group = voiceNode ? groupFor(voiceNode) : undefined}
-  {#if group}
-    <VoiceGraphEditor
-      groupId={group.id}
-      voice={group.graph}
-      onClose={() => (editingVoiceNode = null)}
-    />
-  {/if}
-{/if}

@@ -1,6 +1,6 @@
 # 命令规范 v1.3
 
-这份文档定义 Aurtrack 的可运行命令面：54 条命令、统一的返回结构、寻址规则，以及 MCP 的映射方式。代码必须与本文一致。
+这份文档定义 Aurtrack 的可运行命令面：58 条命令、统一的返回结构、寻址规则，以及 MCP 的映射方式。代码必须与本文一致。
 
 工程格式 v4 用 music tick 存储位置（960 PPQ），轨道保存 `aurtrack-graph` 节点图。命令边界仍用秒，避免 UI 和 CLI 直接操作 tick。旧 v3 工程会被拒绝。
 
@@ -793,6 +793,42 @@
 }
 ```
 
+### 55. `group.create`
+
+创建工程级节点组。
+
+```json
+{ "name": "Aux Voice", "group_id": "aux.voice" }
+```
+
+### 56. `group.delete`
+
+删除未被轨道引用的节点组。
+
+```json
+{ "group_id": "aux.voice" }
+```
+
+### 57. `group.rename`
+
+```json
+{ "group_id": "aux.voice", "name": "Aux" }
+```
+
+### 58. `group.interface`
+
+替换组接口；如果现有组树与新接口不兼容，命令失败并保留旧接口。
+
+```json
+{
+  "group_id": "aux.voice",
+  "interface": {
+    "inputs": [],
+    "outputs": []
+  }
+}
+```
+
 ## MCP 映射
 
 工具名是命令 ID 把 `.` 换成 `_`：
@@ -804,6 +840,10 @@
 | `project.master_plugin` | `project_master_plugin` |
 | `project.master_plugin_off` | `project_master_plugin_off` |
 | `track.create` | `track_create` |
+| `group.create` | `group_create` |
+| `group.delete` | `group_delete` |
+| `group.rename` | `group_rename` |
+| `group.interface` | `group_interface` |
 | `group.voice` | `group_voice` |
 | `device.add` | `device_add` |
 | `node.add` | `node_add` |

@@ -172,6 +172,7 @@ export const en: Record<MessageKey, Message> = {
   "graph.brightness": "BRIGHT",
   "graph.hammer": "HAMMER",
   "voice.title": "PIANO VOICE GRAPH",
+  "voice.trackPath": "TRACK GRAPH",
   "voice.hint": "Double-click the piano node · drag · click output then input · X delete",
   "voice.edit": "EDIT VOICE",
   "voice.apply": "APPLY",

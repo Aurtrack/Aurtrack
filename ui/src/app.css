@@ -1894,14 +1894,25 @@ button:disabled {
 }
 
 /* 钢琴 Voice 子图编辑器。 */
-.voice-editor-backdrop {
+.voice-editor-host {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+}
+
+.voice-editor-host:not(.embedded) {
   position: fixed;
   inset: 0;
   z-index: 90;
-  display: flex;
   align-items: center;
   justify-content: center;
   background: rgb(20 28 38 / 35%);
+}
+
+.voice-editor-host.embedded {
+  position: relative;
+  align-items: stretch;
+  background: var(--paper);
 }
 
 .voice-editor {
@@ -1912,6 +1923,52 @@ button:disabled {
   border: 1px solid var(--blue);
   background: var(--paper);
   box-shadow: 3px 3px 0 var(--line);
+}
+
+.voice-editor.embedded {
+  width: 100%;
+  max-height: none;
+  flex: 1;
+  border: 0;
+  box-shadow: none;
+}
+
+.voice-editor-path {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  margin-bottom: 3px;
+  font-family: var(--mono);
+  font-size: 8px;
+}
+
+.voice-editor-path span {
+  color: var(--muted);
+}
+
+.voice-editor-crumb {
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 8px;
+  cursor: pointer;
+}
+
+.voice-editor-crumb:hover {
+  color: var(--blue);
+  text-decoration: underline;
+}
+
+.voice-editor-path b {
+  color: var(--line);
+  font-weight: normal;
+}
+
+.voice-editor-path strong {
+  color: var(--blue);
+  font-size: 9px;
 }
 
 .voice-editor-head {

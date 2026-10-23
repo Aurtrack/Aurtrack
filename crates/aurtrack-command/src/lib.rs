@@ -223,6 +223,40 @@ fn group_voice_schema() -> Value {
     )
 }
 
+fn group_create_schema() -> Value {
+    object_schema(
+        json!({
+            "name": { "type": "string" },
+            "group_id": { "type": "string" }
+        }),
+        &[],
+    )
+}
+
+fn group_delete_schema() -> Value {
+    object_schema(json!({ "group_id": { "type": "string" } }), &["group_id"])
+}
+
+fn group_rename_schema() -> Value {
+    object_schema(
+        json!({
+            "group_id": { "type": "string" },
+            "name": { "type": "string" }
+        }),
+        &["group_id", "name"],
+    )
+}
+
+fn group_interface_schema() -> Value {
+    object_schema(
+        json!({
+            "group_id": { "type": "string" },
+            "interface": { "type": "object", "description": "NodeGroupInterface" }
+        }),
+        &["group_id", "interface"],
+    )
+}
+
 fn device_add_schema() -> Value {
     object_schema(
         json!({
@@ -767,7 +801,7 @@ fn transport_metronome_schema() -> Value {
     )
 }
 
-static COMMANDS: [CommandSpec; 54] = [
+static COMMANDS: [CommandSpec; 58] = [
     CommandSpec {
         id: "project.create",
         summary: "创建或替换当前工程",
@@ -905,6 +939,30 @@ static COMMANDS: [CommandSpec; 54] = [
         summary: "批量粘贴片段及音符到轨道",
         undo: UndoKind::Snapshot,
         input_schema: clip_paste_schema,
+    },
+    CommandSpec {
+        id: "group.create",
+        summary: "创建一个工程级节点组",
+        undo: UndoKind::Snapshot,
+        input_schema: group_create_schema,
+    },
+    CommandSpec {
+        id: "group.delete",
+        summary: "删除一个未被引用的节点组",
+        undo: UndoKind::Snapshot,
+        input_schema: group_delete_schema,
+    },
+    CommandSpec {
+        id: "group.rename",
+        summary: "重命名节点组",
+        undo: UndoKind::Snapshot,
+        input_schema: group_rename_schema,
+    },
+    CommandSpec {
+        id: "group.interface",
+        summary: "替换节点组接口",
+        undo: UndoKind::Snapshot,
+        input_schema: group_interface_schema,
     },
     CommandSpec {
         id: "group.voice",

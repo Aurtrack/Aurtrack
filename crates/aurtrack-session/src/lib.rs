@@ -33,8 +33,8 @@ use aurtrack_engine::{
     VoiceNodePlan, VoiceOp, VoicePlan, adsr_envelope, midi_to_hz, note_envelope,
 };
 use aurtrack_graph::{
-    Graph, GraphError, Node, NodeGroup, NodeId, NodeKind, PORT_IN, PortRef, VoiceGraph,
-    VoiceNodeKind,
+    Graph, GraphError, Node, NodeGroup, NodeGroupInterface, NodeGroupSocketType, NodeId, NodeKind,
+    PORT_IN, PortRef, VoiceGraph, VoiceNodeKind,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -201,8 +201,9 @@ impl Track {
             let group = groups
                 .get(group_id)
                 .ok_or_else(|| GraphError::GroupMissing(group_id.clone()))?;
+            group.validate()?;
             let mut piano = aurtrack_engine::PianoPlan::new(10, 1.2, 0.5, 0.2);
-            piano.voice = Some(compile_voice(&group.graph)?);
+            piano.voice = Some(compile_voice(&group.graph, &group.interface)?);
             Some(piano)
         } else {
             None
@@ -222,7 +223,10 @@ impl Track {
     }
 }
 
-fn compile_voice(voice: &VoiceGraph) -> Result<VoicePlan, GraphError> {
+fn compile_voice(
+    voice: &VoiceGraph,
+    interface: &NodeGroupInterface,
+) -> Result<VoicePlan, GraphError> {
     let order = voice.topological_order()?;
     let mut indices = BTreeMap::<(NodeId, String), usize>::new();
     let mut nodes = Vec::new();
@@ -248,14 +252,16 @@ fn compile_voice(voice: &VoiceGraph) -> Result<VoicePlan, GraphError> {
             })
             .collect::<Result<Vec<_>, _>>()?;
         if node.kind == VoiceNodeKind::GroupInput {
-            for (port, op) in [
-                ("pitch", VoiceOp::Pitch),
-                ("velocity", VoiceOp::Velocity),
-                ("gate", VoiceOp::Gate),
-            ] {
+            for socket in &interface.inputs {
+                let op = match (socket.ty, socket.id.as_str()) {
+                    (NodeGroupSocketType::Float, "pitch") => VoiceOp::Pitch,
+                    (NodeGroupSocketType::Float, "velocity") => VoiceOp::Velocity,
+                    (NodeGroupSocketType::Gate, _) => VoiceOp::Gate,
+                    _ => VoiceOp::Constant(0.0),
+                };
                 let index = nodes.len();
                 nodes.push(VoiceNodePlan::new(op, Vec::new()));
-                indices.insert((id.clone(), port.to_string()), index);
+                indices.insert((id.clone(), socket.id.clone()), index);
             }
             continue;
         }
@@ -384,6 +390,10 @@ impl Session {
             "project.master_plugin_off" => self.cmd_master_plugin_off(),
             "track.create" => self.cmd_track_create(&request.args),
             "track.remove" => self.cmd_track_remove(&request.args),
+            "group.create" => self.cmd_group_create(&request.args),
+            "group.delete" => self.cmd_group_delete(&request.args),
+            "group.rename" => self.cmd_group_rename(&request.args),
+            "group.interface" => self.cmd_group_interface(&request.args),
             "group.voice" => self.cmd_group_voice(&request.args),
             "clip.create" => self.cmd_clip_create(&request.args),
             "clip.update" => self.cmd_clip_update(&request.args),
@@ -933,6 +943,134 @@ impl Session {
         .with_undo(token))
     }
 
+    fn cmd_group_create(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct CreateArgs {
+            #[serde(default)]
+            name: Option<String>,
+            #[serde(default)]
+            group_id: Option<String>,
+        }
+        let args: CreateArgs = parse_args(args)?;
+        let token = self.snapshot("group.create");
+        let project = self
+            .project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let id = if let Some(id) = args.group_id {
+            NodeId::new(id.clone()).map_err(graph_error)?;
+            if project.node_groups.contains_key(&id) {
+                return Err(CommandError::invalid_args(format!("节点组已存在：{id}")));
+            }
+            id
+        } else {
+            let mut number = project.node_groups.len() + 1;
+            loop {
+                let id = format!("group-{number}");
+                if !project.node_groups.contains_key(&id) {
+                    break id;
+                }
+                number += 1;
+            }
+        };
+        let name = args
+            .name
+            .unwrap_or_else(|| format!("Group {id}"))
+            .trim()
+            .to_string();
+        if name.is_empty() {
+            return Err(CommandError::invalid_args("name 不能为空"));
+        }
+        let group = NodeGroup::empty(id.clone(), name);
+        group.validate().map_err(graph_error)?;
+        project.node_groups.insert(id.clone(), group);
+        Ok(CommandResponse::ok(json!({ "group_id": id })).with_undo(token))
+    }
+
+    fn cmd_group_delete(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct DeleteArgs {
+            group_id: String,
+        }
+        let args: DeleteArgs = parse_args(args)?;
+        let token = self.snapshot("group.delete");
+        let project = self
+            .project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let referenced = project.tracks.iter().any(|track| {
+            track.graph.nodes().any(|node| {
+                node.kind() == NodeKind::VoiceGroup && node.group() == Some(args.group_id.as_str())
+            })
+        });
+        if referenced {
+            return Err(CommandError::invalid_args("节点组仍被轨道引用，不能删除"));
+        }
+        if project.node_groups.remove(&args.group_id).is_none() {
+            return Err(CommandError::not_found(format!(
+                "找不到节点组：{}",
+                args.group_id
+            )));
+        }
+        Ok(CommandResponse::ok(json!({ "group_id": args.group_id })).with_undo(token))
+    }
+
+    fn cmd_group_rename(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct RenameArgs {
+            group_id: String,
+            name: String,
+        }
+        let args: RenameArgs = parse_args(args)?;
+        let name = args.name.trim();
+        if name.is_empty() {
+            return Err(CommandError::invalid_args("name 不能为空"));
+        }
+        let token = self.snapshot("group.rename");
+        let project = self
+            .project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let group = project
+            .node_groups
+            .get_mut(&args.group_id)
+            .ok_or_else(|| CommandError::not_found(format!("找不到节点组：{}", args.group_id)))?;
+        group.name = name.to_string();
+        Ok(
+            CommandResponse::ok(json!({ "group_id": args.group_id, "name": group.name }))
+                .with_undo(token),
+        )
+    }
+
+    fn cmd_group_interface(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct InterfaceArgs {
+            group_id: String,
+            interface: aurtrack_graph::NodeGroupInterface,
+        }
+        let args: InterfaceArgs = parse_args(args)?;
+        let token = self.snapshot("group.interface");
+        let project = self
+            .project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let group = project
+            .node_groups
+            .get_mut(&args.group_id)
+            .ok_or_else(|| CommandError::not_found(format!("找不到节点组：{}", args.group_id)))?;
+        let previous = group.interface.clone();
+        group.interface = args.interface;
+        if let Err(error) = group.validate() {
+            group.interface = previous;
+            return Err(graph_error(error));
+        }
+        Ok(CommandResponse::ok(json!({ "group_id": args.group_id })).with_undo(token))
+    }
+
     fn cmd_group_voice(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
@@ -950,7 +1088,9 @@ impl Session {
             .node_groups
             .get_mut(&args.group_id)
             .ok_or_else(|| CommandError::not_found(format!("找不到节点组：{}", args.group_id)))?;
-        args.voice.validate().map_err(graph_error)?;
+        args.voice
+            .validate_with_interface(&group.interface)
+            .map_err(graph_error)?;
         group.graph = args.voice;
         Ok(CommandResponse::ok(json!({
             "group_id": args.group_id,

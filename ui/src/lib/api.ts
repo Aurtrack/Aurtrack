@@ -78,13 +78,15 @@ export type NodeGroupSocket = {
   type: "float" | "gate" | "audio";
 };
 
+export type NodeGroupInterface = {
+  inputs: NodeGroupSocket[];
+  outputs: NodeGroupSocket[];
+};
+
 export type NodeGroup = {
   id: string;
   name: string;
-  interface: {
-    inputs: NodeGroupSocket[];
-    outputs: NodeGroupSocket[];
-  };
+  interface: NodeGroupInterface;
   graph: VoiceGraph;
 };
 
