@@ -1,6 +1,6 @@
 # 命令规范 v1.3
 
-这份文档定义 Aurtrack 的可运行命令面：51 条命令、统一的返回结构、寻址规则，以及 MCP 的映射方式。代码必须与本文一致。
+这份文档定义 Aurtrack 的可运行命令面：53 条命令、统一的返回结构、寻址规则，以及 MCP 的映射方式。代码必须与本文一致。
 
 工程格式 v4 用 music tick 存储位置（960 PPQ），轨道保存 `aurtrack-graph` 节点图。命令边界仍用秒，避免 UI 和 CLI 直接操作 tick。旧 v3 工程会被拒绝。
 
@@ -672,7 +672,27 @@
 }
 ```
 
-### 43. `plugin.scan`
+### 43. `project.master_plugin`
+
+记录工程的主输出插件和可选 state blob。只写文档，不加载插件；实时加载走 `plugin.master`。
+
+```json
+{
+  "path": "D:/Plugins/CLAP/effect.clap",
+  "id": "com.example.effect",
+  "state": "AAECAwQ="
+}
+```
+
+### 44. `project.master_plugin_off`
+
+清除工程的主输出插件记录。
+
+```json
+{}
+```
+
+### 45. `plugin.scan`
 
 扫描 CLAP 插件目录，返回描述符和坏插件列表。省略 `path` 时使用 `<配置目录>/Aurtrack/plugins`。
 
@@ -680,7 +700,7 @@
 { "path": "D:/Plugins/CLAP" }
 ```
 
-### 44. `plugin.inspect`
+### 46. `plugin.inspect`
 
 读取 CLAP 插件的参数列表和是否支持状态扩展。
 
@@ -688,15 +708,19 @@
 { "path": "D:/Plugins/CLAP/effect.clap", "id": "com.example.effect" }
 ```
 
-### 45. `plugin.master`
+### 47. `plugin.master`
 
 把 CLAP 立体声效果器挂到实时主输出。插件在专用线程运行，音频线程通过无锁环形缓冲交换块；当前固定 512 帧，一块延迟。
 
 ```json
-{ "path": "D:/Plugins/CLAP/effect.clap", "id": "com.example.effect" }
+{
+  "path": "D:/Plugins/CLAP/effect.clap",
+  "id": "com.example.effect",
+  "state": "AAECAwQ="
+}
 ```
 
-### 46. `plugin.master_off`
+### 48. `plugin.master_off`
 
 卸载实时主输出插件。
 
@@ -704,7 +728,7 @@
 {}
 ```
 
-### 47. `plugin.param`
+### 49. `plugin.param`
 
 向已挂载的实时主输出插件写参数。参数 ID 来自 `plugin.inspect`。
 
@@ -712,7 +736,7 @@
 { "id": 1, "value": 0.75 }
 ```
 
-### 48. `plugin.state_save`
+### 50. `plugin.state_save`
 
 读取插件 state 扩展，返回 base64 blob。
 
@@ -720,7 +744,7 @@
 { "path": "D:/Plugins/CLAP/effect.clap", "id": "com.example.effect" }
 ```
 
-### 49. `plugin.state_load`
+### 51. `plugin.state_load`
 
 从 base64 blob 恢复插件状态。
 
@@ -732,7 +756,7 @@
 }
 ```
 
-### 50. `extension.list`
+### 52. `extension.list`
 
 扫描应用扩展目录。扩展是外部进程，清单见 `specs/extensions.md`。
 
@@ -740,7 +764,7 @@
 { "path": "D:/Extensions" }
 ```
 
-### 51. `extension.call`
+### 53. `extension.call`
 
 调用扩展命令。请求通过 JSON stdin 传入，扩展的 stdout 必须是一个 JSON 对象。
 
@@ -760,6 +784,8 @@
 | --- | --- |
 | `project.create` | `project_create` |
 | `project.update` | `project_update` |
+| `project.master_plugin` | `project_master_plugin` |
+| `project.master_plugin_off` | `project_master_plugin_off` |
 | `track.create` | `track_create` |
 | `device.add` | `device_add` |
 | `node.add` | `node_add` |

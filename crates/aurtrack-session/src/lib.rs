@@ -71,6 +71,17 @@ pub struct Project {
     pub loop_start_tick: u64,
     pub loop_end_tick: u64,
     pub tracks: Vec<Track>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub master_plugin: Option<MasterPlugin>,
+}
+
+/// 工程里记录的实时主输出插件；state 是 base64 blob。
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct MasterPlugin {
+    pub path: String,
+    pub id: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub state: Option<String>,
 }
 
 impl Project {
@@ -272,6 +283,8 @@ impl Session {
             "project.state" => Ok(self.cmd_project_state()),
             "project.save" => self.cmd_project_save(&request.args),
             "project.open" => self.cmd_project_open(&request.args),
+            "project.master_plugin" => self.cmd_master_plugin(&request.args),
+            "project.master_plugin_off" => self.cmd_master_plugin_off(),
             "track.create" => self.cmd_track_create(&request.args),
             "track.remove" => self.cmd_track_remove(&request.args),
             "clip.create" => self.cmd_clip_create(&request.args),
@@ -345,6 +358,7 @@ impl Session {
             loop_start_tick: 0,
             loop_end_tick: 0,
             tracks: Vec::new(),
+            master_plugin: None,
         };
         project.loop_end_tick = project.length_ticks();
         let token = self.snapshot("project.create");
@@ -683,6 +697,51 @@ impl Session {
     fn cmd_project_state(&self) -> CommandResponse {
         let project = self.project.as_ref().map(project_view);
         CommandResponse::ok(json!({ "project": project }))
+    }
+
+    fn cmd_master_plugin(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct MasterPluginArgs {
+            path: String,
+            id: String,
+            #[serde(default)]
+            state: Option<String>,
+        }
+        let args: MasterPluginArgs = parse_args(args)?;
+        if args.path.trim().is_empty() || args.id.trim().is_empty() {
+            return Err(CommandError::invalid_args("path 和 id 不能为空"));
+        }
+        if self.project.is_none() {
+            return Err(CommandError::not_found("还没有工程，先执行 project.create"));
+        }
+        let token = self.snapshot("project.master_plugin");
+        let project = self
+            .project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        project.master_plugin = Some(MasterPlugin {
+            path: args.path,
+            id: args.id,
+            state: args.state,
+        });
+        Ok(CommandResponse::ok(json!({
+            "master_plugin": project.master_plugin
+        }))
+        .with_undo(token))
+    }
+
+    fn cmd_master_plugin_off(&mut self) -> Result<CommandResponse, CommandError> {
+        if self.project.is_none() {
+            return Err(CommandError::not_found("还没有工程，先执行 project.create"));
+        }
+        let token = self.snapshot("project.master_plugin_off");
+        let project = self
+            .project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        project.master_plugin = None;
+        Ok(CommandResponse::ok(json!({ "master_plugin": null })).with_undo(token))
     }
 
     fn cmd_project_save(&self, args: &Value) -> Result<CommandResponse, CommandError> {
@@ -2083,6 +2142,7 @@ fn project_view(project: &Project) -> Value {
         "loop_end": project.loop_end_seconds(),
         "loop_start_tick": project.loop_start_tick,
         "loop_end_tick": project.loop_end_tick,
+        "master_plugin": project.master_plugin,
         "tracks": project.tracks.iter().map(|track| json!({
             "id": &track.id,
             "name": &track.name,

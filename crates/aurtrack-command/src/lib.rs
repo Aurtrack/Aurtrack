@@ -633,11 +633,27 @@ fn plugin_inspect_schema() -> Value {
     )
 }
 
+fn project_master_plugin_schema() -> Value {
+    object_schema(
+        json!({
+            "path": { "type": "string" },
+            "id": { "type": "string" },
+            "state": { "type": "string", "description": "可选 base64 状态 blob" }
+        }),
+        &["path", "id"],
+    )
+}
+
+fn project_master_plugin_off_schema() -> Value {
+    object_schema(json!({}), &[])
+}
+
 fn plugin_master_schema() -> Value {
     object_schema(
         json!({
             "path": { "type": "string", "description": "CLAP 动态库路径" },
-            "id": { "type": "string", "description": "插件描述符 ID" }
+            "id": { "type": "string", "description": "插件描述符 ID" },
+            "state": { "type": "string", "description": "可选 base64 状态 blob" }
         }),
         &["path", "id"],
     )
@@ -738,7 +754,7 @@ fn transport_metronome_schema() -> Value {
     )
 }
 
-static COMMANDS: [CommandSpec; 51] = [
+static COMMANDS: [CommandSpec; 53] = [
     CommandSpec {
         id: "project.create",
         summary: "创建或替换当前工程",
@@ -768,6 +784,18 @@ static COMMANDS: [CommandSpec; 51] = [
         summary: "从文件打开工程",
         undo: UndoKind::Snapshot,
         input_schema: project_open_schema,
+    },
+    CommandSpec {
+        id: "project.master_plugin",
+        summary: "记录工程的主输出插件与状态",
+        undo: UndoKind::Snapshot,
+        input_schema: project_master_plugin_schema,
+    },
+    CommandSpec {
+        id: "project.master_plugin_off",
+        summary: "清除工程的主输出插件",
+        undo: UndoKind::Snapshot,
+        input_schema: project_master_plugin_off_schema,
     },
     CommandSpec {
         id: "track.create",

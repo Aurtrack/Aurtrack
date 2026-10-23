@@ -114,7 +114,7 @@ impl Runtime {
             "plugin.master" => self.plugin_master(&request.args),
             "plugin.master_off" => self.plugin_master_off(),
             "plugin.param" => self.plugin_param(&request.args),
-            "plugin.state_save" => Self::plugin_state_save(&request.args),
+            "plugin.state_save" => self.plugin_state_save(&request.args),
             "plugin.state_load" => Self::plugin_state_load(&request.args),
             "extension.list" => Self::extension_list(&request.args),
             "extension.call" => Self::extension_call(&request.args),
@@ -133,6 +133,33 @@ impl Runtime {
             self.plugin_bridge = None;
         }
         self.ensure_audio()?;
+        let wanted_plugin = self
+            .session
+            .project()
+            .and_then(|project| project.master_plugin.clone());
+        if let Some(master) = wanted_plugin {
+            let wanted = (std::path::PathBuf::from(&master.path), master.id);
+            if self.plugin_config.as_ref() != Some(&wanted) {
+                let Some(bridge) = self.plugin_bridge.as_ref() else {
+                    return Err(CommandError::new(
+                        "audio_unavailable",
+                        "音频输出没有打开".to_string(),
+                    ));
+                };
+                let state = master
+                    .state
+                    .as_deref()
+                    .map(aurtrack_host::decode_state)
+                    .transpose()
+                    .map_err(|error| {
+                        CommandError::invalid_args(format!("插件状态不合法：{error}"))
+                    })?;
+                bridge
+                    .load_with_state(wanted.0.clone(), wanted.1.clone(), self.sample_rate, state)
+                    .map_err(|error| CommandError::new("plugin_unavailable", error))?;
+                self.plugin_config = Some(wanted);
+            }
+        }
         let project = self
             .session
             .project()
@@ -228,6 +255,8 @@ impl Runtime {
         struct MasterArgs {
             path: String,
             id: String,
+            #[serde(default)]
+            state: Option<String>,
         }
         let args: MasterArgs = parse_args(args)?;
         self.ensure_audio()?;
@@ -238,11 +267,20 @@ impl Runtime {
             ));
         };
         let path = std::path::PathBuf::from(&args.path);
-        if let Err(error) = bridge.load(path.clone(), args.id.clone(), self.sample_rate) {
+        let state = args
+            .state
+            .as_deref()
+            .map(aurtrack_host::decode_state)
+            .transpose()
+            .map_err(|error| CommandError::invalid_args(format!("插件状态不合法：{error}")))?;
+        if let Err(error) =
+            bridge.load_with_state(path.clone(), args.id.clone(), self.sample_rate, state)
+        {
             self.plugin_config = None;
             return Err(CommandError::new("plugin_unavailable", error));
         }
         self.plugin_config = Some((path, args.id.clone()));
+        self.persist_master_plugin(args.state)?;
         Ok(CommandResponse::ok(json!({
             "path": args.path,
             "id": args.id,
@@ -258,7 +296,33 @@ impl Runtime {
                 .map_err(|error| CommandError::new("plugin_unavailable", error))?;
         }
         self.plugin_config = None;
+        if self.session.project().is_some() {
+            let request = CommandRequest {
+                cmd: "project.master_plugin_off".to_string(),
+                args: json!({}),
+            };
+            self.session.execute(&request)?;
+        }
         Ok(CommandResponse::ok(json!({ "loaded": false })))
+    }
+
+    fn persist_master_plugin(&mut self, state: Option<String>) -> Result<(), CommandError> {
+        if self.session.project().is_none() {
+            return Ok(());
+        }
+        let Some((path, id)) = self.plugin_config.clone() else {
+            return Ok(());
+        };
+        let request = CommandRequest {
+            cmd: "project.master_plugin".to_string(),
+            args: json!({
+                "path": path.display().to_string(),
+                "id": id,
+                "state": state,
+            }),
+        };
+        self.session.execute(&request)?;
+        Ok(())
     }
 
     fn plugin_param(&self, args: &Value) -> Result<CommandResponse, CommandError> {
@@ -287,7 +351,7 @@ impl Runtime {
         })))
     }
 
-    fn plugin_state_save(args: &Value) -> Result<CommandResponse, CommandError> {
+    fn plugin_state_save(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct StateArgs {
@@ -297,6 +361,7 @@ impl Runtime {
         let args: StateArgs = parse_args(args)?;
         let state = aurtrack_host::save_state(std::path::Path::new(&args.path), &args.id)
             .map_err(|error| CommandError::invalid_args(format!("保存插件状态失败：{error}")))?;
+        self.persist_master_plugin(Some(state.clone()))?;
         Ok(CommandResponse::ok(json!({
             "path": args.path,
             "id": args.id,
@@ -578,6 +643,7 @@ mod tests {
                     }],
                 }],
             }],
+            master_plugin: None,
         };
 
         let plan = build_plan(&project, 48_000, false).unwrap();
@@ -597,11 +663,11 @@ mod tests {
     }
 
     #[test]
-    fn describe_lists_fifty_one_commands() {
+    fn describe_lists_fifty_three_commands() {
         let mut runtime = Runtime::new();
         let response = run(&mut runtime, "describe", json!({})).unwrap();
         let commands = response.data["commands"].as_array().unwrap();
-        assert_eq!(commands.len(), 51);
+        assert_eq!(commands.len(), 53);
         assert!(
             commands
                 .iter()

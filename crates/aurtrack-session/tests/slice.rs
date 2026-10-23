@@ -330,10 +330,10 @@ fn batch_note_edits_and_cross_track_clip_move_share_snapshots() {
 }
 
 #[test]
-fn describe_lists_fifty_one_commands() {
+fn describe_lists_fifty_three_commands() {
     let mut session = Session::default();
     let out = run(&mut session, "describe", json!({}));
-    assert_eq!(out["commands"].as_array().unwrap().len(), 51);
+    assert_eq!(out["commands"].as_array().unwrap().len(), 53);
     assert!(out["project"].is_null());
 }
 
@@ -1023,4 +1023,40 @@ fn track_before_project_is_not_found() {
         })
         .unwrap_err();
     assert_eq!(error.code, "not_found");
+}
+
+#[test]
+fn master_plugin_is_saved_and_restored_with_project() {
+    let mut session = Session::default();
+    run(&mut session, "project.create", json!({ "name": "plugin" }));
+    run(
+        &mut session,
+        "project.master_plugin",
+        json!({
+            "path": "D:/Plugins/effect.clap",
+            "id": "com.example.effect",
+            "state": "AAECAwQ="
+        }),
+    );
+    let state = run(&mut session, "project.state", json!({}));
+    assert_eq!(
+        state["project"]["master_plugin"]["id"],
+        "com.example.effect"
+    );
+    assert_eq!(state["project"]["master_plugin"]["state"], "AAECAwQ=");
+
+    let path = project_temp_path("master-plugin");
+    run(&mut session, "project.save", json!({ "path": path }));
+    run(&mut session, "project.create", json!({ "name": "empty" }));
+    run(&mut session, "project.open", json!({ "path": path }));
+    let reopened = run(&mut session, "project.state", json!({}));
+    assert_eq!(
+        reopened["project"]["master_plugin"]["path"],
+        "D:/Plugins/effect.clap"
+    );
+    let _ = std::fs::remove_file(path);
+
+    run(&mut session, "project.master_plugin_off", json!({}));
+    let cleared = run(&mut session, "project.state", json!({}));
+    assert!(cleared["project"]["master_plugin"].is_null());
 }

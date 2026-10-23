@@ -252,7 +252,12 @@ struct ClapProcessor {
 }
 
 impl ClapProcessor {
-    fn load(path: &Path, plugin_id: &str, sample_rate: u32) -> Result<Self, HostError> {
+    fn load(
+        path: &Path,
+        plugin_id: &str,
+        sample_rate: u32,
+        state: Option<&[u8]>,
+    ) -> Result<Self, HostError> {
         let id = CString::new(plugin_id).map_err(|_| HostError::InvalidPluginId)?;
         // SAFETY: 加载动态库会执行插件代码，调用方只能传入受信任插件。
         let entry = unsafe { PluginEntry::load(path) }.map_err(|error| error.to_string())?;
@@ -271,6 +276,16 @@ impl ClapProcessor {
             &host_info,
         )
         .map_err(|error| error.to_string())?;
+        if let Some(state) = state {
+            let handle = instance.plugin_handle();
+            let state_extension = handle
+                .get_extension::<PluginState>()
+                .ok_or_else(|| HostError::State("插件不支持 state 扩展".to_string()))?;
+            let mut reader = state;
+            state_extension
+                .load(&handle, &mut reader)
+                .map_err(|error| HostError::State(error.to_string()))?;
+        }
         let config = PluginAudioConfiguration {
             sample_rate: f64::from(sample_rate),
             min_frames_count: 1,
@@ -439,6 +454,7 @@ enum PluginCommand {
         path: PathBuf,
         id: String,
         sample_rate: u32,
+        state: Option<Vec<u8>>,
         reply: Sender<Result<(), String>>,
     },
     Unload {
@@ -500,12 +516,23 @@ impl PluginBridgeControl {
     }
 
     pub fn load(&self, path: PathBuf, id: String, sample_rate: u32) -> Result<(), String> {
+        self.load_with_state(path, id, sample_rate, None)
+    }
+
+    pub fn load_with_state(
+        &self,
+        path: PathBuf,
+        id: String,
+        sample_rate: u32,
+        state: Option<Vec<u8>>,
+    ) -> Result<(), String> {
         let (reply, answer) = mpsc::channel();
         self.commands
             .send(PluginCommand::Load {
                 path,
                 id,
                 sample_rate,
+                state,
                 reply,
             })
             .map_err(|_| "插件线程已经退出".to_string())?;
@@ -554,14 +581,16 @@ fn plugin_thread(
                 path,
                 id,
                 sample_rate,
+                state,
                 reply,
             }) => {
                 active.store(false, Ordering::Release);
                 processor = None;
-                let result = ClapProcessor::load(&path, &id, sample_rate).map(|loaded| {
-                    processor = Some(loaded);
-                    active.store(true, Ordering::Release);
-                });
+                let result =
+                    ClapProcessor::load(&path, &id, sample_rate, state.as_deref()).map(|loaded| {
+                        processor = Some(loaded);
+                        active.store(true, Ordering::Release);
+                    });
                 let _ = reply.send(result.map_err(|error| error.to_string()));
             },
             Ok(PluginCommand::Unload { reply }) => {
@@ -618,6 +647,13 @@ fn plugin_thread(
     active.store(false, Ordering::Release);
 }
 
+/// 解码工程里保存的 base64 state。
+pub fn decode_state(state: &str) -> Result<Vec<u8>, HostError> {
+    base64::engine::general_purpose::STANDARD
+        .decode(state)
+        .map_err(|error| HostError::State(error.to_string()))
+}
+
 /// 读取插件 state 扩展并编码为 base64。
 pub fn save_state(path: &Path, plugin_id: &str) -> Result<String, HostError> {
     let id = CString::new(plugin_id).map_err(|_| HostError::InvalidPluginId)?;
@@ -651,9 +687,7 @@ pub fn save_state(path: &Path, plugin_id: &str) -> Result<String, HostError> {
 
 /// 从 base64 state 恢复插件。
 pub fn restore_state(path: &Path, plugin_id: &str, state: &str) -> Result<(), HostError> {
-    let bytes = base64::engine::general_purpose::STANDARD
-        .decode(state)
-        .map_err(|error| HostError::State(error.to_string()))?;
+    let bytes = decode_state(state)?;
     let id = CString::new(plugin_id).map_err(|_| HostError::InvalidPluginId)?;
     // SAFETY: 与 `scan_plugin` 相同，加载动态库会执行插件代码。
     let entry = unsafe { PluginEntry::load(path) }.map_err(|error| error.to_string())?;
@@ -875,6 +909,38 @@ mod tests {
         let state = save_state(path, "com.aurtrack.fixture.gain").unwrap();
         restore_state(path, "com.aurtrack.fixture.gain", &state).unwrap();
         assert!(!state.is_empty());
+    }
+
+    #[test]
+    fn fixture_plugin_applies_state_on_load() {
+        let path = Path::new("target/fixture-gain.clap");
+        if !path.exists() {
+            return;
+        }
+        let state = decode_state("AACAPg==").unwrap();
+        let (control, mut port) = PluginBridgeControl::new();
+        control
+            .load_with_state(
+                path.to_path_buf(),
+                "com.aurtrack.fixture.gain".to_string(),
+                48_000,
+                Some(state),
+            )
+            .unwrap();
+        let input = [0.5_f32; BLOCK_FRAMES];
+        let mut left = [0.0_f32; BLOCK_FRAMES];
+        let mut right = [0.0_f32; BLOCK_FRAMES];
+        let mut processed = false;
+        for _ in 0..200 {
+            port.process(&input, &input, &mut left, &mut right).unwrap();
+            if left[0] > 0.12 && left[0] < 0.13 {
+                processed = true;
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(2));
+        }
+        control.unload().unwrap();
+        assert!(processed, "插件没有应用加载时的 state");
     }
 
     #[test]
