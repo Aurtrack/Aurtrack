@@ -10,6 +10,7 @@
 | --- | --- | --- | --- |
 | `instrument.sine` | 无 | `out` | `frequency` 20–20000，默认 440 |
 | `instrument.silence` | 无 | `out` | 无 |
+| `instrument.piano` | 无 | `out` | `partials` 1–16，`decay` 0.1–8，`brightness` 0–1，`hammer` 0–1 |
 | `amp.adsr` | `in` | `out` | `attack` 0.001–10，`decay` 0–10，`sustain` 0–1，`release` 0.001–10 |
 | `filter.lowpass` | `in` | `out` | `cutoff` 20–20000 Hz，`resonance` 0–0.95 |
 | `gain` | `in` | `out` | `gain` 0–4，默认 1 |

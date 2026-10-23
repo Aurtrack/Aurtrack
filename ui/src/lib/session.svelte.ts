@@ -670,7 +670,7 @@ export class SessionStore {
 
   async addTrack(input: {
     name: string;
-    source: "sine" | "silence";
+    source: "sine" | "silence" | "piano";
     frequency: number;
   }) {
     if (this.busy) return;

@@ -29,8 +29,8 @@ use std::path::Path;
 
 use aurtrack_command::{CommandError, CommandRequest, CommandResponse, registry};
 use aurtrack_engine::{
-    AdsrPlan, FilterPlan, FilterSettings, GraphNodePlan, GraphOp, GraphPlan, PluginPlan,
-    adsr_envelope, midi_to_hz, note_envelope,
+    AdsrPlan, FilterPlan, FilterSettings, GraphNodePlan, GraphOp, GraphPlan, NotePlan, PianoPlan,
+    PluginPlan, adsr_envelope, midi_to_hz, note_envelope,
 };
 use aurtrack_graph::{Graph, GraphError, Node, NodeId, NodeKind, PORT_IN, PortRef};
 use serde::de::DeserializeOwned;
@@ -141,6 +141,7 @@ impl Track {
                     .and_then(|node| node.param("frequency"))
                     .unwrap_or(440.0),
             },
+            Some(NodeKind::InstrumentPiano) => Source::Piano,
             _ => Source::Silence,
         }
     }
@@ -199,6 +200,14 @@ impl Track {
                 plugin: compiled
                     .plugin
                     .map(|plugin| PluginPlan::new(plugin.path, plugin.id, plugin.state)),
+                piano: compiled.piano.map(|piano| {
+                    aurtrack_engine::PianoPlan::new(
+                        piano.partials,
+                        piano.decay,
+                        piano.brightness,
+                        piano.hammer,
+                    )
+                }),
             },
         ))
     }
@@ -230,6 +239,7 @@ pub struct Note {
 pub enum Source {
     Silence,
     Sine { frequency: f64 },
+    Piano,
 }
 
 /// 轨道上的设备。
@@ -449,6 +459,7 @@ impl Session {
             .sample_rate;
         let (instrument, frequency) = match args.source.as_deref().unwrap_or("silence") {
             "silence" => (NodeKind::InstrumentSilence, None),
+            "piano" => (NodeKind::InstrumentPiano, None),
             "sine" => {
                 let frequency = args.frequency.unwrap_or(440.0);
                 if !frequency.is_finite() || !(20.0..=20_000.0).contains(&frequency) {
@@ -2566,30 +2577,54 @@ fn render_project(
             sustain: settings.sustain,
             release: settings.release,
         });
+        let piano: Option<PianoPlan> = graph.piano;
+        let piano_notes: Vec<NotePlan> = if piano.is_some() {
+            track
+                .clips
+                .iter()
+                .flat_map(|clip| {
+                    clip.notes.iter().map(move |note| NotePlan {
+                        start: project.ticks_to_seconds(clip.start_tick + note.start_tick),
+                        duration: project.ticks_to_seconds(note.duration_tick),
+                        frequency: midi_to_hz(note.pitch),
+                        velocity: note.velocity,
+                    })
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
         let release = adsr.map_or(0.0, |envelope| envelope.release.max(0.001));
         for (index, slot) in mix.iter_mut().enumerate() {
             let time = start_seconds + index as f64 / sample_rate_f64;
-            let mut sample = source_frequency.map_or(0.0, |frequency| {
-                (std::f64::consts::TAU * frequency * time).sin() * 0.25
-            });
-            for clip in &track.clips {
-                for note in &clip.notes {
-                    let note_start = project.ticks_to_seconds(clip.start_tick + note.start_tick);
-                    let note_duration = project.ticks_to_seconds(note.duration_tick);
-                    let note_end = note_start + note_duration;
-                    if time >= note_start && time < note_end + release {
-                        let local = time - note_start;
-                        let envelope = adsr.map_or_else(
-                            || note_envelope(local, note_duration),
-                            |envelope| adsr_envelope(local, note_duration, envelope),
-                        );
-                        sample += (std::f64::consts::TAU * midi_to_hz(note.pitch) * local).sin()
-                            * note.velocity
-                            * envelope
-                            * 0.25;
+            let mut sample = if let Some(piano) = piano {
+                piano.sample(&piano_notes, time)
+            } else {
+                let mut sample = source_frequency.map_or(0.0, |frequency| {
+                    (std::f64::consts::TAU * frequency * time).sin() * 0.25
+                });
+                for clip in &track.clips {
+                    for note in &clip.notes {
+                        let note_start =
+                            project.ticks_to_seconds(clip.start_tick + note.start_tick);
+                        let note_duration = project.ticks_to_seconds(note.duration_tick);
+                        let note_end = note_start + note_duration;
+                        if time >= note_start && time < note_end + release {
+                            let local = time - note_start;
+                            let envelope = adsr.map_or_else(
+                                || note_envelope(local, note_duration),
+                                |envelope| adsr_envelope(local, note_duration, envelope),
+                            );
+                            sample += (std::f64::consts::TAU * midi_to_hz(note.pitch) * local)
+                                .sin()
+                                * note.velocity
+                                * envelope
+                                * 0.25;
+                        }
                     }
                 }
-            }
+                sample
+            };
             sample = graph.sample(sample, project.sample_rate);
             *slot += sample as f32;
         }

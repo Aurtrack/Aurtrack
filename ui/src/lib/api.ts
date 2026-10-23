@@ -43,7 +43,8 @@ export type TimeSignature = {
 
 export type Source =
   | { kind: "silence" }
-  | { kind: "sine"; frequency: number };
+  | { kind: "sine"; frequency: number }
+  | { kind: "piano" };
 
 export type GraphNode = {
   id: string;

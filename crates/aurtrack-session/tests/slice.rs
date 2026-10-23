@@ -1096,3 +1096,39 @@ fn plugin_node_reaches_engine_plan() {
     let (_, _, plan) = track.playback_graph().unwrap();
     assert_eq!(plan.plugin.as_ref().unwrap().id, "com.example.effect");
 }
+
+#[test]
+fn piano_track_renders_audible_wav() {
+    let mut session = Session::default();
+    run(&mut session, "project.create", json!({ "name": "piano" }));
+    run(
+        &mut session,
+        "track.create",
+        json!({ "name": "piano", "source": "piano" }),
+    );
+    run(
+        &mut session,
+        "clip.create",
+        json!({ "track_id": "track-1", "start": 0.0, "duration": 2.0 }),
+    );
+    run(
+        &mut session,
+        "note.add",
+        json!({
+            "path": "/tracks/track-1/clips/clip-1",
+            "pitch": 60,
+            "start": 0.0,
+            "duration": 1.0,
+            "velocity": 0.8,
+        }),
+    );
+    let path = temp_path("piano");
+    let rendered = run(
+        &mut session,
+        "render.segment",
+        json!({ "path": path, "duration_seconds": 1.0 }),
+    );
+    let rms = rendered["rms"].as_f64().unwrap();
+    assert!(rms > 0.001, "钢琴轨渲染没有声音：{rms}");
+    let _ = std::fs::remove_file(path);
+}

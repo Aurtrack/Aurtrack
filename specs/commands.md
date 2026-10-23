@@ -67,7 +67,7 @@
 | 参数 | 类型 | 必填 | 默认 | 说明 |
 | --- | --- | --- | --- | --- |
 | `name` | string | 是 | | 轨道名，不能为空 |
-| `source` | string | 否 | `silence` | `silence` 或 `sine` |
+| `source` | string | 否 | `silence` | `silence`、`sine` 或 `piano` |
 | `frequency` | number | 否 | `440` | 20 到 20000，且小于采样率的一半 |
 
 返回：

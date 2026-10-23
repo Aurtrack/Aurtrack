@@ -11,7 +11,7 @@
     onRemove: (id: string) => void;
     onAdd: (input: {
       name: string;
-      source: "sine" | "silence";
+      source: "sine" | "silence" | "piano";
       frequency: number;
     }) => void;
   }
@@ -19,7 +19,7 @@
   let { tracks, selectedId, busy, onSelect, onRemove, onAdd }: Props = $props();
 
   let name = $state("");
-  let source = $state<"sine" | "silence">("silence");
+  let source = $state<"sine" | "silence" | "piano">("silence");
   let frequency = $state(220);
 
   function submit() {
@@ -37,7 +37,8 @@
 
   function handleSource(event: Event) {
     const value = (event.currentTarget as HTMLSelectElement).value;
-    source = value === "silence" ? "silence" : "sine";
+    source =
+      value === "silence" ? "silence" : value === "piano" ? "piano" : "sine";
   }
 
   function sourceLabel(track: Track): string {
@@ -46,6 +47,9 @@
         frequency: formatNumber(track.source.frequency, 1),
         devices: track.devices.length,
       });
+    }
+    if (track.source.kind === "piano") {
+      return t("tracks.meta.piano", { devices: track.devices.length });
     }
     return t("tracks.meta.silence", { devices: track.devices.length });
   }
@@ -68,6 +72,7 @@
     <select class="text-input" value={source} onchange={handleSource}>
       <option value="silence">{t("tracks.source.silence")}</option>
       <option value="sine">{t("tracks.source.sine")}</option>
+      <option value="piano">{t("tracks.source.piano")}</option>
     </select>
     <div class="track-frequency">
       <NumberField
@@ -76,7 +81,7 @@
         max={20000}
         step={1}
         precision={0}
-        disabled={source === "silence"}
+        disabled={source !== "sine"}
         onchange={(value) => (frequency = value)}
       />
     </div>

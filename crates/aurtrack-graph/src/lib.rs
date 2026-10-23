@@ -70,6 +70,8 @@ pub enum NodeKind {
     InstrumentSine,
     #[serde(rename = "instrument.silence")]
     InstrumentSilence,
+    #[serde(rename = "instrument.piano")]
+    InstrumentPiano,
     #[serde(rename = "amp.adsr")]
     AmpAdsr,
     #[serde(rename = "filter.lowpass")]
@@ -89,6 +91,7 @@ impl NodeKind {
         match self {
             Self::InstrumentSine => "instrument.sine",
             Self::InstrumentSilence => "instrument.silence",
+            Self::InstrumentPiano => "instrument.piano",
             Self::AmpAdsr => "amp.adsr",
             Self::FilterLowpass => "filter.lowpass",
             Self::Gain => "gain",
@@ -99,7 +102,10 @@ impl NodeKind {
     }
 
     pub const fn is_instrument(self) -> bool {
-        matches!(self, Self::InstrumentSine | Self::InstrumentSilence)
+        matches!(
+            self,
+            Self::InstrumentSine | Self::InstrumentSilence | Self::InstrumentPiano
+        )
     }
 
     pub const fn is_device(self) -> bool {
@@ -111,7 +117,7 @@ impl NodeKind {
 
     pub const fn inputs(self) -> &'static [&'static str] {
         match self {
-            Self::InstrumentSine | Self::InstrumentSilence => &[],
+            Self::InstrumentSine | Self::InstrumentSilence | Self::InstrumentPiano => &[],
             Self::Mix => &["in1", "in2"],
             Self::AmpAdsr | Self::FilterLowpass | Self::Gain | Self::Plugin | Self::Output => {
                 &[PORT_IN]
@@ -124,6 +130,7 @@ impl NodeKind {
             Self::Output => &[],
             Self::InstrumentSine
             | Self::InstrumentSilence
+            | Self::InstrumentPiano
             | Self::AmpAdsr
             | Self::FilterLowpass
             | Self::Gain
@@ -143,6 +150,7 @@ impl NodeKind {
     pub fn param_specs(self) -> &'static [ParamSpec] {
         match self {
             Self::InstrumentSine => &SINE_PARAMS,
+            Self::InstrumentPiano => &PIANO_PARAMS,
             Self::InstrumentSilence | Self::Mix | Self::Plugin | Self::Output => &[],
             Self::AmpAdsr => &ADSR_PARAMS,
             Self::FilterLowpass => &FILTER_PARAMS,
@@ -174,6 +182,33 @@ const SINE_PARAMS: [ParamSpec; 1] = [ParamSpec {
     minimum: 20.0,
     maximum: 20_000.0,
 }];
+
+const PIANO_PARAMS: [ParamSpec; 4] = [
+    ParamSpec {
+        name: "partials",
+        default: 10.0,
+        minimum: 1.0,
+        maximum: 16.0,
+    },
+    ParamSpec {
+        name: "decay",
+        default: 1.2,
+        minimum: 0.1,
+        maximum: 8.0,
+    },
+    ParamSpec {
+        name: "brightness",
+        default: 0.5,
+        minimum: 0.0,
+        maximum: 1.0,
+    },
+    ParamSpec {
+        name: "hammer",
+        default: 0.2,
+        minimum: 0.0,
+        maximum: 1.0,
+    },
+];
 
 const ADSR_PARAMS: [ParamSpec; 4] = [
     ParamSpec {
@@ -432,6 +467,16 @@ pub struct AdsrSettings {
     pub release: f64,
 }
 
+/// 加法钢琴音色参数。
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PianoSettings {
+    pub partials: usize,
+    pub decay: f64,
+    pub brightness: f64,
+    pub hammer: f64,
+}
+
 /// DAG 编译结果；索引 0 固定是声部输入。
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq)]
@@ -441,6 +486,7 @@ pub struct CompiledGraph {
     pub nodes: Vec<CompiledNode>,
     pub output: usize,
     pub plugin: Option<PluginConfig>,
+    pub piano: Option<PianoSettings>,
 }
 
 /// DAG 中的一个处理节点。
@@ -921,7 +967,7 @@ impl Graph {
                 NodeKind::InstrumentSine => {
                     source_frequency = node.param("frequency");
                 },
-                NodeKind::InstrumentSilence => {
+                NodeKind::InstrumentSilence | NodeKind::InstrumentPiano => {
                     source_frequency = None;
                 },
                 NodeKind::AmpAdsr => {
@@ -1063,6 +1109,17 @@ impl Graph {
             inputs: Vec::new(),
         }];
         let mut plugin: Option<PluginConfig> = None;
+        #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+        let piano = self
+            .nodes
+            .values()
+            .find(|node| node.kind() == NodeKind::InstrumentPiano)
+            .map(|node| PianoSettings {
+                partials: (node.param("partials").unwrap_or(10.0).round() as usize).clamp(1, 16),
+                decay: node.param("decay").unwrap_or(1.2),
+                brightness: node.param("brightness").unwrap_or(0.5),
+                hammer: node.param("hammer").unwrap_or(0.2),
+            });
         let mut output = 0;
         for id in audio_ids {
             let node = self
@@ -1101,7 +1158,10 @@ impl Graph {
                     CompiledOp::Plugin
                 },
                 NodeKind::Output => CompiledOp::Output,
-                NodeKind::InstrumentSine | NodeKind::InstrumentSilence | NodeKind::AmpAdsr => {
+                NodeKind::InstrumentSine
+                | NodeKind::InstrumentSilence
+                | NodeKind::InstrumentPiano
+                | NodeKind::AmpAdsr => {
                     return Err(GraphError::AdsrOrder);
                 },
             };
@@ -1126,6 +1186,7 @@ impl Graph {
             nodes,
             output,
             plugin,
+            piano,
         })
     }
 

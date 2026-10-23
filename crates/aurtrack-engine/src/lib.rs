@@ -43,6 +43,63 @@ pub struct TrackPlan {
     pub graph: Option<GraphPlan>,
     pub notes: Vec<NotePlan>,
     pub plugin: Option<PluginPlan>,
+    pub piano: Option<PianoPlan>,
+}
+
+/// 加法钢琴音色。
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct PianoPlan {
+    pub partials: usize,
+    pub decay: f64,
+    pub brightness: f64,
+    pub hammer: f64,
+}
+
+impl PianoPlan {
+    pub fn new(partials: usize, decay: f64, brightness: f64, hammer: f64) -> Self {
+        Self {
+            partials,
+            decay,
+            brightness,
+            hammer,
+        }
+    }
+
+    pub fn sample(&self, notes: &[NotePlan], time: f64) -> f64 {
+        let mut output = 0.0;
+        for note in notes {
+            let local = time - note.start;
+            if local < 0.0 || local > note.duration + 0.5 {
+                continue;
+            }
+            let attack = (local / 0.004).min(1.0);
+            let brightness = note.velocity.clamp(0.0, 1.0).powf(self.brightness + 0.5);
+            for partial in 1..=self.partials {
+                let frequency = note.frequency * partial as f64;
+                if frequency >= 20_000.0 {
+                    break;
+                }
+                let envelope =
+                    (-local * (0.8 + partial as f64 * 0.35) / self.decay.max(0.05)).exp();
+                let amplitude = brightness / partial as f64;
+                output += (std::f64::consts::TAU * frequency * local).sin()
+                    * envelope
+                    * amplitude
+                    * attack;
+            }
+            if local < 0.012 {
+                let seed =
+                    note.start.to_bits() ^ note.frequency.to_bits() ^ note.velocity.to_bits();
+                let noise = ((seed.wrapping_mul(6_364_136_223_846_793_005) >> 40) as f64
+                    / 16_777_216.0)
+                    * 2.0
+                    - 1.0;
+                output += noise * (-local * 180.0).exp() * self.hammer * note.velocity;
+            }
+        }
+        output * 0.18
+    }
 }
 
 /// 轨道插件引用；实际处理器由宿主线程持有。
@@ -195,6 +252,7 @@ pub struct GraphPlan {
     pub nodes: Vec<GraphNodePlan>,
     pub output: usize,
     pub plugin: Option<PluginPlan>,
+    pub piano: Option<PianoPlan>,
 }
 
 impl GraphPlan {
@@ -721,24 +779,30 @@ impl Playback {
     fn sample_track(plan: &PlaybackPlan, track: &TrackPlan, position: u64) -> f64 {
         let sample_rate = f64::from(plan.sample_rate).max(1.0);
         let time = position as f64 / sample_rate;
-        let mut voice = 0.0;
-        if let Some(frequency) = track.frequency {
-            voice += (std::f64::consts::TAU * frequency * time).sin() * 0.25;
-        }
-        let release = track
-            .adsr
-            .map_or(0.0, |adsr| adsr.release.max(MIN_ENVELOPE_SECONDS));
-        for note in &track.notes {
-            if time >= note.start && time < note.start + note.duration + release {
-                let local = time - note.start;
-                let envelope = track.adsr.map_or_else(
-                    || note_envelope(local, note.duration),
-                    |adsr| adsr_envelope(local, note.duration, adsr),
-                );
-                voice += (std::f64::consts::TAU * note.frequency * local).sin()
-                    * note.velocity
-                    * envelope
-                    * 0.25;
+        let mut voice = if let Some(piano) = track.piano {
+            piano.sample(&track.notes, time)
+        } else {
+            0.0
+        };
+        if track.piano.is_none() {
+            if let Some(frequency) = track.frequency {
+                voice += (std::f64::consts::TAU * frequency * time).sin() * 0.25;
+            }
+            let release = track
+                .adsr
+                .map_or(0.0, |adsr| adsr.release.max(MIN_ENVELOPE_SECONDS));
+            for note in &track.notes {
+                if time >= note.start && time < note.start + note.duration + release {
+                    let local = time - note.start;
+                    let envelope = track.adsr.map_or_else(
+                        || note_envelope(local, note.duration),
+                        |adsr| adsr_envelope(local, note.duration, adsr),
+                    );
+                    voice += (std::f64::consts::TAU * note.frequency * local).sin()
+                        * note.velocity
+                        * envelope
+                        * 0.25;
+                }
             }
         }
         if let Some(graph) = &track.graph {
@@ -799,9 +863,45 @@ mod tests {
                 filters: Vec::new(),
                 graph: None,
                 plugin: None,
+                piano: None,
                 notes: Vec::new(),
             }],
         }
+    }
+
+    #[test]
+    fn piano_voice_produces_harmonics_and_decays() {
+        let playback = Playback::new(48_000);
+        playback.set_plan(PlaybackPlan {
+            sample_rate: 48_000,
+            loop_start_seconds: 0.0,
+            loop_seconds: 2.0,
+            length_seconds: 2.0,
+            tracks: vec![TrackPlan {
+                frequency: None,
+                gain: 1.0,
+                adsr: None,
+                filters: Vec::new(),
+                graph: None,
+                notes: vec![NotePlan {
+                    start: 0.0,
+                    duration: 1.0,
+                    frequency: midi_to_hz(60),
+                    velocity: 0.8,
+                }],
+                plugin: None,
+                piano: Some(PianoPlan::new(8, 1.0, 0.5, 0.2)),
+            }],
+        });
+        playback.play();
+        let mut early = vec![0.0_f32; 4800];
+        playback.render(&mut early);
+        let mut late = vec![0.0_f32; 4800];
+        playback.render(&mut late);
+        assert!(early.iter().any(|sample| sample.abs() > 0.001));
+        let early_energy: f32 = early.iter().map(|sample| sample.abs()).sum();
+        let late_energy: f32 = late.iter().map(|sample| sample.abs()).sum();
+        assert!(late_energy < early_energy);
     }
 
     #[test]
@@ -814,6 +914,7 @@ mod tests {
             filters: Vec::new(),
             graph: None,
             plugin: None,
+            piano: None,
             notes: Vec::new(),
         });
         let playback = Playback::new(48_000);
@@ -881,6 +982,7 @@ mod tests {
                 filters: Vec::new(),
                 graph: None,
                 plugin: None,
+                piano: None,
                 notes: Vec::new(),
             }],
         });
@@ -930,6 +1032,7 @@ mod tests {
                 filters: Vec::new(),
                 graph: None,
                 plugin: None,
+                piano: None,
                 notes: vec![NotePlan {
                     start: 0.0,
                     duration: 1.0,
@@ -1018,6 +1121,7 @@ mod tests {
                 filters: Vec::new(),
                 graph: None,
                 plugin: None,
+                piano: None,
                 notes: vec![NotePlan {
                     start: 0.0,
                     duration: 0.05,
@@ -1047,6 +1151,7 @@ mod tests {
                 filters: Vec::new(),
                 graph: None,
                 plugin: None,
+                piano: None,
                 notes: vec![NotePlan {
                     start: 0.0,
                     duration: 0.25,
@@ -1113,6 +1218,7 @@ mod tests {
                 filters: Vec::new(),
                 graph: None,
                 plugin: None,
+                piano: None,
                 notes: Vec::new(),
             }],
         });
@@ -1142,6 +1248,7 @@ mod tests {
                     filters: Vec::new(),
                     graph: None,
                     plugin: None,
+                    piano: None,
                     notes: Vec::new(),
                 })
                 .collect(),
@@ -1167,6 +1274,7 @@ mod tests {
                 filters: Vec::new(),
                 graph: None,
                 plugin: None,
+                piano: None,
                 notes: vec![NotePlan {
                     start: 2.0,
                     duration: 1.0,

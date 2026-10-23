@@ -553,6 +553,7 @@ fn build_plan(
                 })
                 .collect();
             let plugin = graph.plugin.clone();
+            let piano = graph.piano;
             Ok(TrackPlan {
                 frequency,
                 gain: 1.0,
@@ -561,6 +562,7 @@ fn build_plan(
                 graph: Some(graph),
                 notes,
                 plugin,
+                piano,
             })
         })
         .collect::<Result<Vec<_>, CommandError>>()?;
@@ -589,6 +591,7 @@ fn build_plan(
             graph: None,
             notes,
             plugin: None,
+            piano: None,
         });
     }
     Ok(PlaybackPlan {
