@@ -96,6 +96,7 @@ impl Runtime {
             "transport.gain" => self.transport_gain(&request.args),
             "transport.metronome" => self.transport_metronome(&request.args),
             "plugin.scan" => Self::plugin_scan(&request.args),
+            "plugin.inspect" => Self::plugin_inspect(&request.args),
             "extension.list" => Self::extension_list(&request.args),
             "extension.call" => Self::extension_call(&request.args),
             _ => self.session.execute(request),
@@ -179,6 +180,25 @@ impl Runtime {
             "directory": directory.display().to_string(),
             "plugins": report.plugins,
             "failures": report.failures,
+        })))
+    }
+
+    fn plugin_inspect(args: &Value) -> Result<CommandResponse, CommandError> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct InspectArgs {
+            path: String,
+            id: String,
+        }
+        let args: InspectArgs = parse_args(args)?;
+        let capabilities =
+            aurtrack_host::inspect_plugin(std::path::Path::new(&args.path), &args.id)
+                .map_err(|error| CommandError::invalid_args(format!("读取插件失败：{error}")))?;
+        Ok(CommandResponse::ok(json!({
+            "path": args.path,
+            "id": args.id,
+            "parameters": capabilities.parameters,
+            "has_state": capabilities.has_state,
         })))
     }
 
@@ -457,11 +477,11 @@ mod tests {
     }
 
     #[test]
-    fn describe_lists_forty_five_commands() {
+    fn describe_lists_forty_six_commands() {
         let mut runtime = Runtime::new();
         let response = run(&mut runtime, "describe", json!({})).unwrap();
         let commands = response.data["commands"].as_array().unwrap();
-        assert_eq!(commands.len(), 45);
+        assert_eq!(commands.len(), 46);
         assert!(
             commands
                 .iter()

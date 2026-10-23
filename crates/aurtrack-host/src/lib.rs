@@ -10,6 +10,8 @@ use std::ffi::{CStr, CString};
 use std::io;
 use std::path::{Path, PathBuf};
 
+use clack_extensions::params::{ParamInfoBuffer, PluginParams};
+use clack_extensions::state::PluginState;
 use clack_host::prelude::*;
 use serde::Serialize;
 use thiserror::Error;
@@ -36,6 +38,25 @@ pub struct PluginInfo {
     pub vendor: String,
     pub version: String,
     pub path: String,
+}
+
+/// 插件的一个参数。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct ParameterInfo {
+    pub id: u32,
+    pub name: String,
+    pub module: String,
+    pub minimum: f64,
+    pub maximum: f64,
+    pub default: f64,
+    pub flags: u32,
+}
+
+/// 插件参数和状态能力。
+#[derive(Debug, Clone, PartialEq, Serialize)]
+pub struct PluginCapabilities {
+    pub parameters: Vec<ParameterInfo>,
+    pub has_state: bool,
 }
 
 /// 宿主错误。
@@ -163,6 +184,53 @@ impl HostHandlers for ClapHost {
     type AudioProcessor<'a> = HostAudioProcessor;
 }
 
+/// 读取插件参数和状态扩展。
+pub fn inspect_plugin(path: &Path, plugin_id: &str) -> Result<PluginCapabilities, HostError> {
+    let id = CString::new(plugin_id).map_err(|_| HostError::InvalidPluginId)?;
+    // SAFETY: 与 `scan_plugin` 相同，加载动态库会执行插件代码。
+    let entry = unsafe { PluginEntry::load(path) }.map_err(|error| error.to_string())?;
+    let host_info = HostInfo::new(
+        "Aurtrack",
+        "Aurtrack contributors",
+        "https://aurtrack.dev",
+        "0.0.0",
+    )
+    .map_err(|error| error.to_string())?;
+    let mut instance = PluginInstance::<ClapHost>::new(
+        |_| HostShared,
+        |_| HostMainThread,
+        &entry,
+        id.as_c_str(),
+        &host_info,
+    )
+    .map_err(|error| error.to_string())?;
+    let handle = instance.plugin_handle();
+    let mut parameters = Vec::new();
+    if let Some(params) = handle.get_extension::<PluginParams>() {
+        let count = params.count(&handle);
+        for index in 0..count {
+            let mut buffer = ParamInfoBuffer::new();
+            let Some(info) = params.get_info(&handle, index, &mut buffer) else {
+                continue;
+            };
+            parameters.push(ParameterInfo {
+                id: info.id.get(),
+                name: String::from_utf8_lossy(info.name).into_owned(),
+                module: String::from_utf8_lossy(info.module).into_owned(),
+                minimum: info.min_value,
+                maximum: info.max_value,
+                default: info.default_value,
+                flags: info.flags.bits(),
+            });
+        }
+    }
+    let has_state = handle.get_extension::<PluginState>().is_some();
+    Ok(PluginCapabilities {
+        parameters,
+        has_state,
+    })
+}
+
 /// 在离线缓冲上运行一个 CLAP 立体声效果器。
 ///
 /// 这是宿主的第一个闭环：验证加载、激活、块处理和停用。它不在实时音频线程里运行。
@@ -279,6 +347,12 @@ mod tests {
         let report = scan_directory(&directory).unwrap();
         assert!(report.plugins.is_empty());
         assert_eq!(report.failures.len(), 1);
+    }
+
+    #[test]
+    fn inspect_missing_plugin_is_an_error() {
+        let result = inspect_plugin(Path::new("target/not-a-plugin.clap"), "com.example.missing");
+        assert!(result.is_err());
     }
 
     #[test]

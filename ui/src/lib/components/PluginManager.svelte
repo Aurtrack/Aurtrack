@@ -57,6 +57,16 @@
     }
   }
 
+  async function inspect(plugin: Plugin) {
+    result = "";
+    try {
+      const data = await session.inspectPlugin(plugin.path, plugin.id);
+      result = JSON.stringify(data, null, 2);
+    } catch (cause) {
+      result = errorMessage(cause);
+    }
+  }
+
   async function runCommand(extension: Extension, command: string) {
     result = "";
     try {
@@ -107,6 +117,9 @@
                 <strong>{plugin.name || plugin.id}</strong>
                 <span>{plugin.vendor} · {plugin.version}</span>
                 <code>{plugin.id}</code>
+                <button class="ghost small" onclick={() => void inspect(plugin)}>
+                  {t("plugins.inspect")}
+                </button>
               </li>
             {/each}
           </ul>

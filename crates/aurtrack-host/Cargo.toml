@@ -9,5 +9,6 @@ authors.workspace = true
 
 [dependencies]
 clack-host = "0.2"
+clack-extensions = { version = "0.2", features = ["params", "state", "clack-host"] }
 serde = { version = "1", features = ["derive"] }
 thiserror = "2"

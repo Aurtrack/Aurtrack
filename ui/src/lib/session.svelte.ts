@@ -755,6 +755,23 @@ export class SessionStore {
     return this.run("plugin.scan", {});
   }
 
+  async inspectPlugin(path: string, id: string): Promise<{
+    path: string;
+    id: string;
+    parameters: {
+      id: number;
+      name: string;
+      module: string;
+      minimum: number;
+      maximum: number;
+      default: number;
+      flags: number;
+    }[];
+    has_state: boolean;
+  }> {
+    return this.run("plugin.inspect", { path, id });
+  }
+
   async scanExtensions(): Promise<{
     directory: string;
     extensions: {

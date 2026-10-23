@@ -236,6 +236,7 @@ export const en: Record<MessageKey, Message> = {
   "plugins.clap": "CLAP PLUGINS",
   "plugins.extensions": "APP EXTENSIONS",
   "plugins.refresh": "RESCAN",
+  "plugins.inspect": "PARAMS & STATE",
   "plugins.loading": "SCANNING…",
   "plugins.empty": "NOTHING FOUND",
   "plugins.close": "CLOSE",
