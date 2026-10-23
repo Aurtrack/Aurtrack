@@ -105,6 +105,17 @@
               {t("menu.saveAs")}
             </button>
             <div class="menu-separator"></div>
+            <button
+              class="menu-item"
+              role="menuitem"
+              onclick={() =>
+                run(() => {
+                  session.pluginManagerOpen = true;
+                })}
+            >
+              {t("menu.plugins")}
+            </button>
+            <div class="menu-separator"></div>
             <div class="menu-label">{t("menu.recent")}</div>
             {#if session.recentProjects.length === 0}
               <div class="menu-empty">{t("menu.noRecent")}</div>

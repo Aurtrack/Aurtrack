@@ -44,6 +44,22 @@ pub struct TrackPlan {
     pub notes: Vec<NotePlan>,
 }
 
+/// 宿主音频处理器的内部契约。
+///
+/// 插件格式由 `aurtrack-host` 适配，引擎只认这个块处理接口。实现必须保证
+/// `process` 不在音频线程分配、加锁、日志或做系统调用。
+pub trait BlockProcessor: Send {
+    fn prepare(&mut self, sample_rate: u32, max_block_frames: usize) -> Result<(), String>;
+    fn reset(&mut self);
+    fn process(
+        &mut self,
+        input_left: &[f32],
+        input_right: &[f32],
+        output_left: &mut [f32],
+        output_right: &mut [f32],
+    ) -> Result<(), String>;
+}
+
 /// 低通滤波器参数。
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]

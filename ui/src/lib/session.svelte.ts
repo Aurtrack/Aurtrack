@@ -141,6 +141,7 @@ export class SessionStore {
   dirty = $state(false);
   recoveryAvailable = $state(false);
   closeRequested = $state(false);
+  pluginManagerOpen = $state(false);
   pendingOpenPath = $state<string | null>(null);
   clipboard = $state<Clipboard | null>(null);
   recentProjects = $state<RecentProject[]>(loadRecentProjects());
@@ -738,6 +739,48 @@ export class SessionStore {
     } finally {
       this.busy = false;
     }
+  }
+
+  async scanPlugins(): Promise<{
+    directory: string;
+    plugins: {
+      id: string;
+      name: string;
+      vendor: string;
+      version: string;
+      path: string;
+    }[];
+    failures: { path: string; reason: string }[];
+  }> {
+    return this.run("plugin.scan", {});
+  }
+
+  async scanExtensions(): Promise<{
+    directory: string;
+    extensions: {
+      id: string;
+      name: string;
+      version: string;
+      api_version: number;
+      directory: string;
+      commands: { id: string; name: string; executable: string }[];
+    }[];
+    failures: { path: string; reason: string }[];
+  }> {
+    return this.run("extension.list", {});
+  }
+
+  async callExtension(
+    extension: string,
+    command: string,
+    args: Record<string, unknown> = {},
+  ): Promise<unknown> {
+    const data = await this.run<{ result: unknown }>("extension.call", {
+      extension,
+      command,
+      args,
+    });
+    return data.result;
   }
 
   async addGraphNode(

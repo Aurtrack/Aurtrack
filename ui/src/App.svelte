@@ -2,6 +2,7 @@
   import { onMount } from "svelte";
 
   import Header from "./lib/components/Header.svelte";
+  import PluginManager from "./lib/components/PluginManager.svelte";
   import LayoutNodeView from "./lib/layout/LayoutNodeView.svelte";
   import ProjectGuard from "./lib/layout/ProjectGuard.svelte";
   import { layout } from "./lib/layout.svelte";
@@ -92,4 +93,7 @@
     <LayoutNodeView node={layout.root} />
   </div>
   <ProjectGuard />
+  {#if session.pluginManagerOpen}
+    <PluginManager />
+  {/if}
 </main>
