@@ -12,6 +12,16 @@
   import NodeAddMenu from "./NodeAddMenu.svelte";
   import NumberField from "./NumberField.svelte";
   import VoiceGraphEditor from "./VoiceGraphEditor.svelte";
+  import {
+    NODE_BODY_TOP,
+    NODE_HEADER,
+    NODE_ROW,
+    NODE_WIDTH,
+    collapsedNodeHeight,
+    collapsedPortY,
+    expandedNodeHeight,
+    expandedPortY,
+  } from "./nodeLayout";
 
   interface Props {
     track: Track | null;
@@ -133,12 +143,8 @@
   type AddMenu = { x: number; y: number };
   type NodeMenu = { x: number; y: number; nodeId: string };
 
-  const CARD_WIDTH = 204;
+  const CARD_WIDTH = NODE_WIDTH;
   const COLUMN_GAP = 110;
-  const NODE_HEADER = 26;
-  const NODE_ROW = 22;
-  const NODE_BODY_TOP = 6;
-  const NODE_BOTTOM = 7;
   const MIN_SCALE = 0.25;
   const MAX_SCALE = 2.5;
 
@@ -279,33 +285,19 @@
   }
 
   function portY(node: GraphNode, index: number): number {
-    if (node.collapsed) {
-      return NODE_HEADER + 3 + index * 6;
-    }
-    return (
-      NODE_HEADER +
-      groupHeaderHeight(node) +
-      NODE_BODY_TOP +
-      index * NODE_ROW +
-      NODE_ROW / 2
-    );
+    if (node.collapsed) return collapsedPortY(index);
+    return expandedPortY(index, groupHeaderHeight(node));
   }
 
   function portTop(node: GraphNode, index: number): number {
-    return node.collapsed ? portY(node, index) : portY(node, index) - NODE_ROW / 2;
+    return node.collapsed
+      ? portY(node, index)
+      : portY(node, index) - NODE_ROW / 2;
   }
 
   function nodeHeight(node: GraphNode): number {
-    if (node.collapsed) {
-      return NODE_HEADER + 4 + collapsedRows(node) * 6;
-    }
-    return (
-      NODE_HEADER +
-      groupHeaderHeight(node) +
-      NODE_BODY_TOP +
-      rowCount(node) * NODE_ROW +
-      NODE_BOTTOM
-    );
+    if (node.collapsed) return collapsedNodeHeight(collapsedRows(node));
+    return expandedNodeHeight(rowCount(node), groupHeaderHeight(node));
   }
 
   function nodeSize(node: GraphNode) {
@@ -1870,6 +1862,21 @@
           tabindex="-1"
           onmousedown={(event) => event.stopPropagation()}
         >
+          {#if nodeMenu && graph?.nodes[nodeMenu.nodeId]?.type_id === "audio.group"}
+            <button
+              role="menuitem"
+              disabled={busy}
+              onclick={() => {
+                const node = nodeMenu
+                  ? graph?.nodes[nodeMenu.nodeId]
+                  : undefined;
+                nodeMenu = null;
+                if (node) openVoiceGroup(node);
+              }}
+            >
+              {t("graph.editGroup")}
+            </button>
+          {/if}
           <button role="menuitem" disabled={busy} onclick={duplicateFromMenu}>
             {t("graph.duplicate")}
           </button>

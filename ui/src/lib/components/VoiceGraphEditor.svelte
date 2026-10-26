@@ -14,6 +14,16 @@
   import { session } from "../session.svelte";
   import NodeAddMenu from "./NodeAddMenu.svelte";
   import NumberField from "./NumberField.svelte";
+  import {
+    NODE_BODY_TOP,
+    NODE_HEADER,
+    NODE_ROW,
+    NODE_WIDTH,
+    collapsedNodeHeight,
+    collapsedPortY,
+    expandedNodeHeight,
+    expandedPortY,
+  } from "./nodeLayout";
 
   interface Props {
     groupId: string;
@@ -41,11 +51,6 @@
     onClose,
   }: Props = $props();
 
-  const NODE_WIDTH = 204;
-  const NODE_HEADER = 26;
-  const NODE_ROW = 22;
-  const NODE_BODY_TOP = 6;
-  const NODE_BOTTOM = 7;
   const CANVAS_WIDTH = 1400;
   const CANVAS_HEIGHT = 620;
 
@@ -268,16 +273,8 @@
   }
 
   function portY(node: VoiceNode, index: number): number {
-    if (node.collapsed) {
-      return NODE_HEADER + 3 + index * 6;
-    }
-    return (
-      NODE_HEADER +
-      groupHeaderHeight(node) +
-      NODE_BODY_TOP +
-      index * NODE_ROW +
-      NODE_ROW / 2
-    );
+    if (node.collapsed) return collapsedPortY(index);
+    return expandedPortY(index, groupHeaderHeight(node));
   }
 
   function portTop(node: VoiceNode, index: number): number {
@@ -287,16 +284,8 @@
   }
 
   function nodeHeight(node: VoiceNode): number {
-    if (node.collapsed) {
-      return NODE_HEADER + 4 + collapsedRows(node) * 6;
-    }
-    return (
-      NODE_HEADER +
-      groupHeaderHeight(node) +
-      NODE_BODY_TOP +
-      rowCount(node) * NODE_ROW +
-      NODE_BOTTOM
-    );
+    if (node.collapsed) return collapsedNodeHeight(collapsedRows(node));
+    return expandedNodeHeight(rowCount(node), groupHeaderHeight(node));
   }
 
   function wireColor(connection: VoiceConnection): string {
