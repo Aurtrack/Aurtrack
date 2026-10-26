@@ -161,6 +161,10 @@
   let insertTarget = $state<GraphConnection | null>(null);
   let clipboard = $state<string[]>([]);
   let cutLine = $state<Point[] | null>(null);
+  let circleMode = $state(false);
+  let circleRadius = $state(48);
+  let circlePos = $state<Point | null>(null);
+  let circleDragging = false;
   let frameDraft = $state<Record<string, VoiceFrame> | null>(null);
   let frameDrag = $state<{
     id: string;
@@ -573,6 +577,23 @@
     return false;
   }
 
+  function selectInCircle(center: Point, subtract: boolean) {
+    const next = new Set(selected);
+    for (const node of nodes) {
+      const position = nodePositions[node.id];
+      if (!position) continue;
+      const point = {
+        x: view.x + (position.x + position.w / 2) * view.scale,
+        y: view.y + (position.y + position.h / 2) * view.scale,
+      };
+      if (Math.hypot(point.x - center.x, point.y - center.y) <= circleRadius) {
+        if (subtract) next.delete(node.id);
+        else next.add(node.id);
+      }
+    }
+    selected = next;
+  }
+
   function findInsertTarget(nodeId: string): GraphConnection | null {
     const node = graph?.nodes[nodeId];
     const position = nodePositions[nodeId];
@@ -708,6 +729,13 @@
   function handleWheel(event: WheelEvent) {
     if (!board) return;
     event.preventDefault();
+    if (circleMode) {
+      circleRadius = Math.max(
+        12,
+        Math.min(240, circleRadius - event.deltaY * 0.08),
+      );
+      return;
+    }
     const point = pointer(event);
     if (!point) return;
     const next = clampScale(view.scale * Math.exp(-event.deltaY * 0.0012));
@@ -768,6 +796,22 @@
   }
 
   function boardMouseDown(event: MouseEvent) {
+    if (circleMode) {
+      event.preventDefault();
+      if (event.button === 2) {
+        circleMode = false;
+        circleDragging = false;
+        circlePos = null;
+        return;
+      }
+      if (event.button !== 0) return;
+      const point = pointer(event);
+      if (!point) return;
+      circlePos = point;
+      circleDragging = true;
+      selectInCircle(point, event.shiftKey);
+      return;
+    }
     if (event.button === 2 && event.ctrlKey) {
       event.preventDefault();
       const point = pointer(event);
@@ -847,6 +891,7 @@
   }
 
   function nodeMouseDown(event: MouseEvent, node: GraphNode) {
+    if (circleMode) return;
     if (event.button !== 0 || busy || spaceHeld) return;
     if (isInteractive(event.target)) return;
     nodeMenu = null;
@@ -930,6 +975,7 @@
   }
 
   function frameMouseDown(event: MouseEvent, frame: VoiceFrame) {
+    if (circleMode) return;
     if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
@@ -950,6 +996,7 @@
   }
 
   function frameResizeDown(event: MouseEvent, frame: VoiceFrame) {
+    if (circleMode) return;
     if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
@@ -986,6 +1033,7 @@
   }
 
   function startWire(event: MouseEvent, node: GraphNode, side: "out" | "in", port: string) {
+    if (circleMode) return;
     if (event.button !== 0 || busy || spaceHeld) return;
     event.preventDefault();
     event.stopPropagation();
@@ -1022,6 +1070,14 @@
 
   function handleMouseMove(event: MouseEvent) {
     lastPointer = pointer(event) ?? lastPointer;
+    if (circleMode) {
+      const point = pointer(event);
+      if (point) {
+        circlePos = point;
+        if (circleDragging) selectInCircle(point, event.shiftKey);
+      }
+      return;
+    }
     if (cutLine) {
       const point = pointer(event);
       if (point) {
@@ -1187,6 +1243,10 @@
   }
 
   async function handleMouseUp() {
+    if (circleMode) {
+      circleDragging = false;
+      return;
+    }
     if (cutLine) {
       const line = cutLine;
       cutLine = null;
@@ -1446,6 +1506,28 @@
       return;
     }
     if (
+      event.key.toLowerCase() === "c" &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey
+    ) {
+      event.preventDefault();
+      circleMode = !circleMode;
+      circleDragging = false;
+      if (circleMode) {
+        circlePos =
+          lastPointer.x !== 0 || lastPointer.y !== 0
+            ? { ...lastPointer }
+            : {
+                x: (board?.clientWidth ?? 800) / 2,
+                y: (board?.clientHeight ?? 500) / 2,
+              };
+      } else {
+        circlePos = null;
+      }
+      return;
+    }
+    if (
       event.key.toLowerCase() === "h" &&
       !event.ctrlKey &&
       !event.metaKey &&
@@ -1561,6 +1643,9 @@
       return;
     }
     if (event.key === "Escape") {
+      circleMode = false;
+      circleDragging = false;
+      circlePos = null;
       addMenu = null;
       nodeMenu = null;
       canvasMenu = null;
@@ -1773,6 +1858,15 @@
                 .join(" ")}
             />
           </svg>
+        {/if}
+        {#if circleMode && circlePos}
+          <div
+            class="node-circle-select"
+            style:left={`${circlePos.x - circleRadius}px`}
+            style:top={`${circlePos.y - circleRadius}px`}
+            style:width={`${circleRadius * 2}px`}
+            style:height={`${circleRadius * 2}px`}
+          ></div>
         {/if}
 
         {#each nodes as node (node.id)}

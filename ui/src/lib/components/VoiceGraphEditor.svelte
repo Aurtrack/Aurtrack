@@ -195,6 +195,10 @@
   let lasso = $state<{ points: Point[]; subtract: boolean } | null>(null);
   let insertTarget = $state<VoiceConnection | null>(null);
   let cutLine = $state<Point[] | null>(null);
+  let circleMode = $state(false);
+  let circleRadius = $state(48);
+  let circlePos = $state<Point | null>(null);
+  let circleDragging = false;
   let drag = $state<Drag | null>(null);
   let nodeMenu = $state<{ x: number; y: number; nodeId: string } | null>(null);
   let pendingLink = $state<Wire | null>(null);
@@ -565,6 +569,7 @@
     port: PortInfo,
     side: "in" | "out",
   ) {
+    if (circleMode) return;
     event.preventDefault();
     event.stopPropagation();
     if (wire) {
@@ -638,6 +643,7 @@
   }
 
   function nodeMouseDown(event: MouseEvent, node: VoiceNode) {
+    if (circleMode) return;
     nodeMenu = null;
     if (event.button !== 0) return;
     const target = event.target as Element | null;
@@ -672,6 +678,14 @@
 
   function move(event: MouseEvent) {
     lastPointer = { x: event.clientX, y: event.clientY };
+    if (circleMode) {
+      const point = boardPoint(event);
+      if (point) {
+        circlePos = point;
+        if (circleDragging) selectInCircle(point, event.shiftKey);
+      }
+      return;
+    }
     if (cutLine) {
       const point = boardPoint(event);
       if (point) {
@@ -758,6 +772,22 @@
   }
 
   function boardMouseDown(event: MouseEvent) {
+    if (circleMode) {
+      event.preventDefault();
+      if (event.button === 2) {
+        circleMode = false;
+        circleDragging = false;
+        circlePos = null;
+        return;
+      }
+      if (event.button !== 0) return;
+      const point = boardPoint(event);
+      if (!point) return;
+      circlePos = point;
+      circleDragging = true;
+      selectInCircle(point, event.shiftKey);
+      return;
+    }
     if (event.button === 2 && event.ctrlKey) {
       event.preventDefault();
       const point = boardPoint(event);
@@ -817,6 +847,13 @@
 
   function handleWheel(event: WheelEvent) {
     event.preventDefault();
+    if (circleMode) {
+      circleRadius = Math.max(
+        12,
+        Math.min(240, circleRadius - event.deltaY * 0.08),
+      );
+      return;
+    }
     const point = boardPoint(event);
     if (!point) return;
     const factor = Math.exp(-event.deltaY * 0.0012);
@@ -827,6 +864,23 @@
       x: point.x - (point.x - view.x) * ratio,
       y: point.y - (point.y - view.y) * ratio,
     };
+  }
+
+  function selectInCircle(center: Point, subtract: boolean) {
+    const next = new Set(selected);
+    for (const node of nodes) {
+      const position = positions[node.id];
+      if (!position) continue;
+      const point = {
+        x: view.x + (position.x + NODE_WIDTH / 2) * view.scale,
+        y: view.y + (position.y + nodeHeight(node) / 2) * view.scale,
+      };
+      if (Math.hypot(point.x - center.x, point.y - center.y) <= circleRadius) {
+        if (subtract) next.delete(node.id);
+        else next.add(node.id);
+      }
+    }
+    selected = next;
   }
 
   function pointInPolygon(point: Point, polygon: Point[]): boolean {
@@ -856,6 +910,10 @@
   }
 
   function end(event?: MouseEvent) {
+    if (circleMode) {
+      circleDragging = false;
+      return;
+    }
     if (cutLine) {
       const line = cutLine;
       cutLine = null;
@@ -1315,6 +1373,7 @@
   }
 
   function frameMouseDown(event: MouseEvent, frame: VoiceFrame) {
+    if (circleMode) return;
     if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
@@ -1342,6 +1401,7 @@
   }
 
   function frameResizeDown(event: MouseEvent, frame: VoiceFrame) {
+    if (circleMode) return;
     if (event.button !== 0) return;
     event.preventDefault();
     event.stopPropagation();
@@ -1589,6 +1649,9 @@
       return;
     }
     if (event.key === "Escape") {
+      circleMode = false;
+      circleDragging = false;
+      circlePos = null;
       addMenu = null;
       nodeMenu = null;
       pendingLink = null;
@@ -1633,6 +1696,31 @@
     if (event.altKey && event.key.toLowerCase() === "p") {
       event.preventDefault();
       unframeSelection();
+      return;
+    }
+    if (
+      event.key.toLowerCase() === "c" &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey &&
+      !typing
+    ) {
+      event.preventDefault();
+      circleMode = !circleMode;
+      circleDragging = false;
+      if (circleMode) {
+        const rect = boardElement?.getBoundingClientRect();
+        circlePos =
+          boardPoint({
+            clientX: lastPointer.x,
+            clientY: lastPointer.y,
+          }) ??
+          (rect
+            ? { x: rect.width / 2, y: rect.height / 2 }
+            : { x: 200, y: 200 });
+      } else {
+        circlePos = null;
+      }
       return;
     }
     if (
@@ -2067,6 +2155,15 @@
             points={cutLine.map((point) => `${point.x},${point.y}`).join(" ")}
           />
         </svg>
+      {/if}
+      {#if circleMode && circlePos}
+        <div
+          class="node-circle-select"
+          style:left={`${circlePos.x - circleRadius}px`}
+          style:top={`${circlePos.y - circleRadius}px`}
+          style:width={`${circleRadius * 2}px`}
+          style:height={`${circleRadius * 2}px`}
+        ></div>
       {/if}
     </div>
 

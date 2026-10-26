@@ -3007,3 +3007,11 @@ button:disabled {
   stroke-width: 1.4;
   stroke-dasharray: 4 2;
 }
+.node-circle-select {
+  position: absolute;
+  z-index: 7;
+  border: 1px solid var(--blue);
+  border-radius: 50%;
+  background: rgb(47 107 160 / 5%);
+  pointer-events: none;
+}
