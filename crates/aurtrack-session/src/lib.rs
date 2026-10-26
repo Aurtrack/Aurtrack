@@ -893,6 +893,7 @@ impl Session {
             "audio.math.multiply" => "audio.math.multiply",
             "audio.math.map_range" => "audio.math.map_range",
             "audio.math.clamp" => "audio.math.clamp",
+            "group" | "audio.group" => "audio.group",
             other => {
                 return Err(CommandError::invalid_args(format!(
                     "不支持的 kind：{other}"
@@ -953,6 +954,20 @@ impl Session {
                 args.plugin_state,
             )))
             .map_err(graph_error)?;
+        }
+        if type_id == "audio.group" {
+            let group = args
+                .group
+                .as_deref()
+                .ok_or_else(|| CommandError::invalid_args("group 节点需要 group"))?;
+            let exists = self
+                .project
+                .as_ref()
+                .is_some_and(|project| project.node_groups.contains_key(group));
+            if !exists {
+                return Err(CommandError::not_found(format!("找不到节点组：{group}")));
+            }
+            node.group = Some(group.to_string());
         }
         let free = command == "node.add";
         let project = self
@@ -3831,6 +3846,8 @@ struct DeviceAddArgs {
     plugin_id: Option<String>,
     #[serde(default)]
     plugin_state: Option<String>,
+    #[serde(default)]
+    group: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

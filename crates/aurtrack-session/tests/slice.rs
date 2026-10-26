@@ -1624,6 +1624,41 @@ fn audio_frames_persist_and_clear_assignments() {
 }
 
 #[test]
+fn audio_group_node_can_reference_existing_group() {
+    let mut session = Session::default();
+    run(
+        &mut session,
+        "project.create",
+        json!({ "name": "audio-group" }),
+    );
+    run(
+        &mut session,
+        "track.create",
+        json!({ "name": "sine", "source": "sine" }),
+    );
+    run(
+        &mut session,
+        "group.create",
+        json!({ "name": "Aux", "group_id": "aux.voice" }),
+    );
+    let result = run(
+        &mut session,
+        "node.add",
+        json!({
+            "track_id": "track-1",
+            "kind": "audio.group",
+            "group": "aux.voice",
+            "position": [300.0, 400.0]
+        }),
+    );
+    let node_id = result["node_id"].as_str().unwrap();
+    let state = run(&mut session, "project.state", json!({}));
+    let node = &state["project"]["tracks"][0]["graph"]["nodes"][node_id];
+    assert_eq!(node["type_id"], "audio.group");
+    assert_eq!(node["group"], "aux.voice");
+}
+
+#[test]
 fn piano_track_renders_audible_wav() {
     let mut session = Session::default();
     run(&mut session, "project.create", json!({ "name": "piano" }));

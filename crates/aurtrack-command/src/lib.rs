@@ -320,7 +320,8 @@ fn device_add_schema() -> Value {
     object_schema(
         json!({
             "track_id": { "type": "string" },
-            "kind": { "type": "string", "enum": ["gain", "amp.adsr", "filter.lowpass", "mix", "plugin"] },
+            "kind": { "type": "string", "enum": ["gain", "amp.adsr", "filter.lowpass", "mix", "plugin", "group", "audio.group"] },
+            "group": { "type": "string" },
             "plugin_path": { "type": "string" },
             "plugin_id": { "type": "string" },
             "plugin_state": { "type": "string" },

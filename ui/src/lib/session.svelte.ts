@@ -941,6 +941,7 @@ export class SessionStore {
     kind: string,
     x: number,
     y: number,
+    group?: string,
   ): Promise<string | undefined> {
     if (this.busy) return undefined;
     this.busy = true;
@@ -949,6 +950,7 @@ export class SessionStore {
         track_id: trackId,
         kind,
         position: [x, y],
+        ...(group ? { group } : {}),
       });
       await this.refreshProject();
       this.setStatus("status.nodeAdded");

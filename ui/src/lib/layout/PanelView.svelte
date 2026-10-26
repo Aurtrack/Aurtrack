@@ -105,8 +105,8 @@
   <NodeGraph
     track={session.selectedTrack}
     busy={session.busy}
-    onAddNode={(trackId, kind, x, y) =>
-      session.addGraphNode(trackId, kind, x, y)}
+    onAddNode={(trackId, kind, x, y, group) =>
+      session.addGraphNode(trackId, kind, x, y, group)}
     onConnect={(trackId, fromNodeId, fromPort, toNodeId, toPort) =>
       session.connectNodes(
         trackId,

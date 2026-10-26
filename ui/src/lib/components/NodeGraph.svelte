@@ -21,6 +21,7 @@
       kind: string,
       x: number,
       y: number,
+      group?: string,
     ) => void | Promise<string | undefined>;
     onConnect: (
       trackId: string,
@@ -152,6 +153,7 @@
   let wireDrag = $state<WireDrag | null>(null);
   let pendingWire = $state<WireDrag | null>(null);
   let insertTarget = $state<GraphConnection | null>(null);
+  let clipboard = $state<string[]>([]);
   let frameDraft = $state<Record<string, VoiceFrame> | null>(null);
   let frameDrag = $state<{
     id: string;
@@ -1259,6 +1261,19 @@
       .map((node) => `/tracks/${track.id}/nodes/${node.id}`);
   }
 
+  function copySelected() {
+    clipboard = selectedPaths();
+  }
+
+  async function pasteClipboard() {
+    if (!track || clipboard.length === 0) return;
+    const copied = await onDuplicate(clipboard);
+    if (copied && copied.length > 0) {
+      selected = new Set(copied.map((item) => item.node_id));
+      active = copied.at(-1)?.node_id ?? "";
+    }
+  }
+
   function deleteSelected() {
     const paths = selectedPaths();
     if (paths.length === 0) return;
@@ -1397,6 +1412,16 @@
       deleteSelected();
       return;
     }
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "c") {
+      event.preventDefault();
+      copySelected();
+      return;
+    }
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "v") {
+      event.preventDefault();
+      void pasteClipboard();
+      return;
+    }
     if (
       event.key.toLowerCase() === "n" &&
       !event.ctrlKey &&
@@ -1453,7 +1478,7 @@
     if (event.code === "Space" || event.key === " ") spaceHeld = false;
   }
 
-  async function addNode(kind: string, at?: Point) {
+  async function addNode(kind: string, at?: Point, group?: string) {
     if (!track) return;
     const point =
       at ??
@@ -1470,7 +1495,7 @@
     const pending = pendingWire;
     pendingWire = null;
     addMenu = null;
-    const nodeId = await onAddNode(track.id, kind, world.x, world.y);
+    const nodeId = await onAddNode(track.id, kind, world.x, world.y, group);
     if (!nodeId || !pending) return;
     const info = audioTypeById.get(kind);
     if (!info) return;
@@ -1931,7 +1956,11 @@
           x={addMenu.x}
           y={addMenu.y}
           nodeTypes={addNodeTypes}
+          groups={Object.values(session.nodeGroups)}
+          groupLabel={t("voice.groupNode")}
           onPickType={(typeId) => void addNode(typeId)}
+          onPickGroup={(groupId) =>
+            void addNode("audio.group", undefined, groupId)}
           onClose={() => {
             addMenu = null;
             pendingWire = null;
