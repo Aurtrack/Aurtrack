@@ -10,7 +10,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{GraphError, NodeId, ParamSpec, PortRef, SocketType};
+use crate::{GraphError, NodeId, NodeKind, ParamSpec, PluginConfig, PortRef, SocketType};
 
 /// Audio 节点端口声明。
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -145,6 +145,78 @@ pub const AUDIO_NODE_TYPES: &[AudioNodeType] = &[
         params: &[],
     },
     AudioNodeType {
+        id: "audio.instrument.sine",
+        name: "Sine",
+        category: "Instrument",
+        inputs: &[],
+        outputs: &AUDIO_OUT,
+        params: &[ParamSpec {
+            name: "frequency",
+            default: 440.0,
+            minimum: 20.0,
+            maximum: 20_000.0,
+        }],
+    },
+    AudioNodeType {
+        id: "audio.instrument.silence",
+        name: "Silence",
+        category: "Instrument",
+        inputs: &[],
+        outputs: &AUDIO_OUT,
+        params: &[],
+    },
+    AudioNodeType {
+        id: "audio.adsr",
+        name: "ADSR",
+        category: "Envelope",
+        inputs: &[AudioSocketSpec {
+            id: "in",
+            name: "Audio",
+            ty: SocketType::Audio,
+            default: 0.0,
+        }],
+        outputs: &AUDIO_OUT,
+        params: &[
+            ParamSpec {
+                name: "attack",
+                default: 0.01,
+                minimum: 0.001,
+                maximum: 10.0,
+            },
+            ParamSpec {
+                name: "decay",
+                default: 0.12,
+                minimum: 0.0,
+                maximum: 10.0,
+            },
+            ParamSpec {
+                name: "sustain",
+                default: 0.75,
+                minimum: 0.0,
+                maximum: 1.0,
+            },
+            ParamSpec {
+                name: "release",
+                default: 0.18,
+                minimum: 0.001,
+                maximum: 10.0,
+            },
+        ],
+    },
+    AudioNodeType {
+        id: "audio.plugin",
+        name: "Plugin",
+        category: "Plugin",
+        inputs: &[AudioSocketSpec {
+            id: "in",
+            name: "Audio",
+            ty: SocketType::Audio,
+            default: 0.0,
+        }],
+        outputs: &AUDIO_OUT,
+        params: &[],
+    },
+    AudioNodeType {
         id: "audio.output",
         name: "Output",
         category: "Output",
@@ -268,6 +340,8 @@ pub struct AudioNode {
     pub position: Option<[f64; 2]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub plugin: Option<PluginConfig>,
 }
 
 impl AudioNode {
@@ -287,7 +361,76 @@ impl AudioNode {
             params,
             position: None,
             group: None,
+            plugin: None,
         }
+    }
+
+    pub fn kind(&self) -> NodeKind {
+        match self.type_id.as_str() {
+            "audio.instrument.sine" => NodeKind::InstrumentSine,
+            "audio.instrument.silence" => NodeKind::InstrumentSilence,
+            "audio.group" => NodeKind::VoiceGroup,
+            "audio.adsr" => NodeKind::AmpAdsr,
+            "audio.gain" | "audio.drive" | "audio.delay" => NodeKind::Gain,
+            "audio.mix" => NodeKind::Mix,
+            "audio.filter.lowpass" | "audio.filter.highpass" => NodeKind::FilterLowpass,
+            "audio.plugin" => NodeKind::Plugin,
+            _ => NodeKind::Output,
+        }
+    }
+
+    pub fn is_device(&self) -> bool {
+        matches!(
+            self.type_id.as_str(),
+            "audio.adsr"
+                | "audio.gain"
+                | "audio.mix"
+                | "audio.filter.lowpass"
+                | "audio.filter.highpass"
+                | "audio.drive"
+                | "audio.delay"
+                | "audio.plugin"
+        )
+    }
+
+    pub fn param(&self, name: &str) -> Option<f64> {
+        self.params.get(name).copied()
+    }
+
+    pub fn set_param(&mut self, name: &str, value: f64) -> Result<(), GraphError> {
+        let node_type = audio_node_type(&self.type_id)
+            .ok_or_else(|| GraphError::UnknownAudioNodeType(self.type_id.clone()))?;
+        let spec = node_type
+            .params
+            .iter()
+            .find(|param| param.name == name)
+            .ok_or_else(|| GraphError::UnknownParam(name.to_string()))?;
+        if !value.is_finite() || value < spec.minimum || value > spec.maximum {
+            return Err(GraphError::InvalidParam {
+                name: name.to_string(),
+                value,
+                minimum: spec.minimum,
+                maximum: spec.maximum,
+            });
+        }
+        self.params.insert(name.to_string(), value);
+        Ok(())
+    }
+
+    pub fn set_position(&mut self, x: f64, y: f64) -> Result<(), GraphError> {
+        if !x.is_finite() || !y.is_finite() {
+            return Err(GraphError::InvalidPosition);
+        }
+        self.position = Some([x, y]);
+        Ok(())
+    }
+
+    pub fn set_plugin(&mut self, plugin: Option<PluginConfig>) -> Result<(), GraphError> {
+        if self.type_id != "audio.plugin" {
+            return Err(GraphError::NotPlugin(self.kind()));
+        }
+        self.plugin = plugin;
+        Ok(())
     }
 }
 
@@ -332,8 +475,90 @@ impl AudioGraph {
         }
     }
 
+    pub fn track(instrument: &str) -> Self {
+        let mut node = AudioNode::new(NodeId::fixed("instrument"), instrument);
+        node.position = Some([60.0, 220.0]);
+        let mut output = AudioNode::new(NodeId::fixed("output"), "audio.output");
+        output.position = Some([940.0, 220.0]);
+        let mut nodes = BTreeMap::new();
+        nodes.insert(node.id.clone(), node);
+        nodes.insert(output.id.clone(), output);
+        Self {
+            nodes,
+            connections: vec![AudioConnection {
+                from: PortRef::fixed(NodeId::fixed("instrument"), "out"),
+                to: PortRef::fixed(NodeId::fixed("output"), "in"),
+            }],
+        }
+    }
+
     pub fn node(&self, id: &NodeId) -> Option<&AudioNode> {
         self.nodes.get(id)
+    }
+
+    pub fn nodes(&self) -> impl Iterator<Item = &AudioNode> {
+        self.nodes.values()
+    }
+
+    pub fn device_nodes(&self) -> Result<Vec<&AudioNode>, GraphError> {
+        let order = self.topological_order()?;
+        Ok(order
+            .iter()
+            .filter_map(|id| self.nodes.get(id))
+            .filter(|node| node.is_device())
+            .collect())
+    }
+
+    pub fn add_node(&mut self, node: AudioNode) -> Result<(), GraphError> {
+        if self.nodes.contains_key(&node.id) {
+            return Err(GraphError::DuplicateNode(node.id));
+        }
+        self.nodes.insert(node.id.clone(), node);
+        Ok(())
+    }
+
+    pub fn remove_node(&mut self, id: &NodeId) -> Result<(), GraphError> {
+        if self.nodes.remove(id).is_none() {
+            return Err(GraphError::UnknownNode(id.clone()));
+        }
+        self.connections
+            .retain(|connection| &connection.from.node != id && &connection.to.node != id);
+        Ok(())
+    }
+
+    pub fn set_param(&mut self, id: &NodeId, name: &str, value: f64) -> Result<(), GraphError> {
+        self.nodes
+            .get_mut(id)
+            .ok_or_else(|| GraphError::UnknownNode(id.clone()))?
+            .set_param(name, value)
+    }
+
+    pub fn set_position(&mut self, id: &NodeId, x: f64, y: f64) -> Result<(), GraphError> {
+        self.nodes
+            .get_mut(id)
+            .ok_or_else(|| GraphError::UnknownNode(id.clone()))?
+            .set_position(x, y)
+    }
+
+    pub fn connect(&mut self, from: PortRef, to: PortRef) -> Result<(), GraphError> {
+        if !self.nodes.contains_key(&from.node) {
+            return Err(GraphError::UnknownNode(from.node.clone()));
+        }
+        if !self.nodes.contains_key(&to.node) {
+            return Err(GraphError::UnknownNode(to.node.clone()));
+        }
+        self.connections.push(AudioConnection::new(from, to));
+        Ok(())
+    }
+
+    pub fn disconnect(&mut self, from: &PortRef, to: &PortRef) -> Result<(), GraphError> {
+        let before = self.connections.len();
+        self.connections
+            .retain(|connection| &connection.from != from || &connection.to != to);
+        if self.connections.len() == before {
+            return Err(GraphError::NotConnected);
+        }
+        Ok(())
     }
 
     pub fn inputs(node: &AudioNode) -> Result<Vec<AudioSocketSpec>, GraphError> {
