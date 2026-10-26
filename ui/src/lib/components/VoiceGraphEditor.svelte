@@ -2,6 +2,7 @@
   import type {
     NodeGroup,
     NodeGroupInterface,
+    NodeTypeInfo,
     VoiceConnection,
     VoiceGraph,
     VoiceNode,
@@ -13,6 +14,7 @@
   interface Props {
     groupId: string;
     groups: Record<string, NodeGroup>;
+    nodeTypes: NodeTypeInfo[];
     path: { id: string; name: string }[];
     interface: NodeGroupInterface;
     voice: VoiceGraph;
@@ -25,6 +27,7 @@
   let {
     groupId,
     groups,
+    nodeTypes,
     path,
     interface: groupInterface,
     voice: initialVoice,
@@ -46,52 +49,79 @@
     originX: number;
     originY: number;
   };
-  type Wire = { node: string; port: string; x: number; y: number };
-
-  const kindLabels: Record<string, string> = {
-    "group.input": "GROUP INPUT",
-    "osc.partials": "OSC PARTIALS",
-    "env.percussive": "ENV PERCUSSIVE",
-    "noise.burst": "NOISE BURST",
-    "voice.mix": "VOICE MIX",
-    "voice.group": "VOICE GROUP",
-    "group.output": "GROUP OUTPUT",
+  type Wire = {
+    node: string;
+    port: string;
+    ty: PortType;
+    x: number;
+    y: number;
   };
+
+  type PortType = "float" | "gate" | "audio";
+  type PortInfo = { id: string; ty: PortType };
+
+  let typeById = $derived(
+    new Map(nodeTypes.map((nodeType) => [nodeType.id, nodeType])),
+  );
+  let categories = $derived.by(() => {
+    const groups = new Map<string, NodeTypeInfo[]>();
+    for (const nodeType of nodeTypes) {
+      if (nodeType.id === "group.input" || nodeType.id === "group.output") {
+        continue;
+      }
+      if (nodeType.id === "voice.group") continue;
+      const group = groups.get(nodeType.category) ?? [];
+      group.push(nodeType);
+      groups.set(nodeType.category, group);
+    }
+    return [...groups.entries()];
+  });
 
   function nodeGroup(node: VoiceNode): NodeGroup | undefined {
     return node.group ? groups[node.group] : undefined;
   }
 
-  function inputList(node: VoiceNode): string[] {
-    if (node.kind === "group.input") return [];
-    if (node.kind === "group.output") {
-      return groupInterface.outputs.map((socket) => socket.id);
-    }
-    if (node.kind === "voice.group") {
-      return nodeGroup(node)?.interface.inputs.map((socket) => socket.id) ?? [];
-    }
-    if (node.kind === "env.percussive") return ["in"];
-    if (node.kind === "voice.mix") return ["in1", "in2"];
-    return [];
+  function nodeLabel(node: VoiceNode): string {
+    if (node.type_id === "group.input") return "GROUP INPUT";
+    if (node.type_id === "group.output") return "GROUP OUTPUT";
+    if (node.type_id === "voice.group") return "VOICE GROUP";
+    return (typeById.get(node.type_id)?.name ?? node.type_id).toUpperCase();
   }
 
-  function outputList(node: VoiceNode): string[] {
-    if (node.kind === "group.output") return [];
-    if (node.kind === "group.input") {
-      return groupInterface.inputs.map((socket) => socket.id);
+  function interfacePorts(sockets: NodeGroupInterface["inputs"]): PortInfo[] {
+    return sockets.map((socket) => ({ id: socket.id, ty: socket.type }));
+  }
+
+  function typePorts(
+    node: VoiceNode,
+    side: "inputs" | "outputs",
+  ): PortInfo[] {
+    return (typeById.get(node.type_id)?.[side] ?? []).map((socket) => ({
+      id: socket.id,
+      ty: socket.type,
+    }));
+  }
+
+  function inputList(node: VoiceNode): PortInfo[] {
+    if (node.type_id === "group.input") return [];
+    if (node.type_id === "group.output") {
+      return interfacePorts(groupInterface.outputs);
     }
-    if (node.kind === "voice.group") {
-      return nodeGroup(node)?.interface.outputs.map((socket) => socket.id) ?? [];
+    if (node.type_id === "voice.group") {
+      return interfacePorts(nodeGroup(node)?.interface.inputs ?? []);
     }
-    if (
-      node.kind === "osc.partials" ||
-      node.kind === "env.percussive" ||
-      node.kind === "noise.burst" ||
-      node.kind === "voice.mix"
-    ) {
-      return ["out"];
+    return typePorts(node, "inputs");
+  }
+
+  function outputList(node: VoiceNode): PortInfo[] {
+    if (node.type_id === "group.output") return [];
+    if (node.type_id === "group.input") {
+      return interfacePorts(groupInterface.inputs);
     }
-    return [];
+    if (node.type_id === "voice.group") {
+      return interfacePorts(nodeGroup(node)?.interface.outputs ?? []);
+    }
+    return typePorts(node, "outputs");
   }
 
   // 编辑器只在打开时创建，初始快照之后由本地编辑状态接管。
@@ -138,8 +168,14 @@
     if (!source) return "";
     const outputs = outputList(source);
     const inputs = inputList(target);
-    const outIndex = Math.max(0, outputs.indexOf(connection.from.port));
-    const inIndex = Math.max(0, inputs.indexOf(connection.to.port));
+    const outIndex = Math.max(
+      0,
+      outputs.findIndex((port) => port.id === connection.from.port),
+    );
+    const inIndex = Math.max(
+      0,
+      inputs.findIndex((port) => port.id === connection.to.port),
+    );
     const x1 = from.x + NODE_WIDTH;
     const y1 = from.y + portY("", outIndex);
     const x2 = to.x;
@@ -148,14 +184,28 @@
     return `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`;
   }
 
-  function startWire(event: MouseEvent, node: VoiceNode, port: string) {
+  function startWire(
+    event: MouseEvent,
+    node: VoiceNode,
+    port: PortInfo,
+  ) {
     event.preventDefault();
     event.stopPropagation();
     selected = node.id;
-    wire = { node: node.id, port, x: event.clientX, y: event.clientY };
+    wire = {
+      node: node.id,
+      port: port.id,
+      ty: port.ty,
+      x: event.clientX,
+      y: event.clientY,
+    };
   }
 
-  function finishWire(event: MouseEvent, node: VoiceNode, port: string) {
+  function finishWire(
+    event: MouseEvent,
+    node: VoiceNode,
+    port: PortInfo,
+  ) {
     event.preventDefault();
     event.stopPropagation();
     if (!wire) return;
@@ -163,18 +213,23 @@
       wire = null;
       return;
     }
+    if (wire.ty !== port.ty) {
+      error = `端口类型不匹配：${wire.ty} → ${port.ty}`;
+      wire = null;
+      return;
+    }
     const exists = voice.connections.some(
       (connection) =>
-        connection.to.node === node.id && connection.to.port === port,
+        connection.to.node === node.id && connection.to.port === port.id,
     );
     voice.connections = voice.connections.filter(
       (connection) =>
-        !(connection.to.node === node.id && connection.to.port === port),
+        !(connection.to.node === node.id && connection.to.port === port.id),
     );
     if (!exists) {
       voice.connections.push({
         from: { node: wire.node, port: wire.port },
-        to: { node: node.id, port },
+        to: { node: node.id, port: port.id },
       });
     }
     wire = null;
@@ -216,6 +271,10 @@
     wire = null;
   }
 
+  function setParam(node: VoiceNode, name: string, value: number) {
+    node.params[name] = Number.isFinite(value) ? value : 0;
+  }
+
   function addPosition(): [number, number] {
     if (!boardElement || !addMenu) return [80, 80];
     const rect = boardElement.getBoundingClientRect();
@@ -229,7 +288,7 @@
     const id = `voice-${Date.now().toString(36)}`;
     voice.nodes[id] = {
       id,
-      kind,
+      type_id: kind,
       params: {},
       position: addPosition(),
     };
@@ -241,7 +300,7 @@
     const id = `voice-${Date.now().toString(36)}`;
     voice.nodes[id] = {
       id,
-      kind: "voice.group",
+      type_id: "voice.group",
       params: {},
       position: addPosition(),
       group: groupId,
@@ -372,22 +431,14 @@
         tabindex="-1"
         onmousedown={(event) => event.stopPropagation()}
       >
-        <div class="graph-menu-label">{t("graph.menuAudio")}</div>
-        <button role="menuitem" onclick={() => addNode("osc.partials")}>
-          {t("voice.osc")}
-        </button>
-        <button role="menuitem" onclick={() => addNode("env.percussive")}>
-          {t("voice.env")}
-        </button>
-        <button role="menuitem" onclick={() => addNode("noise.burst")}>
-          {t("voice.noise")}
-        </button>
-        <button role="menuitem" onclick={() => addNode("voice.mix")}>
-          {t("voice.mix")}
-        </button>
-        <button role="menuitem" onclick={() => addNode("group.output")}>
-          {t("voice.output")}
-        </button>
+        {#each categories as [category, types] (category)}
+          <div class="graph-menu-label">{category}</div>
+          {#each types as nodeType (nodeType.id)}
+            <button role="menuitem" onclick={() => addNode(nodeType.id)}>
+              {nodeType.name}
+            </button>
+          {/each}
+        {/each}
         {#if groupChoices.length > 0}
           <div class="graph-menu-label">{t("voice.groupNode")}</div>
           {#each groupChoices as group (group.id)}
@@ -434,9 +485,9 @@
           role="group"
           tabindex="-1"
         >
-          <div class="voice-node-head">{kindLabels[node.kind] ?? node.kind}</div>
+          <div class="voice-node-head">{nodeLabel(node)}</div>
           <div class="voice-node-id">{node.id}</div>
-          {#if node.kind === "voice.group"}
+          {#if node.type_id === "voice.group"}
             <div class="voice-node-group">
               {nodeGroup(node)?.name ?? node.group ?? "—"}
             </div>
@@ -445,37 +496,46 @@
             </button>
           {/if}
 
-          {#each outputList(node) as port, index (port)}
+          {#each outputList(node) as port, index (port.id)}
             <button
               class="voice-port out"
-              style:top={`${portY(node.kind, index) - 4}px`}
-              aria-label={port}
+              class:port-audio={port.ty === "audio"}
+              class:port-float={port.ty === "float"}
+              class:port-gate={port.ty === "gate"}
+              style:top={`${portY(node.type_id, index) - 4}px`}
+              title={`${port.id} (${port.ty})`}
+              aria-label={port.id}
               onmousedown={(event) => startWire(event, node, port)}
             ></button>
           {/each}
-          {#each inputList(node) as port, index (port)}
+          {#each inputList(node) as port, index (port.id)}
             <button
               class="voice-port in"
-              style:top={`${portY(node.kind, index) - 4}px`}
-              aria-label={port}
+              class:port-audio={port.ty === "audio"}
+              class:port-float={port.ty === "float"}
+              class:port-gate={port.ty === "gate"}
+              style:top={`${portY(node.type_id, index) - 4}px`}
+              title={`${port.id} (${port.ty})`}
+              aria-label={port.id}
               onmousedown={(event) => finishWire(event, node, port)}
             ></button>
           {/each}
 
-          {#if node.kind === "osc.partials"}
+          {#if typeById.get(node.type_id)?.params.length}
             <div class="voice-node-params">
-              <span>partials</span><strong>{node.params.partials ?? 10}</strong>
-              <span>decay</span><strong>{node.params.decay ?? 1.2}</strong>
-            </div>
-          {:else if node.kind === "env.percussive"}
-            <div class="voice-node-params">
-              <span>attack</span><strong>{node.params.attack ?? 0.004}</strong>
-              <span>decay</span><strong>{node.params.decay ?? 1.2}</strong>
-            </div>
-          {:else if node.kind === "noise.burst"}
-            <div class="voice-node-params">
-              <span>level</span><strong>{node.params.level ?? 0.2}</strong>
-              <span>duration</span><strong>{node.params.duration ?? 0.008}</strong>
+              {#each typeById.get(node.type_id)?.params ?? [] as param (param.name)}
+                <span>{param.name}</span>
+                <input
+                  class="voice-param-input"
+                  type="number"
+                  min={param.minimum}
+                  max={param.maximum}
+                  step="0.01"
+                  value={node.params[param.name] ?? param.default}
+                  onchange={(event) =>
+                    setParam(node, param.name, Number(event.currentTarget.value))}
+                />
+              {/each}
             </div>
           {/if}
         </div>

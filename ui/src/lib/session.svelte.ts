@@ -18,6 +18,7 @@ import {
   transportState,
   transportStop,
   type NodeGroup,
+  type NodeTypeInfo,
   type Note,
   type Project,
   type ProjectState,
@@ -125,6 +126,7 @@ function loadRecentProjects(): RecentProject[] {
 
 export class SessionStore {
   private project = $state<Project | null>(null);
+  private nodeTypesState = $state<NodeTypeInfo[]>([]);
   selectedTrackId = $state("");
   selectedClipId = $state("");
   selectedNoteIds = $state<string[]>([]);
@@ -788,6 +790,10 @@ export class SessionStore {
 
   get nodeGroups(): Record<string, NodeGroup> {
     return this.project?.node_groups ?? {};
+  }
+
+  get nodeTypes(): NodeTypeInfo[] {
+    return this.nodeTypesState;
   }
 
   async setGroupVoice(
@@ -1810,6 +1816,8 @@ export class SessionStore {
         "describe",
       );
       this.commandCount = description.commands.length;
+      const nodeTypes = await call<{ types: NodeTypeInfo[] }>("node.types");
+      this.nodeTypesState = nodeTypes.types;
       this.setStatus("status.ready");
     } catch (error) {
       this.fail("status.initFailed", error);

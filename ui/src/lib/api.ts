@@ -57,7 +57,7 @@ export type GraphNode = {
 
 export type VoiceNode = {
   id: string;
-  kind: string;
+  type_id: string;
   params: Record<string, number>;
   position?: [number, number];
   group?: string;
@@ -82,6 +82,28 @@ export type NodeGroupSocket = {
 export type NodeGroupInterface = {
   inputs: NodeGroupSocket[];
   outputs: NodeGroupSocket[];
+};
+
+export type NodeTypeSocket = {
+  id: string;
+  name: string;
+  type: "float" | "gate" | "audio";
+};
+
+export type NodeTypeParam = {
+  name: string;
+  default: number;
+  minimum: number;
+  maximum: number;
+};
+
+export type NodeTypeInfo = {
+  id: string;
+  name: string;
+  category: string;
+  inputs: NodeTypeSocket[];
+  outputs: NodeTypeSocket[];
+  params: NodeTypeParam[];
 };
 
 export type NodeGroup = {

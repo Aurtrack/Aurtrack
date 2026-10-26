@@ -107,6 +107,10 @@ pub enum VoiceOp {
         duration: f64,
     },
     Mix,
+    Add,
+    Multiply,
+    MapRange,
+    Clamp,
     Output,
 }
 
@@ -165,6 +169,31 @@ impl VoicePlan {
                     }
                 },
                 VoiceOp::Mix => node.inputs.iter().map(|input| values[*input]).sum(),
+                VoiceOp::Add => node.inputs.iter().map(|input| values[*input]).sum(),
+                VoiceOp::Multiply => node
+                    .inputs
+                    .iter()
+                    .map(|input| values[*input])
+                    .product::<f64>(),
+                VoiceOp::MapRange => {
+                    let value = node.inputs.first().map_or(0.0, |input| values[*input]);
+                    let from_min = node.inputs.get(1).map_or(0.0, |input| values[*input]);
+                    let from_max = node.inputs.get(2).map_or(1.0, |input| values[*input]);
+                    let to_min = node.inputs.get(3).map_or(0.0, |input| values[*input]);
+                    let to_max = node.inputs.get(4).map_or(1.0, |input| values[*input]);
+                    let span = from_max - from_min;
+                    if span.abs() < 1e-12 {
+                        to_min
+                    } else {
+                        to_min + (value - from_min) / span * (to_max - to_min)
+                    }
+                },
+                VoiceOp::Clamp => {
+                    let value = node.inputs.first().map_or(0.0, |input| values[*input]);
+                    let min = node.inputs.get(1).map_or(0.0, |input| values[*input]);
+                    let max = node.inputs.get(2).map_or(1.0, |input| values[*input]);
+                    value.clamp(min, max)
+                },
                 VoiceOp::Output => node.inputs.first().map_or(0.0, |input| values[*input]),
             };
         }

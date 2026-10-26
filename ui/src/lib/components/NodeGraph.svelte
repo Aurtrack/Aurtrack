@@ -847,6 +847,7 @@
           embedded
           groupId={editingGroup.id}
           groups={session.nodeGroups}
+          nodeTypes={session.nodeTypes}
           path={voicePath}
           interface={editingGroup.interface}
           voice={editingGroup.graph}

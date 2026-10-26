@@ -330,10 +330,10 @@ fn batch_note_edits_and_cross_track_clip_move_share_snapshots() {
 }
 
 #[test]
-fn describe_lists_fifty_eight_commands() {
+fn describe_lists_fifty_nine_commands() {
     let mut session = Session::default();
     let out = run(&mut session, "describe", json!({}));
-    assert_eq!(out["commands"].as_array().unwrap().len(), 58);
+    assert_eq!(out["commands"].as_array().unwrap().len(), 59);
     assert!(out["project"].is_null());
 }
 
@@ -1168,6 +1168,74 @@ fn piano_tracks_share_one_node_group() {
 }
 
 #[test]
+fn math_nodes_flow_into_voice_engine() {
+    let mut session = Session::default();
+    run(&mut session, "project.create", json!({ "name": "math" }));
+    run(
+        &mut session,
+        "track.create",
+        json!({ "name": "piano", "source": "piano" }),
+    );
+    run(
+        &mut session,
+        "clip.create",
+        json!({ "track_id": "track-1", "start": 0.0, "duration": 1.0 }),
+    );
+    run(
+        &mut session,
+        "note.add",
+        json!({
+            "path": "/tracks/track-1/clips/clip-1",
+            "pitch": 60,
+            "start": 0.0,
+            "duration": 0.5,
+            "velocity": 0.8
+        }),
+    );
+    let project = session.project().unwrap().clone();
+    let mut voice = serde_json::to_value(&project.node_groups["piano.voice"].graph).unwrap();
+    let connections = voice["connections"].as_array_mut().unwrap();
+    connections.retain(|connection| {
+        !(connection["to"]["node"] == "osc" && connection["to"]["port"] == "pitch")
+    });
+    connections.push(json!({
+        "from": { "node": "voice-in", "port": "pitch" },
+        "to": { "node": "add", "port": "a" }
+    }));
+    connections.push(json!({
+        "from": { "node": "offset", "port": "out" },
+        "to": { "node": "add", "port": "b" }
+    }));
+    connections.push(json!({
+        "from": { "node": "add", "port": "out" },
+        "to": { "node": "osc", "port": "pitch" }
+    }));
+    voice["nodes"]["add"] = json!({
+        "id": "add",
+        "type_id": "math.add",
+        "params": {}
+    });
+    voice["nodes"]["offset"] = json!({
+        "id": "offset",
+        "type_id": "value.float",
+        "params": { "value": 12.0 }
+    });
+    run(
+        &mut session,
+        "group.voice",
+        json!({ "group_id": "piano.voice", "voice": voice }),
+    );
+    let path = temp_path("math");
+    let rendered = run(
+        &mut session,
+        "render.segment",
+        json!({ "path": path, "duration_seconds": 0.5 }),
+    );
+    assert!(rendered["rms"].as_f64().unwrap() > 0.001);
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn nested_group_compiles_into_voice_plan() {
     let mut session = Session::default();
     run(&mut session, "project.create", json!({ "name": "nested" }));
@@ -1195,7 +1263,7 @@ fn nested_group_compiles_into_voice_plan() {
     }));
     voice["nodes"]["nested"] = json!({
         "id": "nested",
-        "kind": "voice.group",
+        "type_id": "voice.group",
         "params": {},
         "group": "aux.voice"
     });

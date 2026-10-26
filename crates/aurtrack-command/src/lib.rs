@@ -223,6 +223,10 @@ fn group_voice_schema() -> Value {
     )
 }
 
+fn node_types_schema() -> Value {
+    object_schema(json!({}), &[])
+}
+
 fn group_create_schema() -> Value {
     object_schema(
         json!({
@@ -801,7 +805,7 @@ fn transport_metronome_schema() -> Value {
     )
 }
 
-static COMMANDS: [CommandSpec; 58] = [
+static COMMANDS: [CommandSpec; 59] = [
     CommandSpec {
         id: "project.create",
         summary: "创建或替换当前工程",
@@ -939,6 +943,12 @@ static COMMANDS: [CommandSpec; 58] = [
         summary: "批量粘贴片段及音符到轨道",
         undo: UndoKind::Snapshot,
         input_schema: clip_paste_schema,
+    },
+    CommandSpec {
+        id: "node.types",
+        summary: "列出可用节点类型、端口和参数",
+        undo: UndoKind::None,
+        input_schema: node_types_schema,
     },
     CommandSpec {
         id: "group.create",

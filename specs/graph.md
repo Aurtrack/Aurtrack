@@ -83,7 +83,7 @@ instrument.silence -> output
 
 嵌套组的端口来自被引用组的接口；编译器递归展开，循环引用会被拒绝。
 
-Voice 节点类型：`group.input`、`osc.partials`、`env.percussive`、`noise.burst`、`voice.mix`、`voice.group`、`group.output`。
+Voice 节点实例用 `type_id` 引用注册表，端口和参数由 `node.types` 声明。当前类型：`group.input`、`osc.partials`、`env.percussive`、`noise.burst`、`voice.mix`、`voice.group`、`group.output`、`math.add`、`math.multiply`、`math.map_range`、`math.clamp`、`value.float`。
 
 插件节点必须带 `plugin` 配置：
 

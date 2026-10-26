@@ -34,7 +34,7 @@ use aurtrack_engine::{
 };
 use aurtrack_graph::{
     Graph, GraphError, Node, NodeGroup, NodeGroupInterface, NodeGroupSocketType, NodeId, NodeKind,
-    PORT_IN, PortRef, VoiceGraph, VoiceNodeKind,
+    PORT_IN, PortRef, VoiceGraph,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -244,25 +244,30 @@ fn compile_voice_inner(
     let mut output = None;
     for id in order {
         let node = voice.node(&id).ok_or(GraphError::VoiceUnknownNode)?;
-        let mut incoming: Vec<_> = voice
-            .connections
-            .iter()
-            .filter(|connection| connection.to.node() == &id)
-            .collect();
-        incoming.sort_by(|left, right| left.to.port().cmp(right.to.port()));
-        let inputs = incoming
-            .iter()
-            .map(|connection| {
+        let input_ports = aurtrack_graph::node_inputs(node, interface, groups)?;
+        let mut incoming = Vec::new();
+        let mut inputs = Vec::new();
+        for port in &input_ports {
+            let Some(connection) = voice.connections.iter().find(|connection| {
+                connection.to.node() == &id && connection.to.port() == port.id.as_str()
+            }) else {
+                let index = nodes.len();
+                nodes.push(VoiceNodePlan::new(VoiceOp::Constant(0.0), Vec::new()));
+                inputs.push(index);
+                continue;
+            };
+            incoming.push(connection);
+            inputs.push(
                 indices
                     .get(&(
                         connection.from.node().clone(),
                         connection.from.port().to_string(),
                     ))
                     .copied()
-                    .ok_or(GraphError::VoiceUnknownNode)
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-        if node.kind == VoiceNodeKind::GroupInput {
+                    .ok_or(GraphError::VoiceUnknownNode)?,
+            );
+        }
+        if node.type_id == "group.input" {
             for socket in &interface.inputs {
                 if let Some(index) = input_bindings.and_then(|bindings| bindings.get(&socket.id)) {
                     indices.insert((id.clone(), socket.id.clone()), *index);
@@ -280,7 +285,7 @@ fn compile_voice_inner(
             }
             continue;
         }
-        if node.kind == VoiceNodeKind::Group {
+        if node.type_id == "voice.group" {
             let group_id = node.group.as_deref().ok_or(GraphError::EmptyGroupId)?;
             if stack.iter().any(|item| item == group_id) {
                 return Err(GraphError::GroupCycle(group_id.to_string()));
@@ -317,8 +322,8 @@ fn compile_voice_inner(
             continue;
         }
         let param = |name: &str, default: f64| node.params.get(name).copied().unwrap_or(default);
-        let op = match node.kind {
-            VoiceNodeKind::OscPartials => {
+        let op = match node.type_id.as_str() {
+            "osc.partials" => {
                 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                 let partials = (param("partials", 12.0).round() as usize).clamp(1, 16);
                 VoiceOp::OscPartials {
@@ -328,24 +333,31 @@ fn compile_voice_inner(
                     decay: param("decay", 1.4),
                 }
             },
-            VoiceNodeKind::EnvPercussive => VoiceOp::EnvPercussive {
+            "env.percussive" => VoiceOp::EnvPercussive {
                 attack: param("attack", 0.004),
                 decay: param("decay", 1.8),
             },
-            VoiceNodeKind::NoiseBurst => VoiceOp::NoiseBurst {
+            "noise.burst" => VoiceOp::NoiseBurst {
                 level: param("level", 0.15),
                 duration: param("duration", 0.008),
             },
-            VoiceNodeKind::Mix => VoiceOp::Mix,
-            VoiceNodeKind::GroupOutput => {
+            "voice.mix" => VoiceOp::Mix,
+            "math.add" => VoiceOp::Add,
+            "math.multiply" => VoiceOp::Multiply,
+            "math.map_range" => VoiceOp::MapRange,
+            "math.clamp" => VoiceOp::Clamp,
+            "value.float" => VoiceOp::Constant(param("value", 0.0)),
+            "group.output" => {
                 output = Some(nodes.len());
                 VoiceOp::Output
             },
             _ => return Err(GraphError::VoiceUnknownNode),
         };
         let index = nodes.len();
-        if node.kind != VoiceNodeKind::GroupOutput {
-            indices.insert((id.clone(), "out".to_string()), index);
+        if node.type_id != "group.output" {
+            for port in aurtrack_graph::node_outputs(node, interface, groups)? {
+                indices.insert((id.clone(), port.id), index);
+            }
         }
         nodes.push(VoiceNodePlan::new(op, inputs));
     }
@@ -441,6 +453,29 @@ impl Session {
             "project.master_plugin_off" => self.cmd_master_plugin_off(),
             "track.create" => self.cmd_track_create(&request.args),
             "track.remove" => self.cmd_track_remove(&request.args),
+            "node.types" => Ok(CommandResponse::ok(json!({
+                "types": aurtrack_graph::VOICE_NODE_TYPES.iter().map(|node_type| json!({
+                    "id": node_type.id,
+                    "name": node_type.name,
+                    "category": node_type.category,
+                    "inputs": node_type.inputs.iter().map(|socket| json!({
+                        "id": socket.id,
+                        "name": socket.name,
+                        "type": socket.ty,
+                    })).collect::<Vec<_>>(),
+                    "outputs": node_type.outputs.iter().map(|socket| json!({
+                        "id": socket.id,
+                        "name": socket.name,
+                        "type": socket.ty,
+                    })).collect::<Vec<_>>(),
+                    "params": node_type.params.iter().map(|param| json!({
+                        "name": param.name,
+                        "default": param.default,
+                        "minimum": param.minimum,
+                        "maximum": param.maximum,
+                    })).collect::<Vec<_>>(),
+                })).collect::<Vec<_>>(),
+            }))),
             "group.create" => self.cmd_group_create(&request.args),
             "group.delete" => self.cmd_group_delete(&request.args),
             "group.rename" => self.cmd_group_rename(&request.args),

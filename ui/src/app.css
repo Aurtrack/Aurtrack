@@ -2146,3 +2146,28 @@ button:disabled {
   background: var(--blue);
   color: #fff;
 }
+.voice-param-input {
+  width: 64px;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  padding: 1px 3px;
+  background: var(--paper);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 8px;
+  text-align: right;
+}
+.voice-port.port-audio {
+  background: #dce8f4;
+}
+
+.voice-port.port-float {
+  border-radius: 0;
+  transform: rotate(45deg);
+  background: #dff0e4;
+}
+
+.voice-port.port-gate {
+  border-radius: 0;
+  background: #f2e7cf;
+}

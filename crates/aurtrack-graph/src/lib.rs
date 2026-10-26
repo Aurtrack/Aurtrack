@@ -362,74 +362,76 @@ impl NodeGroup {
     }
 }
 
-pub fn input_ports(kind: VoiceNodeKind, interface: &NodeGroupInterface) -> Vec<&str> {
-    match kind {
-        VoiceNodeKind::GroupInput => Vec::new(),
-        VoiceNodeKind::GroupOutput => interface
-            .outputs
-            .iter()
-            .map(|socket| socket.id.as_str())
-            .collect(),
-        _ => kind.inputs().to_vec(),
-    }
+/// 运行时端口：来自节点声明或组接口。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VoicePort {
+    pub id: String,
+    pub name: String,
+    pub ty: SocketType,
 }
 
-pub fn output_ports(kind: VoiceNodeKind, interface: &NodeGroupInterface) -> Vec<&str> {
-    match kind {
-        VoiceNodeKind::GroupInput => interface
-            .inputs
-            .iter()
-            .map(|socket| socket.id.as_str())
-            .collect(),
-        VoiceNodeKind::GroupOutput => Vec::new(),
-        _ => kind.outputs().to_vec(),
-    }
+fn interface_ports(sockets: &[NodeGroupSocket]) -> Vec<VoicePort> {
+    sockets
+        .iter()
+        .map(|socket| VoicePort {
+            id: socket.id.clone(),
+            name: socket.name.clone(),
+            ty: socket.ty,
+        })
+        .collect()
 }
 
-fn node_input_ports(
+fn static_ports(sockets: &[VoiceSocketSpec]) -> Vec<VoicePort> {
+    sockets
+        .iter()
+        .map(|socket| VoicePort {
+            id: socket.id.to_string(),
+            name: socket.name.to_string(),
+            ty: socket.ty,
+        })
+        .collect()
+}
+
+pub fn node_inputs(
     node: &VoiceNode,
     interface: &NodeGroupInterface,
     groups: &BTreeMap<String, NodeGroup>,
-) -> Result<Vec<String>, GraphError> {
-    if node.kind == VoiceNodeKind::Group {
-        let group_id = node.group.as_deref().ok_or(GraphError::EmptyGroupId)?;
-        let group = groups
-            .get(group_id)
-            .ok_or_else(|| GraphError::GroupMissing(group_id.to_string()))?;
-        return Ok(group
-            .interface
-            .inputs
-            .iter()
-            .map(|socket| socket.id.clone())
-            .collect());
+) -> Result<Vec<VoicePort>, GraphError> {
+    match node.type_id.as_str() {
+        "group.input" => Ok(Vec::new()),
+        "group.output" => Ok(interface_ports(&interface.outputs)),
+        "voice.group" => {
+            let group_id = node.group.as_deref().ok_or(GraphError::EmptyGroupId)?;
+            let group = groups
+                .get(group_id)
+                .ok_or_else(|| GraphError::GroupMissing(group_id.to_string()))?;
+            Ok(interface_ports(&group.interface.inputs))
+        },
+        other => voice_node_type(other)
+            .map(|node_type| static_ports(node_type.inputs))
+            .ok_or_else(|| GraphError::UnknownVoiceNodeType(other.to_string())),
     }
-    Ok(input_ports(node.kind, interface)
-        .into_iter()
-        .map(str::to_string)
-        .collect())
 }
 
-fn node_output_ports(
+pub fn node_outputs(
     node: &VoiceNode,
     interface: &NodeGroupInterface,
     groups: &BTreeMap<String, NodeGroup>,
-) -> Result<Vec<String>, GraphError> {
-    if node.kind == VoiceNodeKind::Group {
-        let group_id = node.group.as_deref().ok_or(GraphError::EmptyGroupId)?;
-        let group = groups
-            .get(group_id)
-            .ok_or_else(|| GraphError::GroupMissing(group_id.to_string()))?;
-        return Ok(group
-            .interface
-            .outputs
-            .iter()
-            .map(|socket| socket.id.clone())
-            .collect());
+) -> Result<Vec<VoicePort>, GraphError> {
+    match node.type_id.as_str() {
+        "group.input" => Ok(interface_ports(&interface.inputs)),
+        "group.output" => Ok(Vec::new()),
+        "voice.group" => {
+            let group_id = node.group.as_deref().ok_or(GraphError::EmptyGroupId)?;
+            let group = groups
+                .get(group_id)
+                .ok_or_else(|| GraphError::GroupMissing(group_id.to_string()))?;
+            Ok(interface_ports(&group.interface.outputs))
+        },
+        other => voice_node_type(other)
+            .map(|node_type| static_ports(node_type.outputs))
+            .ok_or_else(|| GraphError::UnknownVoiceNodeType(other.to_string())),
     }
-    Ok(output_ports(node.kind, interface)
-        .into_iter()
-        .map(str::to_string)
-        .collect())
 }
 
 /// 节点组对外暴露的接口。
@@ -489,6 +491,292 @@ pub enum NodeGroupSocketType {
     Audio,
 }
 
+/// 节点 socket 的数据类型。
+pub type SocketType = NodeGroupSocketType;
+
+/// 节点类型的一个端口声明。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct VoiceSocketSpec {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub ty: SocketType,
+}
+
+/// 可注册的 Voice 节点类型。
+#[derive(Debug, Clone, Copy)]
+pub struct VoiceNodeType {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub category: &'static str,
+    pub inputs: &'static [VoiceSocketSpec],
+    pub outputs: &'static [VoiceSocketSpec],
+    pub params: &'static [ParamSpec],
+}
+
+const MATH_PARAMS: [ParamSpec; 1] = [ParamSpec {
+    name: "value",
+    default: 0.0,
+    minimum: -1000.0,
+    maximum: 1000.0,
+}];
+
+const OSC_INPUTS: [VoiceSocketSpec; 2] = [
+    VoiceSocketSpec {
+        id: "pitch",
+        name: "Pitch",
+        ty: SocketType::Float,
+    },
+    VoiceSocketSpec {
+        id: "velocity",
+        name: "Velocity",
+        ty: SocketType::Float,
+    },
+];
+const OSC_PARAMS: [ParamSpec; 4] = [
+    ParamSpec {
+        name: "partials",
+        default: 10.0,
+        minimum: 1.0,
+        maximum: 16.0,
+    },
+    ParamSpec {
+        name: "inharmonicity",
+        default: 0.0004,
+        minimum: 0.0,
+        maximum: 0.01,
+    },
+    ParamSpec {
+        name: "brightness",
+        default: 0.5,
+        minimum: 0.0,
+        maximum: 1.0,
+    },
+    ParamSpec {
+        name: "decay",
+        default: 1.2,
+        minimum: 0.1,
+        maximum: 8.0,
+    },
+];
+const ENV_PARAMS: [ParamSpec; 2] = [
+    ParamSpec {
+        name: "attack",
+        default: 0.004,
+        minimum: 0.0,
+        maximum: 1.0,
+    },
+    ParamSpec {
+        name: "decay",
+        default: 1.2,
+        minimum: 0.05,
+        maximum: 8.0,
+    },
+];
+const NOISE_PARAMS: [ParamSpec; 2] = [
+    ParamSpec {
+        name: "level",
+        default: 0.2,
+        minimum: 0.0,
+        maximum: 1.0,
+    },
+    ParamSpec {
+        name: "duration",
+        default: 0.008,
+        minimum: 0.001,
+        maximum: 0.2,
+    },
+];
+
+const AUDIO_OUT: [VoiceSocketSpec; 1] = [VoiceSocketSpec {
+    id: "out",
+    name: "Audio",
+    ty: SocketType::Audio,
+}];
+const FLOAT_OUT: [VoiceSocketSpec; 1] = [VoiceSocketSpec {
+    id: "out",
+    name: "Value",
+    ty: SocketType::Float,
+}];
+const TWO_AUDIO_IN: [VoiceSocketSpec; 2] = [
+    VoiceSocketSpec {
+        id: "in1",
+        name: "A",
+        ty: SocketType::Audio,
+    },
+    VoiceSocketSpec {
+        id: "in2",
+        name: "B",
+        ty: SocketType::Audio,
+    },
+];
+const TWO_FLOAT_IN: [VoiceSocketSpec; 2] = [
+    VoiceSocketSpec {
+        id: "a",
+        name: "A",
+        ty: SocketType::Float,
+    },
+    VoiceSocketSpec {
+        id: "b",
+        name: "B",
+        ty: SocketType::Float,
+    },
+];
+const MAP_RANGE_IN: [VoiceSocketSpec; 5] = [
+    VoiceSocketSpec {
+        id: "value",
+        name: "Value",
+        ty: SocketType::Float,
+    },
+    VoiceSocketSpec {
+        id: "from_min",
+        name: "From Min",
+        ty: SocketType::Float,
+    },
+    VoiceSocketSpec {
+        id: "from_max",
+        name: "From Max",
+        ty: SocketType::Float,
+    },
+    VoiceSocketSpec {
+        id: "to_min",
+        name: "To Min",
+        ty: SocketType::Float,
+    },
+    VoiceSocketSpec {
+        id: "to_max",
+        name: "To Max",
+        ty: SocketType::Float,
+    },
+];
+
+/// 所有可用 Voice 节点类型。UI 和命令面都从这里生成。
+pub const VOICE_NODE_TYPES: &[VoiceNodeType] = &[
+    VoiceNodeType {
+        id: "group.input",
+        name: "Group Input",
+        category: "Input",
+        inputs: &[],
+        outputs: &[],
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "group.output",
+        name: "Group Output",
+        category: "Output",
+        inputs: &[],
+        outputs: &[],
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "voice.group",
+        name: "Group",
+        category: "Group",
+        inputs: &[],
+        outputs: &[],
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "osc.partials",
+        name: "Partials",
+        category: "Generator",
+        inputs: &OSC_INPUTS,
+        outputs: &AUDIO_OUT,
+        params: &OSC_PARAMS,
+    },
+    VoiceNodeType {
+        id: "env.percussive",
+        name: "Percussive Envelope",
+        category: "Envelope",
+        inputs: &[VoiceSocketSpec {
+            id: "in",
+            name: "Audio",
+            ty: SocketType::Audio,
+        }],
+        outputs: &AUDIO_OUT,
+        params: &ENV_PARAMS,
+    },
+    VoiceNodeType {
+        id: "noise.burst",
+        name: "Noise Burst",
+        category: "Generator",
+        inputs: &[VoiceSocketSpec {
+            id: "velocity",
+            name: "Velocity",
+            ty: SocketType::Float,
+        }],
+        outputs: &AUDIO_OUT,
+        params: &NOISE_PARAMS,
+    },
+    VoiceNodeType {
+        id: "voice.mix",
+        name: "Mix",
+        category: "Audio",
+        inputs: &TWO_AUDIO_IN,
+        outputs: &AUDIO_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "math.add",
+        name: "Add",
+        category: "Math",
+        inputs: &TWO_FLOAT_IN,
+        outputs: &FLOAT_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "math.multiply",
+        name: "Multiply",
+        category: "Math",
+        inputs: &TWO_FLOAT_IN,
+        outputs: &FLOAT_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "math.map_range",
+        name: "Map Range",
+        category: "Math",
+        inputs: &MAP_RANGE_IN,
+        outputs: &FLOAT_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "math.clamp",
+        name: "Clamp",
+        category: "Math",
+        inputs: &[
+            VoiceSocketSpec {
+                id: "value",
+                name: "Value",
+                ty: SocketType::Float,
+            },
+            VoiceSocketSpec {
+                id: "min",
+                name: "Min",
+                ty: SocketType::Float,
+            },
+            VoiceSocketSpec {
+                id: "max",
+                name: "Max",
+                ty: SocketType::Float,
+            },
+        ],
+        outputs: &FLOAT_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "value.float",
+        name: "Value",
+        category: "Input",
+        inputs: &[],
+        outputs: &FLOAT_OUT,
+        params: &MATH_PARAMS,
+    },
+];
+
+pub fn voice_node_type(id: &str) -> Option<&'static VoiceNodeType> {
+    VOICE_NODE_TYPES.iter().find(|node_type| node_type.id == id)
+}
+
 /// 钢琴内部的 Voice 子图。每条连接表示一个音频或控制值。
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -505,8 +793,8 @@ impl Default for VoiceGraph {
 
 impl VoiceGraph {
     pub fn shell(interface: &NodeGroupInterface) -> Self {
-        let input = VoiceNode::new(NodeId::fixed("voice-in"), VoiceNodeKind::GroupInput);
-        let output = VoiceNode::new(NodeId::fixed("out"), VoiceNodeKind::GroupOutput);
+        let input = VoiceNode::new(NodeId::fixed("voice-in"), "group.input");
+        let output = VoiceNode::new(NodeId::fixed("out"), "group.output");
         let mut nodes = BTreeMap::new();
         nodes.insert(input.id.clone(), input);
         nodes.insert(output.id.clone(), output);
@@ -524,20 +812,12 @@ impl VoiceGraph {
     }
 
     pub fn piano_default() -> Self {
-        let input = VoiceNode::new(NodeId::fixed("voice-in"), VoiceNodeKind::GroupInput);
-        let mut osc = VoiceNode::new(NodeId::fixed("osc"), VoiceNodeKind::OscPartials);
-        osc.params.insert("partials".to_string(), 10.0);
-        osc.params.insert("inharmonicity".to_string(), 0.0004);
-        osc.params.insert("brightness".to_string(), 0.5);
-        osc.params.insert("decay".to_string(), 1.2);
-        let mut env = VoiceNode::new(NodeId::fixed("env"), VoiceNodeKind::EnvPercussive);
-        env.params.insert("attack".to_string(), 0.004);
-        env.params.insert("decay".to_string(), 1.2);
-        let mut noise = VoiceNode::new(NodeId::fixed("noise"), VoiceNodeKind::NoiseBurst);
-        noise.params.insert("level".to_string(), 0.2);
-        noise.params.insert("duration".to_string(), 0.008);
-        let mix = VoiceNode::new(NodeId::fixed("mix"), VoiceNodeKind::Mix);
-        let output = VoiceNode::new(NodeId::fixed("out"), VoiceNodeKind::GroupOutput);
+        let input = VoiceNode::new(NodeId::fixed("voice-in"), "group.input");
+        let osc = VoiceNode::new(NodeId::fixed("osc"), "osc.partials");
+        let env = VoiceNode::new(NodeId::fixed("env"), "env.percussive");
+        let noise = VoiceNode::new(NodeId::fixed("noise"), "noise.burst");
+        let mix = VoiceNode::new(NodeId::fixed("mix"), "voice.mix");
+        let output = VoiceNode::new(NodeId::fixed("out"), "group.output");
         let mut nodes = BTreeMap::new();
         for node in [input, osc, env, noise, mix, output] {
             nodes.insert(node.id.clone(), node);
@@ -612,15 +892,27 @@ impl VoiceGraph {
         let inputs = self
             .nodes
             .values()
-            .filter(|node| node.kind == VoiceNodeKind::GroupInput)
+            .filter(|node| node.type_id == "group.input")
             .count();
         let outputs = self
             .nodes
             .values()
-            .filter(|node| node.kind == VoiceNodeKind::GroupOutput)
+            .filter(|node| node.type_id == "group.output")
             .count();
         if inputs != 1 || outputs != 1 {
             return Err(GraphError::VoiceTerminals);
+        }
+        for node in self.nodes.values() {
+            if !matches!(
+                node.type_id.as_str(),
+                "group.input" | "group.output" | "voice.group"
+            ) && voice_node_type(&node.type_id).is_none()
+            {
+                return Err(GraphError::UnknownVoiceNodeType(node.type_id.clone()));
+            }
+            if node.type_id == "voice.group" && node.group.is_none() {
+                return Err(GraphError::EmptyGroupId);
+            }
         }
         let mut occupied = BTreeSet::new();
         for connection in &self.connections {
@@ -632,13 +924,25 @@ impl VoiceGraph {
                 .nodes
                 .get(&connection.to.node)
                 .ok_or(GraphError::VoiceUnknownNode)?;
-            let source_ports = node_output_ports(source, interface, groups)?;
-            let target_ports = node_input_ports(target, interface, groups)?;
-            if !source_ports.contains(&connection.from.port) {
+            let source_ports = node_outputs(source, interface, groups)?;
+            let target_ports = node_inputs(target, interface, groups)?;
+            let Some(source_port) = source_ports
+                .iter()
+                .find(|port| port.id == connection.from.port)
+            else {
                 return Err(GraphError::VoiceUnknownPort(connection.from.port.clone()));
-            }
-            if !target_ports.contains(&connection.to.port) {
+            };
+            let Some(target_port) = target_ports
+                .iter()
+                .find(|port| port.id == connection.to.port)
+            else {
                 return Err(GraphError::VoiceUnknownPort(connection.to.port.clone()));
+            };
+            if source_port.ty != target_port.ty {
+                return Err(GraphError::VoiceTypeMismatch {
+                    from: source_port.ty,
+                    to: target_port.ty,
+                });
             }
             let key = (connection.to.node.clone(), connection.to.port.clone());
             if !occupied.insert(key) {
@@ -691,12 +995,12 @@ impl VoiceGraph {
     }
 }
 
-/// Voice 子图节点。
+/// Voice 子图节点。节点行为由 `VoiceNodeType` 注册表声明，实例只保存类型 ID。
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct VoiceNode {
     pub id: NodeId,
-    pub kind: VoiceNodeKind,
+    pub type_id: String,
     #[serde(default)]
     pub params: BTreeMap<String, f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -706,97 +1010,27 @@ pub struct VoiceNode {
 }
 
 impl VoiceNode {
-    fn new(id: NodeId, kind: VoiceNodeKind) -> Self {
+    fn new(id: NodeId, type_id: &str) -> Self {
+        let params = voice_node_type(type_id)
+            .map(|node_type| {
+                node_type
+                    .params
+                    .iter()
+                    .map(|param| (param.name.to_string(), param.default))
+                    .collect()
+            })
+            .unwrap_or_default();
         Self {
             id,
-            kind,
-            params: kind.default_params(),
+            type_id: type_id.to_string(),
+            params,
             position: None,
             group: None,
         }
     }
-}
 
-/// Voice 子图节点类型。
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-pub enum VoiceNodeKind {
-    #[serde(rename = "group.input")]
-    GroupInput,
-    #[serde(rename = "osc.partials")]
-    OscPartials,
-    #[serde(rename = "env.percussive")]
-    EnvPercussive,
-    #[serde(rename = "noise.burst")]
-    NoiseBurst,
-    #[serde(rename = "voice.mix")]
-    Mix,
-    #[serde(rename = "voice.group")]
-    Group,
-    #[serde(rename = "group.output")]
-    GroupOutput,
-}
-
-impl VoiceNodeKind {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::GroupInput => "group.input",
-            Self::OscPartials => "osc.partials",
-            Self::EnvPercussive => "env.percussive",
-            Self::NoiseBurst => "noise.burst",
-            Self::Mix => "voice.mix",
-            Self::Group => "voice.group",
-            Self::GroupOutput => "group.output",
-        }
-    }
-
-    pub const fn inputs(self) -> &'static [&'static str] {
-        match self {
-            Self::GroupInput | Self::Group => &[],
-            Self::OscPartials => &["pitch", "velocity"],
-            Self::NoiseBurst => &["velocity"],
-            Self::EnvPercussive => &["in"],
-            Self::GroupOutput => &["audio"],
-            Self::Mix => &["in1", "in2"],
-        }
-    }
-
-    pub const fn outputs(self) -> &'static [&'static str] {
-        match self {
-            Self::GroupInput => &["pitch", "velocity", "gate"],
-            Self::GroupOutput | Self::Group => &[],
-            Self::OscPartials | Self::EnvPercussive | Self::NoiseBurst | Self::Mix => &["out"],
-        }
-    }
-
-    pub fn has_input(self, port: &str) -> bool {
-        self.inputs().contains(&port)
-    }
-
-    pub fn has_output(self, port: &str) -> bool {
-        self.outputs().contains(&port)
-    }
-
-    fn default_params(self) -> BTreeMap<String, f64> {
-        let mut params = BTreeMap::new();
-        match self {
-            Self::OscPartials => {
-                params.insert("partials".to_string(), 12.0);
-                params.insert("inharmonicity".to_string(), 0.0004);
-                params.insert("brightness".to_string(), 0.55);
-                params.insert("decay".to_string(), 1.4);
-            },
-            Self::EnvPercussive => {
-                params.insert("attack".to_string(), 0.004);
-                params.insert("decay".to_string(), 1.8);
-            },
-            Self::NoiseBurst => {
-                params.insert("level".to_string(), 0.15);
-                params.insert("duration".to_string(), 0.008);
-            },
-            _ => {},
-        }
-        params
+    pub fn node_type(&self) -> Option<&'static VoiceNodeType> {
+        voice_node_type(&self.type_id)
     }
 }
 
@@ -1863,6 +2097,10 @@ pub enum GraphError {
     VoiceUnknownNode,
     #[error("Voice 子图端口不存在：{0}")]
     VoiceUnknownPort(String),
+    #[error("未知的 Voice 节点类型：{0}")]
+    UnknownVoiceNodeType(String),
+    #[error("Voice 端口类型不匹配：{from:?} → {to:?}")]
+    VoiceTypeMismatch { from: SocketType, to: SocketType },
     #[error("节点不是钢琴：{0:?}")]
     NotPiano(NodeKind),
     #[error("节点不是组节点：{0:?}")]
@@ -1895,6 +2133,28 @@ mod tests {
     }
 
     #[test]
+    fn voice_links_are_type_checked() {
+        let interface = NodeGroupInterface::piano();
+        let mut graph = VoiceGraph::shell(&interface);
+        let id = NodeId::new("add").unwrap();
+        graph
+            .nodes
+            .insert(id.clone(), VoiceNode::new(id.clone(), "math.add"));
+        graph.connections.push(VoiceConnection {
+            from: PortRef::fixed(NodeId::fixed("voice-in"), "pitch"),
+            to: PortRef::new(id.clone(), "a"),
+        });
+        graph.connections.push(VoiceConnection {
+            from: PortRef::new(id, "out"),
+            to: PortRef::fixed(NodeId::fixed("out"), "audio"),
+        });
+        let error = graph
+            .validate_with_groups(&interface, &BTreeMap::new())
+            .unwrap_err();
+        assert!(matches!(error, GraphError::VoiceTypeMismatch { .. }));
+    }
+
+    #[test]
     fn nested_group_must_exist() {
         let interface = NodeGroupInterface::piano();
         let mut graph = VoiceGraph::shell(&interface);
@@ -1903,7 +2163,7 @@ mod tests {
             id.clone(),
             VoiceNode {
                 id: id.clone(),
-                kind: VoiceNodeKind::Group,
+                type_id: "voice.group".to_string(),
                 params: BTreeMap::new(),
                 position: None,
                 group: Some("missing.voice".to_string()),
