@@ -175,6 +175,7 @@ export const en: Record<MessageKey, Message> = {
   "voice.trackPath": "TRACK GRAPH",
   "voice.hint": "Double-click the piano node · drag · click output then input · X delete",
   "voice.edit": "EDIT VOICE",
+  "voice.interface": "INTERFACE",
   "voice.apply": "APPLY",
   "voice.close": "CLOSE",
   "voice.delete": "DELETE NODE",

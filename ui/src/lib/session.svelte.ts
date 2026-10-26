@@ -801,6 +801,18 @@ export class SessionStore {
     return this.audioNodeTypesState;
   }
 
+  async setGroupInterface(
+    groupId: string,
+    groupInterface: NodeGroup["interface"],
+  ): Promise<unknown> {
+    const result = await this.run("group.interface", {
+      group_id: groupId,
+      interface: groupInterface,
+    });
+    await this.refreshProject();
+    return result;
+  }
+
   async setGroupVoice(
     groupId: string,
     voice: {

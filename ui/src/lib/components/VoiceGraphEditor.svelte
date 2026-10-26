@@ -129,6 +129,16 @@
   let voice = $state<VoiceGraph>(
     JSON.parse(JSON.stringify(initialVoice)) as VoiceGraph,
   );
+  let interfaceOpen = $state(false);
+  let interfaceDraft = $state<NodeGroupInterface>({
+    inputs: [],
+    outputs: [],
+  });
+  let interfaceError = $state("");
+  const interfaceSides = [
+    { key: "inputs" as const, label: "INPUTS" },
+    { key: "outputs" as const, label: "OUTPUTS" },
+  ];
   let selected = $state("");
   let drag = $state<Drag | null>(null);
   let wire = $state<Wire | null>(null);
@@ -271,6 +281,42 @@
     wire = null;
   }
 
+  function openInterface() {
+    interfaceDraft = JSON.parse(
+      JSON.stringify(groupInterface),
+    ) as NodeGroupInterface;
+    interfaceError = "";
+    interfaceOpen = true;
+  }
+
+  function addSocket(side: "inputs" | "outputs") {
+    const list = interfaceDraft[side];
+    const prefix = side === "inputs" ? "in" : "out";
+    let number = list.length + 1;
+    while (list.some((socket) => socket.id === `${prefix}-${number}`)) {
+      number += 1;
+    }
+    list.push({
+      id: `${prefix}-${number}`,
+      name: `${prefix.toUpperCase()} ${number}`,
+      type: side === "outputs" ? "audio" : "float",
+    });
+  }
+
+  function removeSocket(side: "inputs" | "outputs", index: number) {
+    interfaceDraft[side].splice(index, 1);
+  }
+
+  async function saveInterface() {
+    interfaceError = "";
+    try {
+      await session.setGroupInterface(groupId, interfaceDraft);
+      interfaceOpen = false;
+    } catch (error) {
+      interfaceError = errorMessage(error);
+    }
+  }
+
   function setParam(node: VoiceNode, name: string, value: number) {
     node.params[name] = Number.isFinite(value) ? value : 0;
   }
@@ -411,12 +457,77 @@
         <span>{t("voice.hint")}</span>
       </div>
       <div class="voice-editor-actions">
+        <button class="ghost small" onclick={openInterface}>
+          {t("voice.interface")}
+        </button>
         <button class="ghost small" disabled={saving} onclick={() => void save()}>
           {t("voice.apply")}
         </button>
         <button class="ghost small" onclick={() => void leave()}>{t("voice.close")}</button>
       </div>
     </header>
+
+    {#if interfaceOpen}
+      <div class="voice-interface-panel">
+        <div class="voice-interface-head">
+          <strong>{t("voice.interface")}</strong>
+          <button class="ghost small" onclick={() => (interfaceOpen = false)}>
+            {t("voice.close")}
+          </button>
+        </div>
+        {#each interfaceSides as section (section.key)}
+          {@const sockets = interfaceDraft[section.key]}
+          <div class="voice-interface-section">
+            <div class="voice-interface-title">
+              <span>{section.label}</span>
+              <button
+                class="ghost small"
+                onclick={() => addSocket(section.key)}
+              >
+                +
+              </button>
+            </div>
+            {#each sockets as socket, index (socket.id)}
+              <div class="voice-interface-row">
+                <code>{socket.id}</code>
+                <input
+                  class="voice-interface-name"
+                  value={socket.name}
+                  oninput={(event) =>
+                    (socket.name = event.currentTarget.value)}
+                />
+                <select
+                  class="voice-interface-type"
+                  value={socket.type}
+                  onchange={(event) => {
+                    socket.type = event.currentTarget
+                      .value as NodeGroupInterface["inputs"][number]["type"];
+                  }}
+                >
+                  <option value="float">FLOAT</option>
+                  <option value="gate">GATE</option>
+                  <option value="audio">AUDIO</option>
+                </select>
+                <button
+                  class="ghost small"
+                  onclick={() => removeSocket(section.key, index)}
+                >
+                  ×
+                </button>
+              </div>
+            {/each}
+          </div>
+        {/each}
+        {#if interfaceError}
+          <p class="error-text">{interfaceError}</p>
+        {/if}
+        <div class="voice-interface-actions">
+          <button class="ghost small" onclick={() => void saveInterface()}>
+            {t("voice.apply")}
+          </button>
+        </div>
+      </div>
+    {/if}
 
     {#if error}
       <p class="error-text">{error}</p>

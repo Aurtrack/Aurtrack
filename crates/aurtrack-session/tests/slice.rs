@@ -862,6 +862,43 @@ fn node_types_expose_audio_registry() {
 }
 
 #[test]
+fn group_interface_accepts_new_typed_socket() {
+    let mut session = Session::default();
+    run(&mut session, "project.create", json!({}));
+    run(
+        &mut session,
+        "group.interface",
+        json!({
+            "group_id": "piano.voice",
+            "interface": {
+                "inputs": [
+                    { "id": "pitch", "name": "Pitch", "type": "float" },
+                    { "id": "velocity", "name": "Velocity", "type": "float" },
+                    { "id": "gate", "name": "Gate", "type": "gate" },
+                    { "id": "mod", "name": "Mod", "type": "float" }
+                ],
+                "outputs": [
+                    { "id": "audio", "name": "Audio", "type": "audio" }
+                ]
+            }
+        }),
+    );
+    let state = run(&mut session, "project.state", json!({}));
+    assert_eq!(
+        state["project"]["node_groups"]["piano.voice"]["interface"]["inputs"]
+            .as_array()
+            .unwrap()
+            .len(),
+        4
+    );
+    let group_input = state["project"]["node_groups"]["piano.voice"]["graph"]["nodes"]["voice-in"]
+        ["type_id"]
+        .as_str()
+        .unwrap();
+    assert_eq!(group_input, "group.input");
+}
+
+#[test]
 fn float_control_links_drive_gain() {
     let mut session = Session::default();
     run(&mut session, "project.create", json!({}));
