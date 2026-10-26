@@ -135,6 +135,9 @@
     outputs: [],
   });
   let interfaceError = $state("");
+  let libraryOpen = $state(false);
+  let libraryError = $state("");
+  let newGroupName = $state("");
   const interfaceSides = [
     { key: "inputs" as const, label: "INPUTS" },
     { key: "outputs" as const, label: "OUTPUTS" },
@@ -279,6 +282,26 @@
   function end() {
     drag = null;
     wire = null;
+  }
+
+  async function createAndInsertGroup() {
+    const name = newGroupName.trim();
+    if (!name) return;
+    libraryError = "";
+    if (!(await save(false))) return;
+    try {
+      const id = await session.createGroup(name);
+      addGroupNode(id);
+      newGroupName = "";
+      libraryOpen = false;
+    } catch (error) {
+      libraryError = errorMessage(error);
+    }
+  }
+
+  function insertGroup(groupId: string) {
+    addGroupNode(groupId);
+    libraryOpen = false;
   }
 
   function openInterface() {
@@ -457,6 +480,9 @@
         <span>{t("voice.hint")}</span>
       </div>
       <div class="voice-editor-actions">
+        <button class="ghost small" onclick={() => (libraryOpen = !libraryOpen)}>
+          {t("voice.library")}
+        </button>
         <button class="ghost small" onclick={openInterface}>
           {t("voice.interface")}
         </button>
@@ -466,6 +492,56 @@
         <button class="ghost small" onclick={() => void leave()}>{t("voice.close")}</button>
       </div>
     </header>
+
+    {#if libraryOpen}
+      <div class="voice-interface-panel">
+        <div class="voice-interface-head">
+          <strong>{t("voice.library")}</strong>
+          <button class="ghost small" onclick={() => (libraryOpen = false)}>
+            {t("voice.close")}
+          </button>
+        </div>
+        <div class="voice-interface-row">
+          <input
+            class="voice-interface-name"
+            placeholder={t("voice.newGroupName")}
+            bind:value={newGroupName}
+            onkeydown={(event) => {
+              if (event.key === "Enter") void createAndInsertGroup();
+            }}
+          />
+          <button
+            class="ghost small"
+            disabled={!newGroupName.trim()}
+            onclick={() => void createAndInsertGroup()}
+          >
+            {t("voice.createGroup")}
+          </button>
+        </div>
+        {#if libraryError}
+          <p class="error-text">{libraryError}</p>
+        {/if}
+        <div class="voice-interface-section">
+          <div class="voice-interface-title">
+            <span>GROUPS</span>
+          </div>
+          {#each Object.values(groups) as group (group.id)}
+            {#if group.id !== groupId}
+              <div class="voice-interface-row">
+                <span>{group.name}</span>
+                <code>{group.id}</code>
+                <button
+                  class="ghost small"
+                  onclick={() => insertGroup(group.id)}
+                >
+                  {t("voice.insertGroup")}
+                </button>
+              </div>
+            {/if}
+          {/each}
+        </div>
+      </div>
+    {/if}
 
     {#if interfaceOpen}
       <div class="voice-interface-panel">

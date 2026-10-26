@@ -801,6 +801,17 @@ export class SessionStore {
     return this.audioNodeTypesState;
   }
 
+  async createGroup(name: string): Promise<string> {
+    const data = await this.run<{ group_id: string }>("group.create", { name });
+    await this.refreshProject();
+    return data.group_id;
+  }
+
+  async renameGroup(groupId: string, name: string): Promise<void> {
+    await this.run("group.rename", { group_id: groupId, name });
+    await this.refreshProject();
+  }
+
   async setGroupInterface(
     groupId: string,
     groupInterface: NodeGroup["interface"],
