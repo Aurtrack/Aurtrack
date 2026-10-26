@@ -191,7 +191,7 @@ export const zhCN = {
   "graph.inputPort": "输入端口",
   "graph.removeWire": "点击断开连接",
   "graph.frameAll": "适配",
-  "graph.foot": "Home 全览 · F 选中 · Shift+D 复制 · Del 删除 · 操作可撤销",
+  "graph.foot": "Home 全览 · F 选中 · Shift+A 添加 · Shift+D 复制 · Del 删除 · 操作可撤销",
   "graph.direction": "输入 → 输出",
   "number.decrease": "减小",
   "number.increase": "增大",

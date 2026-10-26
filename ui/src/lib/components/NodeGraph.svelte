@@ -824,56 +824,19 @@
     {@const owner = track}
     {#if editingGroup}
       {#key editingGroup.id}
-      <VoiceGraphEditor
-        embedded
-        groupId={editingGroup.id}
-        groups={session.nodeGroups}
-        path={voicePath}
-        interface={editingGroup.interface}
-        voice={editingGroup.graph}
-        onEnterGroup={enterVoiceGroup}
-        onNavigate={navigateVoice}
-        onClose={() => (voicePath = [])}
-      />
+        <VoiceGraphEditor
+          embedded
+          groupId={editingGroup.id}
+          groups={session.nodeGroups}
+          path={voicePath}
+          interface={editingGroup.interface}
+          voice={editingGroup.graph}
+          onEnterGroup={enterVoiceGroup}
+          onNavigate={navigateVoice}
+          onClose={() => (voicePath = [])}
+        />
       {/key}
     {:else}
-    <div class="graph-toolbar">
-      <span class="graph-hint">{t("graph.hint")}</span>
-      <span class="rule"></span>
-      <span class="graph-zoom">{Math.round(view.scale * 100)}%</span>
-      <button class="ghost small graph-add" onclick={frameAll}>
-        {t("graph.frameAll")}
-      </button>
-      <button
-        class="ghost small graph-add"
-        disabled={busy || hasAdsr}
-        onclick={() => addNode("amp.adsr")}
-      >
-        {t("graph.addAdsr")}
-      </button>
-      <button
-        class="ghost small graph-add"
-        disabled={busy}
-        onclick={() => addNode("filter.lowpass")}
-      >
-        {t("graph.addFilter")}
-      </button>
-      <button
-        class="ghost small graph-add"
-        disabled={busy}
-        onclick={() => addNode("mix")}
-      >
-        {t("graph.addMix")}
-      </button>
-      <button
-        class="ghost small graph-add"
-        disabled={busy}
-        onclick={() => addNode("gain")}
-      >
-        {t("graph.addGain")}
-      </button>
-    </div>
-
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <div
       class="graph-board"

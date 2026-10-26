@@ -196,7 +196,7 @@ export const en: Record<MessageKey, Message> = {
   "graph.inputPort": "Input port",
   "graph.removeWire": "Click to disconnect",
   "graph.frameAll": "FRAME ALL",
-  "graph.foot": "Home all · F selected · Shift+D duplicate · Del remove · undo",
+  "graph.foot": "Home all · F selected · Shift+A add · Shift+D duplicate · Del remove · undo",
   "graph.direction": "IN → OUT",
   "number.decrease": "Decrease",
   "number.increase": "Increase",
