@@ -11,6 +11,7 @@
   import { errorMessage } from "../api";
   import { t } from "../i18n.svelte";
   import { session } from "../session.svelte";
+  import NodeAddMenu from "./NodeAddMenu.svelte";
   import NumberField from "./NumberField.svelte";
 
   interface Props {
@@ -57,6 +58,7 @@
   type Wire = {
     node: string;
     port: string;
+    side: "in" | "out";
     ty: PortType;
     x: number;
     y: number;
@@ -73,19 +75,14 @@
   let typeById = $derived(
     new Map(nodeTypes.map((nodeType) => [nodeType.id, nodeType])),
   );
-  let categories = $derived.by(() => {
-    const groups = new Map<string, NodeTypeInfo[]>();
-    for (const nodeType of nodeTypes) {
-      if (nodeType.id === "group.input" || nodeType.id === "group.output") {
-        continue;
-      }
-      if (nodeType.id === "voice.group") continue;
-      const group = groups.get(nodeType.category) ?? [];
-      group.push(nodeType);
-      groups.set(nodeType.category, group);
-    }
-    return [...groups.entries()];
-  });
+  let menuTypes = $derived(
+    nodeTypes.filter(
+      (nodeType) =>
+        nodeType.id !== "group.input" &&
+        nodeType.id !== "group.output" &&
+        nodeType.id !== "voice.group",
+    ),
+  );
 
   function nodeGroup(node: VoiceNode): NodeGroup | undefined {
     return node.group ? groups[node.group] : undefined;
@@ -144,7 +141,17 @@
   let voice = $state<VoiceGraph>(
     JSON.parse(JSON.stringify(initialVoice)) as VoiceGraph,
   );
+  let loadedGroupId = $state("");
+
+  $effect(() => {
+    if (groupId === loadedGroupId) return;
+    loadedGroupId = groupId;
+    voice = JSON.parse(JSON.stringify(initialVoice)) as VoiceGraph;
+    selected = new Set();
+    active = "";
+  });
   let interfaceOpen = $state(false);
+  let sidebarOpen = $state(false);
   let interfaceDraft = $state<NodeGroupInterface>({
     inputs: [],
     outputs: [],
@@ -181,6 +188,7 @@
   let addMenu = $state<{ x: number; y: number } | null>(null);
   let lastPointer = $state({ x: 0, y: 0 });
   let boardElement = $state<HTMLElement | null>(null);
+  let hostElement = $state<HTMLElement | null>(null);
   let groupChoices = $derived(
     Object.values(groups).filter((group) => group.id !== groupId),
   );
@@ -294,16 +302,21 @@
     const node = voice.nodes[activeWire.node];
     const position = node ? positions[activeWire.node] : undefined;
     if (!node || !position) return "";
+    const ports =
+      activeWire.side === "out" ? outputList(node) : inputList(node);
     const index = Math.max(
       0,
-      outputList(node).findIndex(
-        (candidate) => candidate.id === activeWire.port,
-      ),
+      ports.findIndex((candidate) => candidate.id === activeWire.port),
     );
-    const x1 = position.x + NODE_WIDTH;
+    const x1 =
+      activeWire.side === "out" ? position.x + NODE_WIDTH : position.x;
     const y1 = position.y + portY(node, index);
     const x2 = activeWire.x;
     const y2 = activeWire.y;
+    if (activeWire.side === "in") {
+      const bend = Math.max(40, Math.abs(x2 - x1) * 0.45);
+      return `M ${x2} ${y2} C ${x2 - bend} ${y2}, ${x1 + bend} ${y1}, ${x1} ${y1}`;
+    }
     const bend = Math.max(40, Math.abs(x2 - x1) * 0.45);
     return `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`;
   }
@@ -332,15 +345,22 @@
     event: MouseEvent,
     node: VoiceNode,
     port: PortInfo,
+    side: "in" | "out",
   ) {
     event.preventDefault();
     event.stopPropagation();
+    if (wire) {
+      if (wire.side !== side) finishWire(event, node, port);
+      else wire = null;
+      return;
+    }
     selectOnly(node.id);
     const point = worldPoint(event);
     if (!point) return;
     wire = {
       node: node.id,
       port: port.id,
+      side,
       ty: port.ty,
       x: point.x,
       y: point.y,
@@ -354,31 +374,38 @@
   ) {
     event.preventDefault();
     event.stopPropagation();
-    if (!wire) return;
-    if (wire.node === node.id) {
-      wire = null;
+    const active = wire;
+    if (!active) return;
+    wire = null;
+    if (active.node === node.id || port.ty !== active.ty) {
+      if (port.ty !== active.ty) {
+        error = `端口类型不匹配：${active.ty} → ${port.ty}`;
+      }
       return;
     }
-    if (wire.ty !== port.ty) {
-      error = `端口类型不匹配：${wire.ty} → ${port.ty}`;
-      wire = null;
-      return;
-    }
+    const from =
+      active.side === "out"
+        ? { node: active.node, port: active.port }
+        : { node: node.id, port: port.id };
+    const to =
+      active.side === "out"
+        ? { node: node.id, port: port.id }
+        : { node: active.node, port: active.port };
+    if (from.node === to.node) return;
     const exists = voice.connections.some(
       (connection) =>
-        connection.to.node === node.id && connection.to.port === port.id,
+        connection.from.node === from.node &&
+        connection.from.port === from.port &&
+        connection.to.node === to.node &&
+        connection.to.port === to.port,
     );
     voice.connections = voice.connections.filter(
       (connection) =>
-        !(connection.to.node === node.id && connection.to.port === port.id),
+        !(connection.to.node === to.node && connection.to.port === to.port),
     );
     if (!exists) {
-      voice.connections.push({
-        from: { node: wire.node, port: wire.port },
-        to: { node: node.id, port: port.id },
-      });
+      voice.connections.push({ from, to });
     }
-    wire = null;
   }
 
   function nodeMouseDown(event: MouseEvent, node: VoiceNode) {
@@ -386,13 +413,14 @@
     const target = event.target as Element | null;
     if (target?.closest("input, button, select, textarea")) return;
     event.preventDefault();
-    const additive = event.shiftKey || event.ctrlKey || event.metaKey;
-    if (additive) {
+    if (event.shiftKey) {
       const next = new Set(selected);
       if (next.has(node.id)) next.delete(node.id);
       else next.add(node.id);
       selected = next;
       active = node.id;
+    } else if (event.ctrlKey || event.metaKey) {
+      selectOnly(node.id);
     } else if (!selected.has(node.id)) {
       selectOnly(node.id);
     } else {
@@ -501,7 +529,28 @@
     return `left:${left}px;top:${top}px;width:${width}px;height:${height}px;`;
   }
 
-  function end() {
+  function end(event?: MouseEvent) {
+    if (wire && event) {
+      const element = document.elementFromPoint(event.clientX, event.clientY);
+      const target = element?.closest<HTMLElement>(".voice-port");
+      const targetNode = target?.dataset.portNode;
+      const targetPort = target?.dataset.portId;
+      const targetSide = target?.dataset.portSide;
+      if (
+        targetNode &&
+        targetPort &&
+        targetSide &&
+        targetSide !== wire.side
+      ) {
+        const node = voice.nodes[targetNode];
+        const port = node
+          ? (targetSide === "in" ? inputList(node) : outputList(node)).find(
+              (candidate) => candidate.id === targetPort,
+            )
+          : undefined;
+        if (node && port) finishWire(event, node, port);
+      }
+    }
     if (marquee) {
       const left = Math.min(marquee.x1, marquee.x2);
       const right = Math.max(marquee.x1, marquee.x2);
@@ -574,7 +623,12 @@
       JSON.stringify(groupInterface),
     ) as NodeGroupInterface;
     interfaceError = "";
+    sidebarOpen = true;
     interfaceOpen = true;
+  }
+
+  function toggleSidebar() {
+    sidebarOpen = !sidebarOpen;
   }
 
   function addSocket(side: "inputs" | "outputs") {
@@ -687,6 +741,53 @@
     }
   }
 
+  async function makeGroup() {
+    const ids = [...selected].filter(
+      (id) => id !== "voice-in" && id !== "out",
+    );
+    if (ids.length === 0) {
+      error = "先选中要成组的节点";
+      return;
+    }
+    if (!(await save(false))) return;
+    try {
+      const result = await session.groupFromNodes(
+        groupId,
+        ids,
+        t("voice.groupNode"),
+      );
+      selected = new Set();
+      active = "";
+      onEnterGroup(result.group_id);
+    } catch (caught) {
+      error = errorMessage(caught);
+    }
+  }
+
+  function reloadFromSession() {
+    const group = session.nodeGroups[groupId];
+    if (group) {
+      voice = JSON.parse(JSON.stringify(group.graph)) as VoiceGraph;
+    }
+  }
+
+  async function ungroupActive() {
+    const node = voice.nodes[active];
+    if (!node || node.type_id !== "voice.group") {
+      error = "先选中一个组节点";
+      return;
+    }
+    if (!(await save(false))) return;
+    try {
+      const result = await session.ungroupNode(groupId, node.id);
+      reloadFromSession();
+      selected = new Set(result.node_ids);
+      active = "";
+    } catch (caught) {
+      error = errorMessage(caught);
+    }
+  }
+
   async function enterGroup(node: VoiceNode) {
     const group = nodeGroup(node);
     if (!group) return;
@@ -698,15 +799,76 @@
   }
 
   async function leave() {
-    if (await save(false)) onClose();
+    if (!(await save(false))) return;
+    if (path.length > 1) onNavigate(path.length - 2);
+    else onClose();
+  }
+
+  function frameAll() {
+    if (!boardElement || nodes.length === 0) {
+      view = { x: 0, y: 0, scale: 1 };
+      return;
+    }
+    let left = Infinity;
+    let top = Infinity;
+    let right = -Infinity;
+    let bottom = -Infinity;
+    for (const node of nodes) {
+      const position = positions[node.id] ?? { x: 0, y: 0 };
+      left = Math.min(left, position.x);
+      top = Math.min(top, position.y);
+      right = Math.max(right, position.x + NODE_WIDTH);
+      bottom = Math.max(bottom, position.y + nodeHeight(node));
+    }
+    const rect = boardElement.getBoundingClientRect();
+    const margin = 70;
+    const width = Math.max(1, right - left);
+    const height = Math.max(1, bottom - top);
+    const scale = Math.min(
+      1.6,
+      Math.max(
+        0.25,
+        Math.min(
+          (rect.width - margin * 2) / width,
+          (rect.height - margin * 2) / height,
+        ),
+      ),
+    );
+    view = {
+      scale,
+      x: rect.width / 2 - ((left + right) / 2) * scale,
+      y: rect.height / 2 - ((top + bottom) / 2) * scale,
+    };
   }
 
   function handleKey(event: KeyboardEvent) {
     const focused = document.activeElement;
     const typing =
-      focused instanceof HTMLInputElement ||
-      focused instanceof HTMLTextAreaElement ||
-      focused instanceof HTMLSelectElement;
+      !!hostElement?.contains(focused) &&
+      (focused instanceof HTMLInputElement ||
+        focused instanceof HTMLTextAreaElement ||
+        focused instanceof HTMLSelectElement);
+    if (
+      event.ctrlKey &&
+      event.altKey &&
+      event.key.toLowerCase() === "g" &&
+      !typing
+    ) {
+      event.preventDefault();
+      void ungroupActive();
+      return;
+    }
+    if (
+      event.ctrlKey &&
+      !event.altKey &&
+      !event.shiftKey &&
+      event.key.toLowerCase() === "g" &&
+      !typing
+    ) {
+      event.preventDefault();
+      void makeGroup();
+      return;
+    }
     if (
       event.key === "Tab" &&
       !typing &&
@@ -723,26 +885,55 @@
       }
       return;
     }
+    if (
+      event.key.toLowerCase() === "n" &&
+      !typing &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey
+    ) {
+      event.preventDefault();
+      toggleSidebar();
+      return;
+    }
     if (event.key === "Escape") {
       addMenu = null;
       libraryOpen = false;
       interfaceOpen = false;
+      sidebarOpen = false;
       return;
     }
-    if (
-      event.shiftKey &&
-      !event.ctrlKey &&
-      !event.metaKey &&
-      event.key.toLowerCase() === "a" &&
-      !(document.activeElement instanceof HTMLInputElement)
-    ) {
+    if (event.shiftKey && event.key.toLowerCase() === "a") {
       event.preventDefault();
       addMenu = { x: lastPointer.x, y: lastPointer.y };
       return;
     }
+    if (
+      event.key.toLowerCase() === "a" &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey
+    ) {
+      event.preventDefault();
+      selected = new Set(nodes.map((node) => node.id));
+      return;
+    }
+    if (event.altKey && event.key.toLowerCase() === "a") {
+      event.preventDefault();
+      selected = new Set();
+      active = "";
+      return;
+    }
+    if (event.ctrlKey && event.key.toLowerCase() === "i") {
+      event.preventDefault();
+      selected = new Set(
+        nodes.filter((node) => !selected.has(node.id)).map((node) => node.id),
+      );
+      return;
+    }
     if (event.key === "Home") {
       event.preventDefault();
-      view = { x: 0, y: 0, scale: 1 };
+      frameAll();
       return;
     }
     if (event.key.toLowerCase() === "f") {
@@ -763,7 +954,7 @@
       (event.key === "Delete" ||
         event.key === "Backspace" ||
         event.key.toLowerCase() === "x") &&
-      !(document.activeElement instanceof HTMLInputElement)
+      !typing
     ) {
       event.preventDefault();
       removeSelected();
@@ -773,7 +964,7 @@
 
 <svelte:window onmousemove={move} onmouseup={end} onkeydown={handleKey} />
 
-<div class="voice-editor-host" class:embedded>
+<div class="voice-editor-host" class:embedded bind:this={hostElement}>
   <section class="voice-editor" class:embedded role="dialog" aria-modal={!embedded}>
     <header class="voice-editor-head">
       <div>
@@ -794,11 +985,34 @@
         </div>
       </div>
       <div class="voice-editor-actions">
+        <button
+          class="ghost small"
+          disabled={selected.size === 0}
+          title="Ctrl+G"
+          onclick={() => void makeGroup()}
+        >
+          {t("voice.makeGroup")}
+        </button>
+        <button
+          class="ghost small"
+          disabled={voice.nodes[active]?.type_id !== "voice.group"}
+          title="Ctrl+Alt+G"
+          onclick={() => void ungroupActive()}
+        >
+          {t("voice.ungroup")}
+        </button>
         <button class="ghost small" onclick={() => (libraryOpen = !libraryOpen)}>
           {t("voice.library")}
         </button>
         <button class="ghost small" onclick={openInterface}>
           {t("voice.interface")}
+        </button>
+        <button
+          class="ghost small"
+          title={t("graph.sidebar")}
+          onclick={toggleSidebar}
+        >
+          N
         </button>
         <button
           class="ghost small"
@@ -860,7 +1074,195 @@
       </div>
     {/if}
 
-    {#if interfaceOpen}
+    {#if error}
+      <p class="error-text">{error}</p>
+    {/if}
+
+    {#if addMenu}
+      <NodeAddMenu
+        x={addMenu.x}
+        y={addMenu.y}
+        nodeTypes={menuTypes}
+        groups={groupChoices}
+        groupLabel={t("voice.groupNode")}
+        onPickType={(typeId) => addNode(typeId)}
+        onPickGroup={(groupId) => addGroupNode(groupId)}
+        onClose={() => (addMenu = null)}
+      />
+    {/if}
+
+    <div class="voice-editor-main">
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <div
+      class="voice-editor-board"
+      role="application"
+      aria-label={t("voice.title")}
+      bind:this={boardElement}
+      oncontextmenu={(event) => {
+        event.preventDefault();
+        addMenu = { x: event.clientX, y: event.clientY };
+      }}
+      onmousedown={boardMouseDown}
+      onwheel={handleWheel}
+      style:background-position={`${view.x}px ${view.y}px`}
+      style:background-size={`${18 * view.scale}px ${18 * view.scale}px`}
+    >
+      <div
+        class="voice-editor-canvas"
+        style:transform={`translate(${view.x}px, ${view.y}px) scale(${view.scale})`}
+      >
+      <svg class="voice-editor-wires" viewBox={`0 0 ${CANVAS_WIDTH} ${CANVAS_HEIGHT}`}>
+        {#each voice.connections as connection (connection.from.node + connection.from.port + connection.to.node + connection.to.port)}
+          <path d={wirePath(connection)} style:stroke={wireColor(connection)} />
+        {/each}
+        {#if wire}
+          <path
+            class="voice-wire-temp"
+            d={tempWirePath()}
+            style:stroke={socketColors[wire.ty]}
+          />
+        {/if}
+      </svg>
+
+      {#each nodes as node (node.id)}
+        {@const position = positions[node.id]}
+        <div
+          class="voice-node"
+          class:selected={selected.has(node.id)}
+          style:left={`${position?.x ?? 0}px`}
+          style:top={`${position?.y ?? 0}px`}
+          style:width={`${NODE_WIDTH}px`}
+          style:height={`${nodeHeight(node)}px`}
+          onmousedown={(event) => nodeMouseDown(event, node)}
+          ondblclick={() => void enterGroup(node)}
+          role="group"
+          tabindex="-1"
+          data-category={typeById.get(node.type_id)?.category ?? ""}
+        >
+          <div class="voice-node-head">
+            <span class="voice-node-title">{nodeLabel(node)}</span>
+            <span class="voice-node-id">{node.id}</span>
+          </div>
+
+          {#if node.type_id === "voice.group"}
+            <div class="voice-node-group-line">
+              <span>{nodeGroup(node)?.name ?? node.group ?? "—"}</span>
+              <button
+                class="voice-node-enter"
+                title={t("graph.editGroup")}
+                onclick={() => void enterGroup(node)}
+              >
+                ↗
+              </button>
+            </div>
+          {/if}
+
+          {#each inputList(node) as port, index (port.id)}
+            {@const param = matchingParam(node, port.id)}
+            {@const linked = isLinked(node, port.id)}
+            <div
+              class="voice-socket-row in"
+              style:top={`${portTop(node, index)}px`}
+            >
+              <button
+                class="voice-port in"
+                class:port-audio={port.ty === "audio"}
+                class:port-float={port.ty === "float"}
+                class:port-gate={port.ty === "gate"}
+                style:top={`${NODE_ROW / 2 - 4}px`}
+                title={`${port.id} (${port.ty})`}
+                aria-label={port.id}
+                data-port-node={node.id}
+                data-port-id={port.id}
+                data-port-side="in"
+                data-port-type={port.ty}
+                onmousedown={(event) => startWire(event, node, port, "in")}
+              ></button>
+              <span class="voice-socket-name in">{port.name}</span>
+              {#if param && !linked}
+                <div class="voice-socket-value">
+                  <NumberField
+                    value={node.params[param.name] ?? param.default}
+                    min={param.minimum}
+                    max={param.maximum}
+                    step={0.01}
+                    precision={2}
+                    onchange={(value) => setParam(node, param.name, value)}
+                  />
+                </div>
+              {/if}
+            </div>
+          {/each}
+
+          {#each outputList(node) as port, index (port.id)}
+            <div
+              class="voice-socket-row out"
+              style:top={`${portTop(node, index)}px`}
+            >
+              <span class="voice-socket-name out">{port.name}</span>
+              <button
+                class="voice-port out"
+                class:port-audio={port.ty === "audio"}
+                class:port-float={port.ty === "float"}
+                class:port-gate={port.ty === "gate"}
+                style:top={`${NODE_ROW / 2 - 4}px`}
+                title={`${port.id} (${port.ty})`}
+                aria-label={port.id}
+                data-port-node={node.id}
+                data-port-id={port.id}
+                data-port-side="out"
+                data-port-type={port.ty}
+                onmousedown={(event) => startWire(event, node, port, "out")}
+              ></button>
+            </div>
+          {/each}
+
+          {#each extraParams(node) as param, index (param.name)}
+            {@const top =
+              NODE_HEADER +
+              groupHeaderHeight(node) +
+              NODE_BODY_TOP +
+              (Math.max(inputList(node).length, outputList(node).length) +
+                index) *
+                NODE_ROW}
+            <div class="voice-socket-row param" style:top={`${top}px`}>
+              <span class="voice-socket-name">{param.name}</span>
+              <div class="voice-socket-value">
+                <NumberField
+                  value={node.params[param.name] ?? param.default}
+                  min={param.minimum}
+                  max={param.maximum}
+                  step={0.01}
+                  precision={2}
+                  onchange={(value) => setParam(node, param.name, value)}
+                />
+              </div>
+            </div>
+          {/each}
+        </div>
+      {/each}
+      </div>
+      {#if marquee}
+        <div class="voice-marquee" style={marqueeStyle()}></div>
+      {/if}
+    </div>
+
+    {#if sidebarOpen}
+      <aside class="node-sidebar" aria-label={t("graph.sidebar")}>
+        <div class="node-sidebar-tabs">
+          <button
+            class:active={!interfaceOpen}
+            onclick={() => (interfaceOpen = false)}
+          >NODE</button>
+          <button class:active={interfaceOpen} onclick={openInterface}>GROUP</button>
+          <button
+            class="node-sidebar-close"
+            title={t("voice.close")}
+            onclick={() => (sidebarOpen = false)}
+          >×</button>
+        </div>
+        {#if interfaceOpen}
+
       <div class="voice-interface-panel">
         <div class="voice-interface-head">
           <strong>{t("voice.interface")}</strong>
@@ -920,167 +1322,24 @@
           </button>
         </div>
       </div>
-    {/if}
-
-    {#if error}
-      <p class="error-text">{error}</p>
-    {/if}
-
-    {#if addMenu}
-      <div
-        class="voice-add-menu"
-        style:left={`${addMenu.x}px`}
-        style:top={`${addMenu.y}px`}
-        role="menu"
-        tabindex="-1"
-        onmousedown={(event) => event.stopPropagation()}
-      >
-        {#each categories as [category, types] (category)}
-          <div class="graph-menu-label">{category}</div>
-          {#each types as nodeType (nodeType.id)}
-            <button role="menuitem" onclick={() => addNode(nodeType.id)}>
-              {nodeType.name}
-            </button>
-          {/each}
-        {/each}
-        {#if groupChoices.length > 0}
-          <div class="graph-menu-label">{t("voice.groupNode")}</div>
-          {#each groupChoices as group (group.id)}
-            <button role="menuitem" onclick={() => addGroupNode(group.id)}>
-              {group.name}
-            </button>
-          {/each}
-        {/if}
-      </div>
-    {/if}
-
-    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-    <div
-      class="voice-editor-board"
-      role="application"
-      aria-label={t("voice.title")}
-      bind:this={boardElement}
-      oncontextmenu={(event) => {
-        event.preventDefault();
-        addMenu = { x: event.clientX, y: event.clientY };
-      }}
-      onmousedown={boardMouseDown}
-      onwheel={handleWheel}
-      style:background-position={`${view.x}px ${view.y}px`}
-      style:background-size={`${18 * view.scale}px ${18 * view.scale}px`}
-    >
-      <div
-        class="voice-editor-canvas"
-        style:transform={`translate(${view.x}px, ${view.y}px) scale(${view.scale})`}
-      >
-      <svg class="voice-editor-wires" viewBox={`0 0 ${CANVAS_WIDTH} ${CANVAS_HEIGHT}`}>
-        {#each voice.connections as connection (connection.from.node + connection.from.port + connection.to.node + connection.to.port)}
-          <path d={wirePath(connection)} style:stroke={wireColor(connection)} />
-        {/each}
-        {#if wire}
-          <path
-            class="voice-wire-temp"
-            d={tempWirePath()}
-            style:stroke={socketColors[wire.ty]}
-          />
-        {/if}
-      </svg>
-
-      {#each nodes as node (node.id)}
-        {@const position = positions[node.id]}
-        <div
-          class="voice-node"
-          class:selected={selected.has(node.id)}
-          style:left={`${position?.x ?? 0}px`}
-          style:top={`${position?.y ?? 0}px`}
-          style:width={`${NODE_WIDTH}px`}
-          style:height={`${nodeHeight(node)}px`}
-          onmousedown={(event) => nodeMouseDown(event, node)}
-          ondblclick={() => void enterGroup(node)}
-          role="group"
-          tabindex="-1"
-        >
-          <div class="voice-node-head">
-            <span class="voice-node-title">{nodeLabel(node)}</span>
-            <span class="voice-node-id">{node.id}</span>
-          </div>
-
-          {#if node.type_id === "voice.group"}
-            <div class="voice-node-group-line">
-              <span>{nodeGroup(node)?.name ?? node.group ?? "—"}</span>
-              <button
-                class="voice-node-enter"
-                title={t("graph.editGroup")}
-                onclick={() => void enterGroup(node)}
-              >
-                ↗
+        {:else if voice.nodes[active]}
+          {@const node = voice.nodes[active]!}
+          <div class="node-sidebar-section">
+            <div class="node-sidebar-label">ACTIVE NODE</div>
+            <strong>{nodeLabel(node)}</strong>
+            <code>{node.id}</code>
+            <div class="node-sidebar-type">{node.type_id}</div>
+            {#if node.type_id === "voice.group"}
+              <div class="node-sidebar-group">
+                {nodeGroup(node)?.name ?? node.group ?? "—"}
+              </div>
+              <button class="ghost small" onclick={() => void enterGroup(node)}>
+                {t("graph.editGroup")}
               </button>
-            </div>
-          {/if}
-
-          {#each inputList(node) as port, index (port.id)}
-            {@const param = matchingParam(node, port.id)}
-            {@const linked = isLinked(node, port.id)}
-            <div
-              class="voice-socket-row in"
-              style:top={`${portTop(node, index)}px`}
-            >
-              <button
-                class="voice-port in"
-                class:port-audio={port.ty === "audio"}
-                class:port-float={port.ty === "float"}
-                class:port-gate={port.ty === "gate"}
-                style:top={`${NODE_ROW / 2 - 4}px`}
-                title={`${port.id} (${port.ty})`}
-                aria-label={port.id}
-                onmousedown={(event) => finishWire(event, node, port)}
-              ></button>
-              <span class="voice-socket-name in">{port.name}</span>
-              {#if param && !linked}
-                <div class="voice-socket-value">
-                  <NumberField
-                    value={node.params[param.name] ?? param.default}
-                    min={param.minimum}
-                    max={param.maximum}
-                    step={0.01}
-                    precision={2}
-                    onchange={(value) => setParam(node, param.name, value)}
-                  />
-                </div>
-              {/if}
-            </div>
-          {/each}
-
-          {#each outputList(node) as port, index (port.id)}
-            <div
-              class="voice-socket-row out"
-              style:top={`${portTop(node, index)}px`}
-            >
-              <span class="voice-socket-name out">{port.name}</span>
-              <button
-                class="voice-port out"
-                class:port-audio={port.ty === "audio"}
-                class:port-float={port.ty === "float"}
-                class:port-gate={port.ty === "gate"}
-                style:top={`${NODE_ROW / 2 - 4}px`}
-                title={`${port.id} (${port.ty})`}
-                aria-label={port.id}
-                onmousedown={(event) => startWire(event, node, port)}
-              ></button>
-            </div>
-          {/each}
-
-          {#each extraParams(node) as param, index (param.name)}
-            {@const top =
-              NODE_HEADER +
-              groupHeaderHeight(node) +
-              NODE_BODY_TOP +
-              (Math.max(inputList(node).length, outputList(node).length) +
-                index) *
-                NODE_ROW}
-            <div class="voice-socket-row param" style:top={`${top}px`}>
-              <span class="voice-socket-name">{param.name}</span>
-              <div class="voice-socket-value">
+            {/if}
+            {#each typeById.get(node.type_id)?.params ?? [] as param (param.name)}
+              <label class="node-sidebar-param">
+                <span>{param.name}</span>
                 <NumberField
                   value={node.params[param.name] ?? param.default}
                   min={param.minimum}
@@ -1089,15 +1348,14 @@
                   precision={2}
                   onchange={(value) => setParam(node, param.name, value)}
                 />
-              </div>
-            </div>
-          {/each}
-        </div>
-      {/each}
-      </div>
-      {#if marquee}
-        <div class="voice-marquee" style={marqueeStyle()}></div>
-      {/if}
+              </label>
+            {/each}
+          </div>
+        {:else}
+          <p class="node-sidebar-empty">No active node</p>
+        {/if}
+      </aside>
+    {/if}
     </div>
 
     {#if wire}

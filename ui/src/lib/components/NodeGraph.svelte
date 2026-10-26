@@ -8,6 +8,7 @@
   } from "../api";
   import { t } from "../i18n.svelte";
   import { session } from "../session.svelte";
+  import NodeAddMenu from "./NodeAddMenu.svelte";
   import NumberField from "./NumberField.svelte";
   import VoiceGraphEditor from "./VoiceGraphEditor.svelte";
 
@@ -67,21 +68,14 @@
   let audioTypeById = $derived(
     new Map(session.audioNodeTypes.map((nodeType) => [nodeType.id, nodeType])),
   );
-  let deviceCategories = $derived.by(() => {
-    const groups = new Map<string, NodeTypeInfo[]>();
-    for (const nodeType of session.audioNodeTypes) {
-      if (
-        nodeType.category === "Instrument" ||
-        nodeType.category === "Output"
-      ) {
-        continue;
-      }
-      const group = groups.get(nodeType.category) ?? [];
-      group.push(nodeType);
-      groups.set(nodeType.category, group);
-    }
-    return [...groups.entries()];
-  });
+  let addNodeTypes = $derived(
+    session.audioNodeTypes.filter(
+      (nodeType) =>
+        nodeType.category !== "Instrument" &&
+        nodeType.category !== "Output" &&
+        !(nodeType.id === "audio.adsr" && hasAdsr),
+    ),
+  );
 
   function nodeTypeId(node: GraphNode): string {
     if (node.type_id) return node.type_id;
@@ -154,6 +148,8 @@
   let wireDrag = $state<WireDrag | null>(null);
   let wireError = $state("");
   let wireHover = $state<{ node: string; port: string } | null>(null);
+  let active = $state("");
+  let sidebarOpen = $state(false);
   let addMenu = $state<AddMenu | null>(null);
   let nodeMenu = $state<NodeMenu | null>(null);
   let canvasMenu = $state<Point | null>(null);
@@ -593,6 +589,7 @@
   function selectNode(node: GraphNode, event: MouseEvent) {
     addMenu = null;
     if (event.button !== 0) return;
+    active = node.id;
     if (event.shiftKey) {
       const next = new Set(selected);
       if (next.has(node.id)) next.delete(node.id);
@@ -637,6 +634,7 @@
     event.preventDefault();
     event.stopPropagation();
     if (!selected.has(node.id)) selected = new Set([node.id]);
+    active = node.id;
     addMenu = null;
     canvasMenu = null;
     nodeMenu = { x: event.clientX, y: event.clientY, nodeId: node.id };
@@ -938,6 +936,38 @@
       deleteSelected();
       return;
     }
+    if (
+      event.key.toLowerCase() === "n" &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey
+    ) {
+      event.preventDefault();
+      sidebarOpen = !sidebarOpen;
+      return;
+    }
+    if (
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey &&
+      event.key.toLowerCase() === "a"
+    ) {
+      event.preventDefault();
+      selected = new Set(nodes.map((node) => node.id));
+      return;
+    }
+    if (event.altKey && event.key.toLowerCase() === "a") {
+      event.preventDefault();
+      selected = new Set();
+      return;
+    }
+    if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "i") {
+      event.preventDefault();
+      selected = new Set(
+        nodes.filter((node) => !selected.has(node.id)).map((node) => node.id),
+      );
+      return;
+    }
     if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a") {
       event.preventDefault();
       selected = new Set(nodes.map((node) => node.id));
@@ -952,7 +982,6 @@
       return;
     }
     if (event.key === "Escape") {
-      selected = new Set();
       addMenu = null;
       nodeMenu = null;
       canvasMenu = null;
@@ -1004,6 +1033,13 @@
         {t("graph.noTrack")}
       {/if}
     </span>
+    {#if !editingGroup}
+      <button
+        class="ghost small"
+        title={t("graph.sidebar")}
+        onclick={() => (sidebarOpen = !sidebarOpen)}
+      >N</button>
+    {/if}
   </div>
 
   {#if track}
@@ -1024,6 +1060,7 @@
         />
       {/key}
     {:else}
+    <div class="graph-main">
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
     <div
       class="graph-board"
@@ -1099,6 +1136,7 @@
             aria-label={nodeLabel(node)}
             data-node-id={node.id}
             data-node-kind={nodeTypeId(node)}
+            data-category={nodeType(node)?.category ?? ""}
             style:left={`${position?.x ?? 0}px`}
             style:top={`${position?.y ?? 0}px`}
             style:height={`${position?.h ?? nodeHeight(node)}px`}
@@ -1308,29 +1346,65 @@
       {/if}
 
       {#if addMenu}
-        <div
-          class="graph-add-menu"
-          style:left={`${addMenu.x}px`}
-          style:top={`${addMenu.y}px`}
-          role="menu"
-          tabindex="-1"
-          onmousedown={(event) => event.stopPropagation()}
-        >
-          {#each deviceCategories as [category, types] (category)}
-            <div class="graph-menu-label">{category}</div>
-            {#each types as nodeType (nodeType.id)}
-              <button
-                role="menuitem"
-                disabled={busy ||
-                  (nodeType.id === "audio.adsr" && hasAdsr)}
-                onclick={() => addNode(nodeType.id)}
-              >
-                {nodeType.name}
-              </button>
-            {/each}
-          {/each}
-        </div>
+        <NodeAddMenu
+          x={addMenu.x}
+          y={addMenu.y}
+          nodeTypes={addNodeTypes}
+          onPickType={(typeId) => addNode(typeId)}
+          onClose={() => (addMenu = null)}
+        />
       {/if}
+    </div>
+    {#if sidebarOpen}
+      <aside class="node-sidebar" aria-label={t("graph.sidebar")}>
+        <div class="node-sidebar-tabs">
+          <span class="node-sidebar-tab">NODE</span>
+          <button
+            class="node-sidebar-close"
+            title={t("voice.close")}
+            onclick={() => (sidebarOpen = false)}
+          >×</button>
+        </div>
+        {#if graph?.nodes[active]}
+          {@const node = graph.nodes[active]!}
+          <div class="node-sidebar-section">
+            <div class="node-sidebar-label">ACTIVE NODE</div>
+            <strong>{nodeLabel(node)}</strong>
+            <code>{node.id}</code>
+            <div class="node-sidebar-type">{nodeTypeId(node)}</div>
+            {#if nodeTypeId(node) === "audio.group"}
+              <div class="node-sidebar-group">
+                {groupFor(node)?.name ?? node.group ?? "—"}
+              </div>
+              <button
+                class="ghost small"
+                disabled={!groupFor(node)}
+                onclick={() => openVoiceGroup(node)}
+              >
+                {t("graph.editGroup")}
+              </button>
+            {/if}
+            {#each nodeType(node)?.params ?? [] as param (param.name)}
+              <label class="node-sidebar-param">
+                <span>{param.name}</span>
+                <NumberField
+                  value={paramOf(node, param.name, param.default)}
+                  min={param.minimum}
+                  max={param.maximum}
+                  step={0.01}
+                  precision={2}
+                  disabled={busy}
+                  onchange={(value) =>
+                    onParamChange(owner.id, node.id, param.name, value)}
+                />
+              </label>
+            {/each}
+          </div>
+        {:else}
+          <p class="node-sidebar-empty">No active node</p>
+        {/if}
+      </aside>
+    {/if}
     </div>
     {/if}
 

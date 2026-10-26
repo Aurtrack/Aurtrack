@@ -807,6 +807,36 @@ export class SessionStore {
     return data.group_id;
   }
 
+  async groupFromNodes(
+    sourceGroupId: string,
+    nodeIds: string[],
+    name?: string,
+  ): Promise<{ group_id: string; node_id: string; name: string }> {
+    const data = await this.run<{
+      group_id: string;
+      node_id: string;
+      name: string;
+    }>("group.from_nodes", {
+      source_group_id: sourceGroupId,
+      node_ids: nodeIds,
+      ...(name ? { name } : {}),
+    });
+    await this.refreshProject();
+    return data;
+  }
+
+  async ungroupNode(
+    groupId: string,
+    nodeId: string,
+  ): Promise<{ group_id: string; node_ids: string[] }> {
+    const data = await this.run<{
+      group_id: string;
+      node_ids: string[];
+    }>("group.ungroup", { group_id: groupId, node_id: nodeId });
+    await this.refreshProject();
+    return data;
+  }
+
   async renameGroup(groupId: string, name: string): Promise<void> {
     await this.run("group.rename", { group_id: groupId, name });
     await this.refreshProject();
