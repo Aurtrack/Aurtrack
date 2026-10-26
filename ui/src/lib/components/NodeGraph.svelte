@@ -778,6 +778,7 @@
   }
 
   function handleKeyDown(event: KeyboardEvent) {
+    if (editingGroup) return;
     if ((event.code === "Space" || event.key === " ") && !isEditing()) {
       spaceHeld = true;
       event.preventDefault();

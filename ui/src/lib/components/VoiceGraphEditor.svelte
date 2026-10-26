@@ -489,6 +489,23 @@
       addMenu = { x: lastPointer.x, y: lastPointer.y };
       return;
     }
+    if (event.key === "Home") {
+      event.preventDefault();
+      boardElement?.scrollTo({ left: 0, top: 0 });
+      return;
+    }
+    if (event.key.toLowerCase() === "f") {
+      const node = voice.nodes[selected];
+      const position = node?.position;
+      if (node && position && boardElement) {
+        event.preventDefault();
+        boardElement.scrollTo({
+          left: Math.max(0, position[0] - 260),
+          top: Math.max(0, position[1] - 180),
+        });
+      }
+      return;
+    }
     if (
       (event.key === "Delete" ||
         event.key === "Backspace" ||
