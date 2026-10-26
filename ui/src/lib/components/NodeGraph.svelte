@@ -72,8 +72,7 @@
     for (const nodeType of session.audioNodeTypes) {
       if (
         nodeType.category === "Instrument" ||
-        nodeType.category === "Output" ||
-        nodeType.category === "Input"
+        nodeType.category === "Output"
       ) {
         continue;
       }
@@ -150,6 +149,7 @@
   let panDrag = $state<PanDrag | null>(null);
   let marquee = $state<Marquee | null>(null);
   let wireDrag = $state<WireDrag | null>(null);
+  let wireError = $state("");
   let wireHover = $state<{ node: string; port: string } | null>(null);
   let addMenu = $state<AddMenu | null>(null);
   let nodeMenu = $state<NodeMenu | null>(null);
@@ -207,20 +207,15 @@
     return { width, height };
   });
 
-  function nodeHeight(kind: string): number {
-    if (kind === "amp.adsr") return 184;
-    if (kind === "filter.lowpass") return 132;
-    if (kind === "instrument.piano") return 184;
-    if (kind === "voice.group") return 120;
-    if (kind === "gain") return 104;
-    if (kind === "mix") return 104;
-    if (kind === "plugin") return 120;
-    if (kind === "output") return 80;
-    return 90;
+  function nodeHeight(node: GraphNode): number {
+    const inputs = nodeType(node)?.inputs.length ?? 0;
+    const params = nodeType(node)?.params.length ?? 0;
+    const paramRows = Math.ceil(params / 2);
+    return Math.max(90, 44 + inputs * 26, 70 + paramRows * 40);
   }
 
   function nodeSize(node: GraphNode) {
-    return { w: CARD_WIDTH, h: nodeHeight(node.kind) };
+    return { w: CARD_WIDTH, h: nodeHeight(node) };
   }
 
   function buildLayout(
@@ -263,7 +258,7 @@
       group.sort((left, right) => left.id.localeCompare(right.id));
       let y = 30;
       for (const node of group) {
-        const h = nodeHeight(node.kind);
+        const h = nodeHeight(node);
         positions[node.id] = {
           x: 30 + depth * (CARD_WIDTH + COLUMN_GAP),
           y,
@@ -332,12 +327,25 @@
     return node.params[name] ?? fallback;
   }
 
-  type InputPort = { port: string; y: number };
+  type InputPort = { port: string; y: number; ty: string };
+
+  function socketType(
+    nodeId: string,
+    side: "in" | "out",
+    port: string,
+  ): string | undefined {
+    const node = graph?.nodes[nodeId];
+    if (!node) return undefined;
+    const info = nodeType(node);
+    const sockets = side === "in" ? info?.inputs : info?.outputs;
+    return sockets?.find((socket) => socket.id === port)?.type;
+  }
 
   function inputPorts(node: GraphNode): InputPort[] {
     return (nodeType(node)?.inputs ?? []).map((input, index) => ({
       port: input.id,
       y: 22 + index * 26,
+      ty: input.type,
     }));
   }
 
@@ -682,11 +690,18 @@
       wireDrag = null;
       wireHover = null;
       if (!track || !target) return;
-      if (drag.side === "out") {
-        onConnect(track.id, drag.node, drag.port, target.node, target.port);
-      } else {
-        onConnect(track.id, target.node, "out", drag.node, drag.port);
+      const fromNode = drag.side === "out" ? drag.node : target.node;
+      const fromPort = drag.side === "out" ? drag.port : "out";
+      const toNode = drag.side === "out" ? target.node : drag.node;
+      const toPort = drag.side === "out" ? target.port : drag.port;
+      const sourceType = socketType(fromNode, "out", fromPort);
+      const targetType = socketType(toNode, "in", toPort);
+      if (sourceType && targetType && sourceType !== targetType) {
+        wireError = `端口类型不匹配：${sourceType} → ${targetType}`;
+        return;
       }
+      wireError = "";
+      onConnect(track.id, fromNode, fromPort, toNode, toPort);
     }
   }
 
@@ -981,6 +996,8 @@
               <button
                 type="button"
                 class="graph-port graph-port-out"
+                class:port-float={socketType(node.id, "out", "out") === "float"}
+                class:port-audio={socketType(node.id, "out", "out") === "audio"}
                 class:active={wireHover?.node === node.id &&
                   wireDrag?.side === "in"}
                 aria-label={t("graph.startWire")}
@@ -993,6 +1010,8 @@
               <button
                 type="button"
                 class="graph-port graph-port-in"
+                class:port-float={input.ty === "float"}
+                class:port-audio={input.ty === "audio"}
                 class:active={wireHover?.node === node.id &&
                   wireHover?.port === input.port}
                 style:top={`${input.y - 5}px`}
@@ -1003,7 +1022,21 @@
               ></button>
             {/each}
 
-            {#if nodeTypeId(node) === "audio.drive"}
+            {#if nodeTypeId(node) === "audio.value"}
+              <label class="graph-param-row">
+                <span>VALUE</span>
+                <NumberField
+                  value={paramOf(node, "value", 0)}
+                  min={-1000}
+                  max={1000}
+                  step={0.01}
+                  precision={2}
+                  disabled={busy}
+                  onchange={(value) =>
+                    onParamChange(owner.id, node.id, "value", value)}
+                />
+              </label>
+            {:else if nodeTypeId(node) === "audio.drive"}
               <label class="graph-param-row">
                 <span>DRIVE</span>
                 <NumberField
@@ -1359,7 +1392,7 @@
     {/if}
 
     <div class="section-foot">
-      <span>{t("graph.foot")}</span>
+      <span>{wireError || t("graph.foot")}</span>
       <span>{t("graph.direction")}</span>
     </div>
   {:else}

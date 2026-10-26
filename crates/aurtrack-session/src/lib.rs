@@ -208,11 +208,17 @@ impl Track {
                 .node(&id)
                 .ok_or_else(|| GraphError::UnknownNode(id.clone()))?;
             let inputs = self.audio_inputs(node, &indices, &mut nodes)?;
+            let controls = self.audio_controls(node, &indices, &mut nodes)?;
             let op = match node.type_id.as_str() {
                 "audio.group" | "audio.instrument.sine" | "audio.instrument.silence" => {
                     GraphOp::Voice
                 },
-                "audio.gain" => GraphOp::Gain(node.param("gain").unwrap_or(1.0)),
+                "audio.value" => GraphOp::Constant(node.param("value").unwrap_or(0.0)),
+                "audio.math.add" => GraphOp::Add,
+                "audio.math.multiply" => GraphOp::Multiply,
+                "audio.math.map_range" => GraphOp::MapRange,
+                "audio.math.clamp" => GraphOp::Clamp,
+                "audio.gain" => GraphOp::Gain,
                 "audio.mix" => GraphOp::Mix,
                 "audio.filter.lowpass" => GraphOp::Filter(FilterPlan::new(FilterSettings::new(
                     node.param("cutoff").unwrap_or(1200.0),
@@ -222,24 +228,30 @@ impl Track {
                     node.param("cutoff").unwrap_or(1200.0),
                     node.param("resonance").unwrap_or(0.2),
                 )),
-                "audio.drive" => GraphOp::Drive(node.param("drive").unwrap_or(1.0)),
+                "audio.drive" => GraphOp::Drive,
                 "audio.delay" => GraphOp::Delay(DelayPlan::new(
                     node.param("time").unwrap_or(0.25),
                     node.param("feedback").unwrap_or(0.2),
                 )),
-                "audio.adsr" => GraphOp::Gain(1.0),
-                "audio.plugin" => GraphOp::Plugin,
+                "audio.adsr" | "audio.plugin" => {
+                    if node.type_id == "audio.plugin" {
+                        GraphOp::Plugin
+                    } else {
+                        GraphOp::Gain
+                    }
+                },
                 "audio.output" => {
                     output = Some(nodes.len());
                     GraphOp::Output
                 },
-                "audio.value" => {
-                    return Err(GraphError::UnknownAudioNodeType(node.type_id.clone()));
-                },
                 other => return Err(GraphError::UnknownAudioNodeType(other.to_string())),
             };
             indices.insert(id, nodes.len());
-            nodes.push(GraphNodePlan { op, inputs });
+            nodes.push(GraphNodePlan {
+                op,
+                inputs,
+                controls,
+            });
         }
         let output = output.ok_or(GraphError::AudioOutputCount(0))?;
         if nodes.len() > aurtrack_engine::MAX_GRAPH_NODES {
@@ -285,8 +297,9 @@ impl Track {
             }) else {
                 let index = nodes.len();
                 nodes.push(GraphNodePlan {
-                    op: GraphOp::Gain(0.0),
+                    op: GraphOp::Constant(0.0),
                     inputs: Vec::new(),
+                    controls: Vec::new(),
                 });
                 inputs.push(index);
                 continue;
@@ -299,6 +312,40 @@ impl Track {
             );
         }
         Ok(inputs)
+    }
+
+    fn audio_controls(
+        &self,
+        node: &aurtrack_graph::AudioNode,
+        indices: &BTreeMap<aurtrack_graph::NodeId, usize>,
+        nodes: &mut Vec<GraphNodePlan>,
+    ) -> Result<Vec<usize>, GraphError> {
+        let ports = aurtrack_graph::AudioGraph::inputs(node)?;
+        let mut controls = Vec::new();
+        for port in ports
+            .iter()
+            .filter(|port| port.ty == aurtrack_graph::SocketType::Float)
+        {
+            let Some(connection) = self.graph.connections.iter().find(|connection| {
+                connection.to.node() == &node.id && connection.to.port() == port.id
+            }) else {
+                let index = nodes.len();
+                nodes.push(GraphNodePlan {
+                    op: GraphOp::Constant(node.param(port.id).unwrap_or(port.default)),
+                    inputs: Vec::new(),
+                    controls: Vec::new(),
+                });
+                controls.push(index);
+                continue;
+            };
+            controls.push(
+                indices
+                    .get(connection.from.node())
+                    .copied()
+                    .ok_or(GraphError::NotConnected)?,
+            );
+        }
+        Ok(controls)
     }
 }
 
@@ -775,6 +822,10 @@ impl Session {
             "mix" | "audio.mix" => "audio.mix",
             "plugin" | "audio.plugin" => "audio.plugin",
             "value" | "audio.value" => "audio.value",
+            "audio.math.add" => "audio.math.add",
+            "audio.math.multiply" => "audio.math.multiply",
+            "audio.math.map_range" => "audio.math.map_range",
+            "audio.math.clamp" => "audio.math.clamp",
             other => {
                 return Err(CommandError::invalid_args(format!(
                     "不支持的 kind：{other}"
@@ -873,7 +924,7 @@ impl Session {
             .and_then(|project| project.tracks.iter().find(|track| track.id == track_id))
             .and_then(|track| track.graph.node(&node_id))
             .ok_or_else(|| CommandError::not_found(format!("找不到参数：{path}")))?;
-        if !node.is_device() {
+        if !node.is_device() && node.type_id != "audio.value" {
             return Err(CommandError::not_found(format!("找不到参数：{path}")));
         }
         let mut probe = aurtrack_graph::AudioNode::clone(node);
@@ -2654,10 +2705,15 @@ fn legacy_audio_kind(type_id: &str) -> &'static str {
         "audio.instrument.silence" => "instrument.silence",
         "audio.group" => "voice.group",
         "audio.adsr" => "amp.adsr",
-        "audio.gain" | "audio.drive" | "audio.delay" | "audio.value" => "gain",
+        "audio.gain" | "audio.drive" | "audio.delay" => "gain",
         "audio.mix" => "mix",
         "audio.filter.lowpass" | "audio.filter.highpass" => "filter.lowpass",
         "audio.plugin" => "plugin",
+        "audio.value"
+        | "audio.math.add"
+        | "audio.math.multiply"
+        | "audio.math.map_range"
+        | "audio.math.clamp" => "control",
         _ => "output",
     }
 }

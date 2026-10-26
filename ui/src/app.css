@@ -2171,3 +2171,12 @@ button:disabled {
   border-radius: 0;
   background: #f2e7cf;
 }
+.graph-port.port-audio {
+  background: #dce8f4;
+}
+
+.graph-port.port-float {
+  border-radius: 0;
+  transform: rotate(45deg);
+  background: #dff0e4;
+}

@@ -862,6 +862,68 @@ fn node_types_expose_audio_registry() {
 }
 
 #[test]
+fn float_control_links_drive_gain() {
+    let mut session = Session::default();
+    run(&mut session, "project.create", json!({}));
+    run(
+        &mut session,
+        "track.create",
+        json!({ "name": "lead", "source": "sine" }),
+    );
+    let gain = run(
+        &mut session,
+        "device.add",
+        json!({ "track_id": "track-1", "kind": "gain" }),
+    );
+    let gain_id = gain["node_id"].as_str().unwrap().to_string();
+    let value = run(
+        &mut session,
+        "node.add",
+        json!({
+            "track_id": "track-1",
+            "kind": "audio.value",
+            "params": { "value": 0.0 }
+        }),
+    );
+    let value_id = value["node_id"].as_str().unwrap().to_string();
+    run(
+        &mut session,
+        "node.connect",
+        json!({
+            "from": format!("/tracks/track-1/nodes/{value_id}"),
+            "from_port": "out",
+            "to": format!("/tracks/track-1/devices/{gain_id}"),
+            "to_port": "gain"
+        }),
+    );
+    let silent = temp_path("control-silent");
+    let rendered = run(
+        &mut session,
+        "render.segment",
+        json!({ "duration_seconds": 0.3, "path": silent }),
+    );
+    assert!(rendered["rms"].as_f64().unwrap() < 0.001);
+    let _ = std::fs::remove_file(silent);
+
+    run(
+        &mut session,
+        "param.set",
+        json!({
+            "path": format!("/tracks/track-1/devices/{value_id}/params/value"),
+            "value": 0.5
+        }),
+    );
+    let audible = temp_path("control-audible");
+    let rendered = run(
+        &mut session,
+        "render.segment",
+        json!({ "duration_seconds": 0.3, "path": audible }),
+    );
+    assert!(rendered["rms"].as_f64().unwrap() > 0.001);
+    let _ = std::fs::remove_file(audible);
+}
+
+#[test]
 fn highpass_and_drive_render() {
     let mut session = Session::default();
     run(&mut session, "project.create", json!({}));

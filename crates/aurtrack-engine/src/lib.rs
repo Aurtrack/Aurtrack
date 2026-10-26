@@ -400,11 +400,21 @@ impl FilterPlan {
     }
 
     pub fn process(&self, sample_rate: u32, input: f64) -> f64 {
+        self.process_with(
+            sample_rate,
+            input,
+            self.settings.cutoff,
+            self.settings.resonance,
+        )
+    }
+
+    pub fn process_with(&self, sample_rate: u32, input: f64, cutoff: f64, resonance: f64) -> f64 {
         let mut state = FilterState {
             z1: f64::from_bits(self.state.z1.load(Ordering::Relaxed)),
             z2: f64::from_bits(self.state.z2.load(Ordering::Relaxed)),
         };
-        let output = self.settings.process(sample_rate, &mut state, input);
+        let settings = FilterSettings::new(cutoff, resonance);
+        let output = settings.process(sample_rate, &mut state, input);
         self.state.z1.store(state.z1.to_bits(), Ordering::Relaxed);
         self.state.z2.store(state.z2.to_bits(), Ordering::Relaxed);
         output
@@ -434,12 +444,17 @@ impl HighpassPlan {
     }
 
     pub fn process(&self, sample_rate: u32, input: f64) -> f64 {
+        self.process_with(sample_rate, input, self.cutoff, self.resonance)
+    }
+
+    pub fn process_with(&self, sample_rate: u32, input: f64, cutoff: f64, resonance: f64) -> f64 {
         let rate = f64::from(sample_rate.max(1));
-        let alpha = (1.0 - (-std::f64::consts::TAU * self.cutoff / rate).exp()).clamp(0.0, 1.0);
+        let cutoff = cutoff.clamp(20.0, 20_000.0);
+        let alpha = (1.0 - (-std::f64::consts::TAU * cutoff / rate).exp()).clamp(0.0, 1.0);
         let low = f64::from_bits(self.state.load(Ordering::Relaxed));
         let low = low + alpha * (input - low);
         self.state.store(low.to_bits(), Ordering::Relaxed);
-        (input - low) * (1.0 + self.resonance)
+        (input - low) * (1.0 + resonance.clamp(0.0, 0.95))
     }
 
     pub fn reset(&self) {
@@ -467,14 +482,18 @@ impl DelayPlan {
     }
 
     pub fn process(&self, sample_rate: u32, input: f64) -> f64 {
+        self.process_with(sample_rate, input, self.time, self.feedback)
+    }
+
+    pub fn process_with(&self, sample_rate: u32, input: f64, time: f64, feedback: f64) -> f64 {
         let rate = f64::from(sample_rate.max(1));
-        let delay = (self.time * rate).round() as usize;
+        let delay = (time.clamp(0.001, 2.0) * rate).round() as usize;
         let delay = delay.clamp(1, DELAY_SLOTS - 1);
         let write = self.write.load(Ordering::Relaxed) % DELAY_SLOTS;
         let read = (write + DELAY_SLOTS - delay) % DELAY_SLOTS;
         let delayed = f64::from_bits(self.buffer[read].load(Ordering::Relaxed));
         self.buffer[write].store(
-            (input + delayed * self.feedback).to_bits(),
+            (input + delayed * feedback.clamp(0.0, 0.95)).to_bits(),
             Ordering::Relaxed,
         );
         self.write
@@ -500,17 +519,24 @@ const DELAY_SLOTS: usize = 384_000;
 pub struct GraphNodePlan {
     pub op: GraphOp,
     pub inputs: Vec<usize>,
+    /// Float 控制输入的节点索引，顺序与注册表端口顺序一致。
+    pub controls: Vec<usize>,
 }
 
 /// DAG 节点操作。
 #[derive(Debug, Clone)]
 pub enum GraphOp {
     Voice,
+    Constant(f64),
+    Add,
+    Multiply,
+    MapRange,
+    Clamp,
     Filter(FilterPlan),
     Highpass(HighpassPlan),
     Delay(DelayPlan),
-    Gain(f64),
-    Drive(f64),
+    Gain,
+    Drive,
     Mix,
     Plugin,
     Output,
@@ -525,6 +551,17 @@ pub struct GraphPlan {
     pub piano: Option<PianoPlan>,
 }
 
+fn control_value(
+    node: &GraphNodePlan,
+    index: usize,
+    values: &[f64; MAX_GRAPH_NODES],
+    default: f64,
+) -> f64 {
+    node.controls
+        .get(index)
+        .map_or(default, |control| values[*control])
+}
+
 impl GraphPlan {
     pub fn sample(&self, voice: f64, sample_rate: u32) -> f64 {
         if self.nodes.len() > MAX_GRAPH_NODES || self.output >= self.nodes.len() {
@@ -534,24 +571,67 @@ impl GraphPlan {
         for (index, node) in self.nodes.iter().enumerate() {
             let value = match &node.op {
                 GraphOp::Voice => voice,
-                GraphOp::Filter(filter) => node
-                    .inputs
-                    .first()
-                    .map_or(0.0, |input| filter.process(sample_rate, values[*input])),
-                GraphOp::Highpass(filter) => node
-                    .inputs
-                    .first()
-                    .map_or(0.0, |input| filter.process(sample_rate, values[*input])),
-                GraphOp::Delay(delay) => node
-                    .inputs
-                    .first()
-                    .map_or(0.0, |input| delay.process(sample_rate, values[*input])),
-                GraphOp::Gain(gain) => {
-                    node.inputs.first().map_or(0.0, |input| values[*input]) * gain
+                GraphOp::Constant(value) => *value,
+                GraphOp::Add => node.controls.iter().map(|control| values[*control]).sum(),
+                GraphOp::Multiply => node
+                    .controls
+                    .iter()
+                    .map(|control| values[*control])
+                    .product(),
+                GraphOp::MapRange => {
+                    let value = control_value(node, 0, &values, 0.0);
+                    let from_min = control_value(node, 1, &values, 0.0);
+                    let from_max = control_value(node, 2, &values, 1.0);
+                    let to_min = control_value(node, 3, &values, 0.0);
+                    let to_max = control_value(node, 4, &values, 1.0);
+                    let span = from_max - from_min;
+                    if span.abs() < 1e-12 {
+                        to_min
+                    } else {
+                        to_min + (value - from_min) / span * (to_max - to_min)
+                    }
                 },
-                GraphOp::Drive(drive) => {
+                GraphOp::Clamp => {
+                    let value = control_value(node, 0, &values, 0.0);
+                    value.clamp(
+                        control_value(node, 1, &values, 0.0),
+                        control_value(node, 2, &values, 1.0),
+                    )
+                },
+                GraphOp::Filter(filter) => {
+                    let value = node.inputs.first().map_or(0.0, |input| values[*input]);
+                    filter.process_with(
+                        sample_rate,
+                        value,
+                        control_value(node, 0, &values, filter.settings.cutoff),
+                        control_value(node, 1, &values, filter.settings.resonance),
+                    )
+                },
+                GraphOp::Highpass(filter) => {
+                    let value = node.inputs.first().map_or(0.0, |input| values[*input]);
+                    filter.process_with(
+                        sample_rate,
+                        value,
+                        control_value(node, 0, &values, filter.cutoff),
+                        control_value(node, 1, &values, filter.resonance),
+                    )
+                },
+                GraphOp::Delay(delay) => {
+                    let value = node.inputs.first().map_or(0.0, |input| values[*input]);
+                    delay.process_with(
+                        sample_rate,
+                        value,
+                        control_value(node, 0, &values, delay.time),
+                        control_value(node, 1, &values, delay.feedback),
+                    )
+                },
+                GraphOp::Gain => {
                     let input = node.inputs.first().map_or(0.0, |input| values[*input]);
-                    (input * drive.max(1.0)).tanh()
+                    input * control_value(node, 0, &values, 1.0)
+                },
+                GraphOp::Drive => {
+                    let input = node.inputs.first().map_or(0.0, |input| values[*input]);
+                    (input * control_value(node, 0, &values, 1.0).max(1.0)).tanh()
                 },
                 GraphOp::Mix => node.inputs.iter().map(|input| values[*input]).sum(),
                 GraphOp::Plugin => node.inputs.first().map_or(0.0, |input| values[*input]),

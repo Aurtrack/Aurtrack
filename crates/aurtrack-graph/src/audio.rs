@@ -322,6 +322,114 @@ pub const AUDIO_NODE_TYPES: &[AudioNodeType] = &[
             maximum: 1000.0,
         }],
     },
+    AudioNodeType {
+        id: "audio.math.add",
+        name: "Add",
+        category: "Control",
+        inputs: &[
+            AudioSocketSpec {
+                id: "a",
+                name: "A",
+                ty: SocketType::Float,
+                default: 0.0,
+            },
+            AudioSocketSpec {
+                id: "b",
+                name: "B",
+                ty: SocketType::Float,
+                default: 0.0,
+            },
+        ],
+        outputs: &FLOAT_OUT,
+        params: &[],
+    },
+    AudioNodeType {
+        id: "audio.math.multiply",
+        name: "Multiply",
+        category: "Control",
+        inputs: &[
+            AudioSocketSpec {
+                id: "a",
+                name: "A",
+                ty: SocketType::Float,
+                default: 1.0,
+            },
+            AudioSocketSpec {
+                id: "b",
+                name: "B",
+                ty: SocketType::Float,
+                default: 1.0,
+            },
+        ],
+        outputs: &FLOAT_OUT,
+        params: &[],
+    },
+    AudioNodeType {
+        id: "audio.math.map_range",
+        name: "Map Range",
+        category: "Control",
+        inputs: &[
+            AudioSocketSpec {
+                id: "value",
+                name: "Value",
+                ty: SocketType::Float,
+                default: 0.0,
+            },
+            AudioSocketSpec {
+                id: "from_min",
+                name: "From Min",
+                ty: SocketType::Float,
+                default: 0.0,
+            },
+            AudioSocketSpec {
+                id: "from_max",
+                name: "From Max",
+                ty: SocketType::Float,
+                default: 1.0,
+            },
+            AudioSocketSpec {
+                id: "to_min",
+                name: "To Min",
+                ty: SocketType::Float,
+                default: 0.0,
+            },
+            AudioSocketSpec {
+                id: "to_max",
+                name: "To Max",
+                ty: SocketType::Float,
+                default: 1.0,
+            },
+        ],
+        outputs: &FLOAT_OUT,
+        params: &[],
+    },
+    AudioNodeType {
+        id: "audio.math.clamp",
+        name: "Clamp",
+        category: "Control",
+        inputs: &[
+            AudioSocketSpec {
+                id: "value",
+                name: "Value",
+                ty: SocketType::Float,
+                default: 0.0,
+            },
+            AudioSocketSpec {
+                id: "min",
+                name: "Min",
+                ty: SocketType::Float,
+                default: 0.0,
+            },
+            AudioSocketSpec {
+                id: "max",
+                name: "Max",
+                ty: SocketType::Float,
+                default: 1.0,
+            },
+        ],
+        outputs: &FLOAT_OUT,
+        params: &[],
+    },
 ];
 
 pub fn audio_node_type(id: &str) -> Option<&'static AudioNodeType> {
