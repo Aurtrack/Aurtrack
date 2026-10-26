@@ -1846,21 +1846,20 @@ button:disabled {
   position: fixed;
   z-index: 80;
   display: flex;
-  min-width: 120px;
+  min-width: 150px;
   flex-direction: column;
   border: 1px solid var(--blue);
-  background: var(--paper);
-  box-shadow: 2px 2px 0 var(--line);
+  background: #fbfbfa;
 }
 
 .graph-context-menu button {
   border: 0;
   border-bottom: 1px solid var(--line);
-  padding: 6px 10px;
+  padding: 7px 12px;
   background: transparent;
   color: var(--ink);
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: 10px;
   text-align: left;
 }
 
@@ -2116,4 +2115,34 @@ button:disabled {
   color: var(--blue);
   font-family: var(--mono);
   font-size: 8px;
+}
+
+.voice-add-menu {
+  position: fixed;
+  z-index: 100;
+  display: flex;
+  min-width: 150px;
+  flex-direction: column;
+  border: 1px solid var(--blue);
+  background: #fbfbfa;
+}
+
+.voice-add-menu button {
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  padding: 7px 12px;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 10px;
+  text-align: left;
+}
+
+.voice-add-menu button:last-child {
+  border-bottom: 0;
+}
+
+.voice-add-menu button:hover {
+  background: var(--blue);
+  color: #fff;
 }

@@ -104,7 +104,9 @@
   let wire = $state<Wire | null>(null);
   let error = $state("");
   let saving = $state(false);
-  let newGroupId = $state("");
+  let addMenu = $state<{ x: number; y: number } | null>(null);
+  let lastPointer = $state({ x: 0, y: 0 });
+  let boardElement = $state<HTMLElement | null>(null);
   let groupChoices = $derived(
     Object.values(groups).filter((group) => group.id !== groupId),
   );
@@ -195,6 +197,7 @@
   }
 
   function move(event: MouseEvent) {
+    lastPointer = { x: event.clientX, y: event.clientY };
     if (wire) {
       wire = { ...wire, x: event.clientX, y: event.clientY };
       return;
@@ -213,28 +216,38 @@
     wire = null;
   }
 
+  function addPosition(): [number, number] {
+    if (!boardElement || !addMenu) return [80, 80];
+    const rect = boardElement.getBoundingClientRect();
+    return [
+      Math.max(10, addMenu.x - rect.left + boardElement.scrollLeft - 20),
+      Math.max(10, addMenu.y - rect.top + boardElement.scrollTop - 10),
+    ];
+  }
+
   function addNode(kind: string) {
     const id = `voice-${Date.now().toString(36)}`;
     voice.nodes[id] = {
       id,
       kind,
       params: {},
-      position: [80, 80],
+      position: addPosition(),
     };
     selected = id;
+    addMenu = null;
   }
 
-  function addGroupNode() {
-    if (!newGroupId) return;
+  function addGroupNode(groupId: string) {
     const id = `voice-${Date.now().toString(36)}`;
     voice.nodes[id] = {
       id,
       kind: "voice.group",
       params: {},
-      position: [80, 80],
-      group: newGroupId,
+      position: addPosition(),
+      group: groupId,
     };
     selected = id;
+    addMenu = null;
   }
 
   function removeSelected() {
@@ -284,8 +297,23 @@
   }
 
   function handleKey(event: KeyboardEvent) {
+    if (event.key === "Escape" && addMenu) {
+      addMenu = null;
+      return;
+    }
     if (event.key === "Escape") {
       void leave();
+      return;
+    }
+    if (
+      event.shiftKey &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      event.key.toLowerCase() === "a" &&
+      !(document.activeElement instanceof HTMLInputElement)
+    ) {
+      event.preventDefault();
+      addMenu = { x: lastPointer.x, y: lastPointer.y };
       return;
     }
     if (
@@ -331,46 +359,61 @@
       </div>
     </header>
 
-    <div class="voice-editor-toolbar">
-      <button class="ghost small" onclick={() => addNode("osc.partials")}>
-        + {t("voice.osc")}
-      </button>
-      <button class="ghost small" onclick={() => addNode("env.percussive")}>
-        + {t("voice.env")}
-      </button>
-      <button class="ghost small" onclick={() => addNode("noise.burst")}>
-        + {t("voice.noise")}
-      </button>
-      <button class="ghost small" onclick={() => addNode("voice.mix")}>
-        + {t("voice.mix")}
-      </button>
-      <button class="ghost small" onclick={() => addNode("group.output")}>
-        + {t("voice.output")}
-      </button>
-      <select class="voice-group-select" bind:value={newGroupId} aria-label={t("voice.groupNode")}>
-        <option value="">{t("voice.groupNode")}</option>
-        {#each groupChoices as group (group.id)}
-          <option value={group.id}>{group.name}</option>
-        {/each}
-      </select>
-      <button class="ghost small" disabled={!newGroupId} onclick={addGroupNode}>
-        + {t("voice.groupNode")}
-      </button>
-      <button
-        class="ghost small"
-        disabled={!selected}
-        onclick={removeSelected}
-      >
-        {t("voice.delete")}
-      </button>
-    </div>
-
     {#if error}
       <p class="error-text">{error}</p>
     {/if}
 
+    {#if addMenu}
+      <div
+        class="voice-add-menu"
+        style:left={`${addMenu.x}px`}
+        style:top={`${addMenu.y}px`}
+        role="menu"
+        tabindex="-1"
+        onmousedown={(event) => event.stopPropagation()}
+      >
+        <div class="graph-menu-label">{t("graph.menuAudio")}</div>
+        <button role="menuitem" onclick={() => addNode("osc.partials")}>
+          {t("voice.osc")}
+        </button>
+        <button role="menuitem" onclick={() => addNode("env.percussive")}>
+          {t("voice.env")}
+        </button>
+        <button role="menuitem" onclick={() => addNode("noise.burst")}>
+          {t("voice.noise")}
+        </button>
+        <button role="menuitem" onclick={() => addNode("voice.mix")}>
+          {t("voice.mix")}
+        </button>
+        <button role="menuitem" onclick={() => addNode("group.output")}>
+          {t("voice.output")}
+        </button>
+        {#if groupChoices.length > 0}
+          <div class="graph-menu-label">{t("voice.groupNode")}</div>
+          {#each groupChoices as group (group.id)}
+            <button role="menuitem" onclick={() => addGroupNode(group.id)}>
+              {group.name}
+            </button>
+          {/each}
+        {/if}
+      </div>
+    {/if}
+
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
-    <div class="voice-editor-board">
+    <div
+      class="voice-editor-board"
+      role="application"
+      aria-label={t("voice.title")}
+      bind:this={boardElement}
+      oncontextmenu={(event) => {
+        event.preventDefault();
+        addMenu = { x: event.clientX, y: event.clientY };
+      }}
+      onmousedown={(event) => {
+        const target = event.target as Element | null;
+        if (!target?.closest(".voice-node, .voice-add-menu")) addMenu = null;
+      }}
+    >
       <svg class="voice-editor-wires" viewBox={`0 0 ${CANVAS_WIDTH} ${CANVAS_HEIGHT}`}>
         {#each voice.connections as connection (connection.from.node + connection.from.port + connection.to.node + connection.to.port)}
           <path d={wirePath(connection)} />

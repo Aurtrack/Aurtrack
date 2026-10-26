@@ -502,6 +502,7 @@
     event.stopPropagation();
     if (!selected.has(node.id)) selected = new Set([node.id]);
     addMenu = null;
+    canvasMenu = null;
     nodeMenu = { x: event.clientX, y: event.clientY, nodeId: node.id };
   }
 
