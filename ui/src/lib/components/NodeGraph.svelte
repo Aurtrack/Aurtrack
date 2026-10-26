@@ -6,7 +6,7 @@
     NodeTypeInfo,
     Track,
   } from "../api";
-  import { formatNumber, t } from "../i18n.svelte";
+  import { t } from "../i18n.svelte";
   import { session } from "../session.svelte";
   import NumberField from "./NumberField.svelte";
   import VoiceGraphEditor from "./VoiceGraphEditor.svelte";
@@ -135,9 +135,12 @@
   type AddMenu = { x: number; y: number };
   type NodeMenu = { x: number; y: number; nodeId: string };
 
-  const CARD_WIDTH = 220;
+  const CARD_WIDTH = 204;
   const COLUMN_GAP = 110;
-  const HEADER_PORT_Y = 22;
+  const NODE_HEADER = 26;
+  const NODE_ROW = 22;
+  const NODE_BODY_TOP = 6;
+  const NODE_BOTTOM = 7;
   const MIN_SCALE = 0.25;
   const MAX_SCALE = 2.5;
 
@@ -207,11 +210,70 @@
     return { width, height };
   });
 
+  function groupHeaderHeight(node: GraphNode): number {
+    return nodeTypeId(node) === "audio.group" ? 18 : 0;
+  }
+
+  function nodeInputs(node: GraphNode) {
+    return nodeType(node)?.inputs ?? [];
+  }
+
+  function nodeOutputs(node: GraphNode) {
+    return nodeType(node)?.outputs ?? [];
+  }
+
+  function matchingParam(node: GraphNode, portId: string) {
+    return nodeType(node)?.params.find((param) => param.name === portId);
+  }
+
+  function isLinked(node: GraphNode, portId: string): boolean {
+    return connections.some(
+      (connection) =>
+        connection.to.node === node.id && connection.to.port === portId,
+    );
+  }
+
+  function extraParams(node: GraphNode) {
+    const ports = new Set(nodeInputs(node).map((port) => port.id));
+    return (nodeType(node)?.params ?? []).filter(
+      (param) => !ports.has(param.name),
+    );
+  }
+
+  function infoRows(node: GraphNode): number {
+    return node.plugin ? 1 : 0;
+  }
+
+  function rowCount(node: GraphNode): number {
+    return (
+      Math.max(nodeInputs(node).length, nodeOutputs(node).length) +
+      extraParams(node).length +
+      infoRows(node)
+    );
+  }
+
+  function portY(node: GraphNode, index: number): number {
+    return (
+      NODE_HEADER +
+      groupHeaderHeight(node) +
+      NODE_BODY_TOP +
+      index * NODE_ROW +
+      NODE_ROW / 2
+    );
+  }
+
+  function portTop(node: GraphNode, index: number): number {
+    return portY(node, index) - NODE_ROW / 2;
+  }
+
   function nodeHeight(node: GraphNode): number {
-    const inputs = nodeType(node)?.inputs.length ?? 0;
-    const params = nodeType(node)?.params.length ?? 0;
-    const paramRows = Math.ceil(params / 2);
-    return Math.max(90, 44 + inputs * 26, 70 + paramRows * 40);
+    return (
+      NODE_HEADER +
+      groupHeaderHeight(node) +
+      NODE_BODY_TOP +
+      rowCount(node) * NODE_ROW +
+      NODE_BOTTOM
+    );
   }
 
   function nodeSize(node: GraphNode) {
@@ -329,6 +391,32 @@
 
   type InputPort = { port: string; y: number; ty: string };
 
+  const socketColors: Record<string, string> = {
+    float: "#a1a1a1",
+    gate: "#cca6d6",
+    audio: "#63c763",
+  };
+
+  function wireDragColor(): string {
+    if (!wireDrag) return socketColors.audio ?? "#63c763";
+    if (wireDrag.side === "out") {
+      return (
+        socketColors[socketType(wireDrag.node, "out", wireDrag.port) ?? "audio"] ??
+        "#63c763"
+      );
+    }
+    return socketColors.audio ?? "#63c763";
+  }
+
+  function wireColor(connection: GraphConnection): string {
+    const type = socketType(
+      connection.from.node,
+      "out",
+      connection.from.port,
+    );
+    return socketColors[type ?? "audio"] ?? "#63c763";
+  }
+
   function socketType(
     nodeId: string,
     side: "in" | "out",
@@ -342,17 +430,21 @@
   }
 
   function inputPorts(node: GraphNode): InputPort[] {
-    return (nodeType(node)?.inputs ?? []).map((input, index) => ({
+    return nodeInputs(node).map((input, index) => ({
       port: input.id,
-      y: 22 + index * 26,
+      y: portY(node, index),
       ty: input.type,
     }));
   }
 
   function outputPoint(nodeId: string): Point | null {
     const position = nodePositions[nodeId];
-    if (!position) return null;
-    return { x: position.x + position.w, y: position.y + HEADER_PORT_Y };
+    const node = graph?.nodes[nodeId];
+    if (!position || !node) return null;
+    return {
+      x: position.x + position.w,
+      y: position.y + portY(node, 0),
+    };
   }
 
   function inputPoint(nodeId: string, portName: string): Point | null {
@@ -362,7 +454,10 @@
     const port = inputPorts(node).find(
       (candidate) => candidate.port === portName,
     );
-    return { x: position.x, y: position.y + (port?.y ?? HEADER_PORT_Y) };
+    return {
+      x: position.x,
+      y: position.y + (port?.y ?? portY(node, 0)),
+    };
   }
 
   function wirePath(connection: GraphConnection): string {
@@ -969,10 +1064,18 @@
                 }
               }}
             />
-            <path class="graph-wire" d={wirePath(connection)} />
+            <path
+              class="graph-wire"
+              d={wirePath(connection)}
+              style:stroke={wireColor(connection)}
+            />
           {/each}
           {#if wireDrag}
-            <path class="graph-wire temp" d={tempWirePath()} />
+            <path
+              class="graph-wire temp"
+              d={tempWirePath()}
+              style:stroke={wireDragColor()}
+            />
           {/if}
         </svg>
 
@@ -988,22 +1091,22 @@
           <div
             class="graph-node"
             class:device
-            class:instrument={node.kind.startsWith("instrument.")}
-            class:output={node.kind === "output"}
+            class:instrument={nodeTypeId(node).startsWith("audio.instrument")}
+            class:output={nodeTypeId(node) === "audio.output"}
             class:selected={isSelected}
             class:wire-target={wireHover?.node === node.id}
             role="group"
             aria-label={nodeLabel(node)}
             data-node-id={node.id}
-            data-node-kind={node.kind}
+            data-node-kind={nodeTypeId(node)}
             style:left={`${position?.x ?? 0}px`}
             style:top={`${position?.y ?? 0}px`}
-            style:min-height={`${position?.h ?? 90}px`}
+            style:height={`${position?.h ?? nodeHeight(node)}px`}
             style:width={`${position?.w ?? CARD_WIDTH}px`}
             onmousedown={(event) => nodeMouseDown(event, node)}
             oncontextmenu={(event) => openNodeMenu(event, node)}
             ondblclick={() => {
-              if (node.kind === "voice.group") openVoiceGroup(node);
+              if (nodeTypeId(node) === "audio.group") openVoiceGroup(node);
             }}
           >
             <div
@@ -1016,304 +1119,44 @@
               <span class="graph-node-id">{node.id}</span>
             </div>
 
-            {#if node.kind !== "output"}
-              <button
-                type="button"
-                class="graph-port graph-port-out"
-                class:port-float={socketType(node.id, "out", "out") === "float"}
-                class:port-audio={socketType(node.id, "out", "out") === "audio"}
-                class:active={wireHover?.node === node.id &&
-                  wireDrag?.side === "in"}
-                aria-label={t("graph.startWire")}
-                title={t("graph.startWire")}
-                data-output-node={node.id}
-                onmousedown={(event) => startWire(event, node, "out", "out")}
-              ></button>
-            {/if}
-            {#each inputPorts(node) as input (input.port)}
-              <button
-                type="button"
-                class="graph-port graph-port-in"
-                class:port-float={input.ty === "float"}
-                class:port-audio={input.ty === "audio"}
-                class:active={wireHover?.node === node.id &&
-                  wireHover?.port === input.port}
-                style:top={`${input.y - 5}px`}
-                aria-label={t("graph.inputPort")}
-                data-input-node={node.id}
-                data-input-port={input.port}
-                onmousedown={(event) => startWire(event, node, "in", input.port)}
-              ></button>
-            {/each}
-
-            {#if nodeTypeId(node) === "audio.value"}
-              <label class="graph-param-row">
-                <span>VALUE</span>
-                <NumberField
-                  value={paramOf(node, "value", 0)}
-                  min={-1000}
-                  max={1000}
-                  step={0.01}
-                  precision={2}
-                  disabled={busy}
-                  onchange={(value) =>
-                    onParamChange(owner.id, node.id, "value", value)}
-                />
-              </label>
-            {:else if nodeTypeId(node) === "audio.drive"}
-              <label class="graph-param-row">
-                <span>DRIVE</span>
-                <NumberField
-                  value={paramOf(node, "drive", 1)}
-                  min={0}
-                  max={10}
-                  step={0.1}
-                  precision={1}
-                  disabled={busy}
-                  onchange={(value) =>
-                    onParamChange(owner.id, node.id, "drive", value)}
-                />
-              </label>
-            {:else if nodeTypeId(node) === "audio.delay"}
-              <div class="graph-param-grid">
-                <label>
-                  <span>TIME</span>
-                  <NumberField
-                    value={paramOf(node, "time", 0.25)}
-                    min={0.001}
-                    max={2}
-                    step={0.01}
-                    precision={2}
-                    suffix="s"
-                    disabled={busy}
-                    onchange={(value) =>
-                      onParamChange(owner.id, node.id, "time", value)}
-                  />
-                </label>
-                <label>
-                  <span>FEEDBACK</span>
-                  <NumberField
-                    value={Math.round(paramOf(node, "feedback", 0.2) * 100)}
-                    min={0}
-                    max={95}
-                    step={1}
-                    precision={0}
-                    suffix="%"
-                    disabled={busy}
-                    onchange={(value) =>
-                      onParamChange(owner.id, node.id, "feedback", value / 100)}
-                  />
-                </label>
-              </div>
-            {:else if node.kind === "instrument.sine"}
-              <div class="graph-param-row">
-                <span>{t("graph.frequency")}</span>
-                <strong
-                  >{formatNumber(paramOf(node, "frequency", 440), 2)} Hz</strong
+            {#if nodeTypeId(node) === "audio.group"}
+              <div class="graph-node-group-line">
+                <span>{groupFor(node)?.name ?? node.group ?? "—"}</span>
+                <button
+                  class="graph-node-enter"
+                  title={t("graph.editGroup")}
+                  disabled={!groupFor(node)}
+                  onclick={() => openVoiceGroup(node)}
                 >
+                  ↗
+                </button>
               </div>
-            {:else if node.kind === "instrument.silence"}
-              <div class="graph-param-row">
-                <span>{t("graph.silenceSource")}</span>
-                <strong>0</strong>
-              </div>
-            {:else if node.kind === "voice.group"}
-              <div class="graph-param-row">
-                <span>{t("graph.group")}</span>
-                <strong>{groupFor(node)?.name ?? node.group ?? "—"}</strong>
-              </div>
-              <button
-                class="ghost small"
-                disabled={!groupFor(node)}
-                onclick={() => openVoiceGroup(node)}
+            {/if}
+
+            {#each nodeInputs(node) as input, index (input.id)}
+              {@const param = matchingParam(node, input.id)}
+              {@const linked = isLinked(node, input.id)}
+              <div
+                class="graph-socket-row in"
+                style:top={`${portTop(node, index)}px`}
               >
-                {t("graph.editGroup")}
-              </button>
-            {:else if node.kind === "instrument.piano"}
-              <div class="graph-param-grid">
-                <label>
-                  <span>{t("graph.partials")}</span>
-                  <NumberField
-                    value={Math.round(paramOf(node, "partials", 10))}
-                    min={1}
-                    max={16}
-                    step={1}
-                    precision={0}
-                    disabled={busy}
-                    onchange={(value) =>
-                      onParamChange(owner.id, node.id, "partials", value)}
-                  />
-                </label>
-                <label>
-                  <span>{t("graph.decay")}</span>
-                  <NumberField
-                    value={paramOf(node, "decay", 1.2)}
-                    min={0.1}
-                    max={8}
-                    step={0.1}
-                    precision={1}
-                    suffix="s"
-                    disabled={busy}
-                    onchange={(value) =>
-                      onParamChange(owner.id, node.id, "decay", value)}
-                  />
-                </label>
-                <label>
-                  <span>{t("graph.brightness")}</span>
-                  <NumberField
-                    value={Math.round(paramOf(node, "brightness", 0.5) * 100)}
-                    min={0}
-                    max={100}
-                    step={1}
-                    precision={0}
-                    suffix="%"
-                    disabled={busy}
-                    onchange={(value) =>
-                      onParamChange(owner.id, node.id, "brightness", value / 100)}
-                  />
-                </label>
-                <label>
-                  <span>{t("graph.hammer")}</span>
-                  <NumberField
-                    value={Math.round(paramOf(node, "hammer", 0.2) * 100)}
-                    min={0}
-                    max={100}
-                    step={1}
-                    precision={0}
-                    suffix="%"
-                    disabled={busy}
-                    onchange={(value) =>
-                      onParamChange(owner.id, node.id, "hammer", value / 100)}
-                  />
-                </label>
-              </div>
-              <button
-                class="ghost small"
-                onclick={() => openVoiceGroup(node)}
-              >
-                {t("voice.edit")}
-              </button>
-            {:else if node.kind === "amp.adsr"}
-              <div class="graph-param-grid">
-                <label>
-                  <span>{t("device.adsr.attack")}</span>
-                  <NumberField
-                    value={paramOf(node, "attack", 0.01)}
-                    min={0.001}
-                    max={10}
-                    step={0.01}
-                    precision={2}
-                    disabled={busy}
-                    onchange={(value) =>
-                      onParamChange(owner.id, node.id, "attack", value)}
-                  />
-                </label>
-                <label>
-                  <span>{t("device.adsr.decay")}</span>
-                  <NumberField
-                    value={paramOf(node, "decay", 0.12)}
-                    min={0}
-                    max={10}
-                    step={0.01}
-                    precision={2}
-                    disabled={busy}
-                    onchange={(value) =>
-                      onParamChange(owner.id, node.id, "decay", value)}
-                  />
-                </label>
-                <label>
-                  <span>{t("device.adsr.sustain")}</span>
-                  <NumberField
-                    value={Math.round(paramOf(node, "sustain", 0.75) * 100)}
-                    min={0}
-                    max={100}
-                    step={1}
-                    precision={0}
-                    suffix="%"
-                    disabled={busy}
-                    onchange={(value) =>
-                      onParamChange(owner.id, node.id, "sustain", value / 100)}
-                  />
-                </label>
-                <label>
-                  <span>{t("device.adsr.release")}</span>
-                  <NumberField
-                    value={paramOf(node, "release", 0.18)}
-                    min={0.001}
-                    max={10}
-                    step={0.01}
-                    precision={2}
-                    disabled={busy}
-                    onchange={(value) =>
-                      onParamChange(owner.id, node.id, "release", value)}
-                  />
-                </label>
-              </div>
-            {:else if node.kind === "filter.lowpass"}
-              <div class="graph-param-grid">
-                <label>
-                  <span>{t("graph.cutoff")}</span>
-                  <NumberField
-                    value={paramOf(node, "cutoff", 1200)}
-                    min={20}
-                    max={20000}
-                    step={1}
-                    precision={0}
-                    suffix="Hz"
-                    disabled={busy}
-                    onchange={(value) =>
-                      onParamChange(owner.id, node.id, "cutoff", value)}
-                  />
-                </label>
-                <label>
-                  <span>{t("graph.resonance")}</span>
-                  <NumberField
-                    value={Math.round(paramOf(node, "resonance", 0.2) * 100)}
-                    min={0}
-                    max={95}
-                    step={1}
-                    precision={0}
-                    suffix="%"
-                    disabled={busy}
-                    onchange={(value) =>
-                      onParamChange(
-                        owner.id,
-                        node.id,
-                        "resonance",
-                        value / 100,
-                      )}
-                  />
-                </label>
-              </div>
-            {:else if node.kind === "gain"}
-              <label class="graph-param-row">
-                <span>{t("graph.gain")}</span>
-                <NumberField
-                  value={paramOf(node, "gain", 1)}
-                  min={0}
-                  max={4}
-                  step={0.05}
-                  precision={2}
-                  disabled={busy}
-                  onchange={(value) =>
-                    onParamChange(owner.id, node.id, "gain", value)}
-                />
-              </label>
-            {:else if node.kind === "mix"}
-              <div class="graph-param-row">
-                <span>{t("graph.mixInputs")}</span>
-                <strong>MULTI</strong>
-              </div>
-            {:else if node.kind === "plugin"}
-              <div class="graph-param-row">
-                <span>{t("graph.plugin")}</span>
-                <strong>{node.plugin?.id ?? "未配置"}</strong>
-              </div>
-            {:else if (nodeType(node)?.params.length ?? 0) > 0}
-              <div class="graph-param-grid">
-                {#each nodeType(node)?.params ?? [] as param (param.name)}
-                  <label>
-                    <span>{param.name.toUpperCase()}</span>
+                <button
+                  type="button"
+                  class="graph-port graph-port-in"
+                  class:port-float={input.type === "float"}
+                  class:port-audio={input.type === "audio"}
+                  class:active={wireHover?.node === node.id &&
+                    wireHover?.port === input.id}
+                  style:top="7px"
+                  aria-label={t("graph.inputPort")}
+                  data-input-node={node.id}
+                  data-input-port={input.id}
+                  onmousedown={(event) =>
+                    startWire(event, node, "in", input.id)}
+                ></button>
+                <span class="graph-socket-name">{input.name}</span>
+                {#if param && !linked}
+                  <div class="graph-socket-value">
                     <NumberField
                       value={paramOf(node, param.name, param.default)}
                       min={param.minimum}
@@ -1324,12 +1167,70 @@
                       onchange={(value) =>
                         onParamChange(owner.id, node.id, param.name, value)}
                     />
-                  </label>
-                {/each}
+                  </div>
+                {/if}
               </div>
-            {:else}
-              <div class="graph-param-row">
-                <span>{t("graph.terminal")}</span>
+            {/each}
+
+            {#each nodeOutputs(node) as output, index (output.id)}
+              <div
+                class="graph-socket-row out"
+                style:top={`${portTop(node, index)}px`}
+              >
+                <span class="graph-socket-name">{output.name}</span>
+                <button
+                  type="button"
+                  class="graph-port graph-port-out"
+                  class:port-float={output.type === "float"}
+                  class:port-audio={output.type === "audio"}
+                  class:active={wireHover?.node === node.id &&
+                    wireDrag?.side === "in"}
+                  style:top="7px"
+                  aria-label={t("graph.startWire")}
+                  title={t("graph.startWire")}
+                  data-output-node={node.id}
+                  onmousedown={(event) =>
+                    startWire(event, node, "out", output.id)}
+                ></button>
+              </div>
+            {/each}
+
+            {#each extraParams(node) as param, index (param.name)}
+              {@const top =
+                NODE_HEADER +
+                groupHeaderHeight(node) +
+                NODE_BODY_TOP +
+                (Math.max(nodeInputs(node).length, nodeOutputs(node).length) +
+                  index) *
+                  NODE_ROW}
+              <div class="graph-socket-row param" style:top={`${top}px`}>
+                <span class="graph-socket-name">{param.name}</span>
+                <div class="graph-socket-value">
+                  <NumberField
+                    value={paramOf(node, param.name, param.default)}
+                    min={param.minimum}
+                    max={param.maximum}
+                    step={0.01}
+                    precision={2}
+                    disabled={busy}
+                    onchange={(value) =>
+                      onParamChange(owner.id, node.id, param.name, value)}
+                  />
+                </div>
+              </div>
+            {/each}
+
+            {#if node.plugin}
+              {@const top =
+                NODE_HEADER +
+                groupHeaderHeight(node) +
+                NODE_BODY_TOP +
+                (Math.max(nodeInputs(node).length, nodeOutputs(node).length) +
+                  extraParams(node).length) *
+                  NODE_ROW}
+              <div class="graph-socket-row param" style:top={`${top}px`}>
+                <span class="graph-socket-name">PLUGIN</span>
+                <strong>{node.plugin.id}</strong>
               </div>
             {/if}
           </div>
