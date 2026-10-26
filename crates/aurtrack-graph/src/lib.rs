@@ -635,6 +635,32 @@ const TWO_FLOAT_IN: [VoiceSocketSpec; 2] = [
         ty: SocketType::Float,
     },
 ];
+const REROUTE_FLOAT_IN: [VoiceSocketSpec; 1] = [VoiceSocketSpec {
+    id: "in",
+    name: "Value",
+    ty: SocketType::Float,
+}];
+const REROUTE_GATE_IN: [VoiceSocketSpec; 1] = [VoiceSocketSpec {
+    id: "in",
+    name: "Gate",
+    ty: SocketType::Gate,
+}];
+const REROUTE_AUDIO_IN: [VoiceSocketSpec; 1] = [VoiceSocketSpec {
+    id: "in",
+    name: "Audio",
+    ty: SocketType::Audio,
+}];
+const REROUTE_FLOAT_OUT: [VoiceSocketSpec; 1] = [VoiceSocketSpec {
+    id: "out",
+    name: "Value",
+    ty: SocketType::Float,
+}];
+const REROUTE_GATE_OUT: [VoiceSocketSpec; 1] = [VoiceSocketSpec {
+    id: "out",
+    name: "Gate",
+    ty: SocketType::Gate,
+}];
+
 const MAP_RANGE_IN: [VoiceSocketSpec; 5] = [
     VoiceSocketSpec {
         id: "value",
@@ -784,6 +810,30 @@ pub const VOICE_NODE_TYPES: &[VoiceNodeType] = &[
         inputs: &[],
         outputs: &FLOAT_OUT,
         params: &MATH_PARAMS,
+    },
+    VoiceNodeType {
+        id: "reroute.float",
+        name: "Reroute Float",
+        category: "Layout",
+        inputs: &REROUTE_FLOAT_IN,
+        outputs: &REROUTE_FLOAT_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "reroute.gate",
+        name: "Reroute Gate",
+        category: "Layout",
+        inputs: &REROUTE_GATE_IN,
+        outputs: &REROUTE_GATE_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "reroute.audio",
+        name: "Reroute Audio",
+        category: "Layout",
+        inputs: &REROUTE_AUDIO_IN,
+        outputs: &AUDIO_OUT,
+        params: &[],
     },
 ];
 

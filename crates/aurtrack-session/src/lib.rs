@@ -449,6 +449,13 @@ fn compile_voice_inner(
             }
             continue;
         }
+        if node.type_id.starts_with("reroute.") {
+            let target = *inputs.first().ok_or(GraphError::NotConnected)?;
+            for port in aurtrack_graph::node_outputs(node, interface, groups)? {
+                indices.insert((id.clone(), port.id), target);
+            }
+            continue;
+        }
         if node.muted && node.type_id != "group.output" {
             let ports = aurtrack_graph::node_inputs(node, interface, groups)?;
             let audio_index = ports
@@ -1256,6 +1263,12 @@ impl Session {
             track.graph.nodes().any(|node| {
                 node.type_id == "audio.group" && node.group() == Some(args.group_id.as_str())
             })
+        }) || project.node_groups.values().any(|group| {
+            group.id != args.group_id
+                && group.graph.nodes.values().any(|node| {
+                    node.type_id == "voice.group"
+                        && node.group.as_deref() == Some(args.group_id.as_str())
+                })
         });
         if referenced {
             return Err(CommandError::invalid_args("节点组仍被轨道引用，不能删除"));
