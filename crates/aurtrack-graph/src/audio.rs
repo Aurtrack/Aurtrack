@@ -315,6 +315,33 @@ pub const AUDIO_NODE_TYPES: &[AudioNodeType] = &[
         }],
     },
     AudioNodeType {
+        id: "audio.lfo",
+        name: "LFO",
+        category: "Control",
+        inputs: &[],
+        outputs: &FLOAT_OUT,
+        params: &[
+            ParamSpec {
+                name: "rate",
+                default: 1.0,
+                minimum: 0.01,
+                maximum: 40.0,
+            },
+            ParamSpec {
+                name: "depth",
+                default: 0.5,
+                minimum: 0.0,
+                maximum: 10.0,
+            },
+            ParamSpec {
+                name: "offset",
+                default: 0.0,
+                minimum: -10.0,
+                maximum: 10.0,
+            },
+        ],
+    },
+    AudioNodeType {
         id: "audio.math.add",
         name: "Add",
         category: "Control",

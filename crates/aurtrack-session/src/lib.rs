@@ -30,7 +30,7 @@ use std::path::Path;
 use aurtrack_command::{CommandError, CommandRequest, CommandResponse, registry};
 use aurtrack_engine::{
     AdsrPlan, DelayPlan, FilterPlan, FilterSettings, GraphNodePlan, GraphOp, GraphPlan,
-    HighpassPlan, NotePlan, PluginPlan, VoiceNodePlan, VoiceOp, VoicePlan, adsr_envelope,
+    HighpassPlan, LfoPlan, NotePlan, PluginPlan, VoiceNodePlan, VoiceOp, VoicePlan, adsr_envelope,
     midi_to_hz, note_envelope,
 };
 use aurtrack_graph::{
@@ -214,6 +214,11 @@ impl Track {
                     GraphOp::Voice
                 },
                 "audio.value" => GraphOp::Constant(node.param("value").unwrap_or(0.0)),
+                "audio.lfo" => GraphOp::Lfo(LfoPlan::new(
+                    node.param("rate").unwrap_or(1.0),
+                    node.param("depth").unwrap_or(0.5),
+                    node.param("offset").unwrap_or(0.0),
+                )),
                 "audio.math.add" => GraphOp::Add,
                 "audio.math.multiply" => GraphOp::Multiply,
                 "audio.math.map_range" => GraphOp::MapRange,
@@ -830,6 +835,7 @@ impl Session {
             "mix" | "audio.mix" => "audio.mix",
             "plugin" | "audio.plugin" => "audio.plugin",
             "value" | "audio.value" => "audio.value",
+            "audio.lfo" => "audio.lfo",
             "audio.math.add" => "audio.math.add",
             "audio.math.multiply" => "audio.math.multiply",
             "audio.math.map_range" => "audio.math.map_range",
@@ -932,7 +938,7 @@ impl Session {
             .and_then(|project| project.tracks.iter().find(|track| track.id == track_id))
             .and_then(|track| track.graph.node(&node_id))
             .ok_or_else(|| CommandError::not_found(format!("找不到参数：{path}")))?;
-        if !node.is_device() && node.type_id != "audio.value" {
+        if !node.is_device() && !matches!(node.type_id.as_str(), "audio.value" | "audio.lfo") {
             return Err(CommandError::not_found(format!("找不到参数：{path}")));
         }
         let mut probe = aurtrack_graph::AudioNode::clone(node);
@@ -2719,6 +2725,7 @@ fn legacy_audio_kind(type_id: &str) -> &'static str {
         "audio.filter.lowpass" | "audio.filter.highpass" => "filter.lowpass",
         "audio.plugin" => "plugin",
         "audio.value"
+        | "audio.lfo"
         | "audio.math.add"
         | "audio.math.multiply"
         | "audio.math.map_range"
@@ -3160,7 +3167,7 @@ fn render_project(
                 }
                 sample
             };
-            sample = graph.sample(sample, project.sample_rate);
+            sample = graph.sample(sample, project.sample_rate, time);
             *slot += sample as f32;
         }
     }

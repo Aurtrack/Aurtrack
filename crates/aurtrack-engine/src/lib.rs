@@ -509,6 +509,28 @@ impl DelayPlan {
     }
 }
 
+/// 低频振荡器，输出 Float 控制值。
+#[derive(Debug, Clone, Copy)]
+pub struct LfoPlan {
+    pub rate: f64,
+    pub depth: f64,
+    pub offset: f64,
+}
+
+impl LfoPlan {
+    pub fn new(rate: f64, depth: f64, offset: f64) -> Self {
+        Self {
+            rate: rate.clamp(0.01, 40.0),
+            depth: depth.clamp(0.0, 10.0),
+            offset: offset.clamp(-10.0, 10.0),
+        }
+    }
+
+    pub fn at(&self, time: f64) -> f64 {
+        self.offset + (std::f64::consts::TAU * self.rate * time).sin() * self.depth
+    }
+}
+
 /// DAG 计划最多允许的节点数。
 pub const MAX_GRAPH_NODES: usize = 64;
 
@@ -528,6 +550,7 @@ pub struct GraphNodePlan {
 pub enum GraphOp {
     Voice,
     Constant(f64),
+    Lfo(LfoPlan),
     Add,
     Multiply,
     MapRange,
@@ -563,7 +586,7 @@ fn control_value(
 }
 
 impl GraphPlan {
-    pub fn sample(&self, voice: f64, sample_rate: u32) -> f64 {
+    pub fn sample(&self, voice: f64, sample_rate: u32, time: f64) -> f64 {
         if self.nodes.len() > MAX_GRAPH_NODES || self.output >= self.nodes.len() {
             return 0.0;
         }
@@ -572,6 +595,7 @@ impl GraphPlan {
             let value = match &node.op {
                 GraphOp::Voice => voice,
                 GraphOp::Constant(value) => *value,
+                GraphOp::Lfo(lfo) => lfo.at(time),
                 GraphOp::Add => node.controls.iter().map(|control| values[*control]).sum(),
                 GraphOp::Multiply => node
                     .controls
@@ -1168,7 +1192,7 @@ impl Playback {
             }
         }
         if let Some(graph) = &track.graph {
-            return graph.sample(voice, plan.sample_rate);
+            return graph.sample(voice, plan.sample_rate, time);
         }
         for filter in &track.filters {
             voice = filter.process(plan.sample_rate, voice);

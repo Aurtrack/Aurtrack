@@ -1278,12 +1278,30 @@
             {:else if node.kind === "mix"}
               <div class="graph-param-row">
                 <span>{t("graph.mixInputs")}</span>
-                <strong>in1 + in2</strong>
+                <strong>MULTI</strong>
               </div>
             {:else if node.kind === "plugin"}
               <div class="graph-param-row">
                 <span>{t("graph.plugin")}</span>
                 <strong>{node.plugin?.id ?? "未配置"}</strong>
+              </div>
+            {:else if (nodeType(node)?.params.length ?? 0) > 0}
+              <div class="graph-param-grid">
+                {#each nodeType(node)?.params ?? [] as param (param.name)}
+                  <label>
+                    <span>{param.name.toUpperCase()}</span>
+                    <NumberField
+                      value={paramOf(node, param.name, param.default)}
+                      min={param.minimum}
+                      max={param.maximum}
+                      step={0.01}
+                      precision={2}
+                      disabled={busy}
+                      onchange={(value) =>
+                        onParamChange(owner.id, node.id, param.name, value)}
+                    />
+                  </label>
+                {/each}
               </div>
             {:else}
               <div class="graph-param-row">

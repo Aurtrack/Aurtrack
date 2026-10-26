@@ -899,6 +899,51 @@ fn group_interface_accepts_new_typed_socket() {
 }
 
 #[test]
+fn lfo_modulates_gain() {
+    let mut session = Session::default();
+    run(&mut session, "project.create", json!({}));
+    run(
+        &mut session,
+        "track.create",
+        json!({ "name": "lead", "source": "sine" }),
+    );
+    let gain = run(
+        &mut session,
+        "device.add",
+        json!({ "track_id": "track-1", "kind": "gain" }),
+    );
+    let gain_id = gain["node_id"].as_str().unwrap().to_string();
+    let lfo = run(
+        &mut session,
+        "node.add",
+        json!({
+            "track_id": "track-1",
+            "kind": "audio.lfo",
+            "params": { "rate": 3.0, "depth": 0.5, "offset": 0.6 }
+        }),
+    );
+    let lfo_id = lfo["node_id"].as_str().unwrap().to_string();
+    run(
+        &mut session,
+        "node.connect",
+        json!({
+            "from": format!("/tracks/track-1/nodes/{lfo_id}"),
+            "from_port": "out",
+            "to": format!("/tracks/track-1/devices/{gain_id}"),
+            "to_port": "gain"
+        }),
+    );
+    let path = temp_path("lfo");
+    let rendered = run(
+        &mut session,
+        "render.segment",
+        json!({ "duration_seconds": 0.5, "path": path }),
+    );
+    assert!(rendered["rms"].as_f64().unwrap() > 0.001);
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn float_control_links_drive_gain() {
     let mut session = Session::default();
     run(&mut session, "project.create", json!({}));
