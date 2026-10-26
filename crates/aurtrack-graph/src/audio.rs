@@ -1,0 +1,490 @@
+//! 职责：
+//! - 声明 Audio 域的节点类型、端口类型和默认值
+//! - 校验类型化连线和 DAG
+//!
+//! 禁止：
+//! - 依赖 IO、宿主或 UI
+//! - 把节点行为写成固定枚举分支
+
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+
+use serde::{Deserialize, Serialize};
+
+use crate::{GraphError, NodeId, ParamSpec, PortRef, SocketType};
+
+/// Audio 节点端口声明。
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct AudioSocketSpec {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub ty: SocketType,
+    pub default: f64,
+}
+
+/// Audio 节点类型声明。
+#[derive(Debug, Clone, Copy)]
+pub struct AudioNodeType {
+    pub id: &'static str,
+    pub name: &'static str,
+    pub category: &'static str,
+    pub inputs: &'static [AudioSocketSpec],
+    pub outputs: &'static [AudioSocketSpec],
+    pub params: &'static [ParamSpec],
+}
+
+const AUDIO_OUT: [AudioSocketSpec; 1] = [AudioSocketSpec {
+    id: "out",
+    name: "Audio",
+    ty: SocketType::Audio,
+    default: 0.0,
+}];
+const FLOAT_OUT: [AudioSocketSpec; 1] = [AudioSocketSpec {
+    id: "out",
+    name: "Value",
+    ty: SocketType::Float,
+    default: 0.0,
+}];
+const GAIN_PARAMS: [ParamSpec; 1] = [ParamSpec {
+    name: "gain",
+    default: 1.0,
+    minimum: 0.0,
+    maximum: 4.0,
+}];
+const FILTER_PARAMS: [ParamSpec; 2] = [
+    ParamSpec {
+        name: "cutoff",
+        default: 1200.0,
+        minimum: 20.0,
+        maximum: 20_000.0,
+    },
+    ParamSpec {
+        name: "resonance",
+        default: 0.2,
+        minimum: 0.0,
+        maximum: 1.0,
+    },
+];
+const DRIVE_PARAMS: [ParamSpec; 1] = [ParamSpec {
+    name: "drive",
+    default: 1.0,
+    minimum: 0.0,
+    maximum: 10.0,
+}];
+const DELAY_PARAMS: [ParamSpec; 2] = [
+    ParamSpec {
+        name: "time",
+        default: 0.25,
+        minimum: 0.001,
+        maximum: 2.0,
+    },
+    ParamSpec {
+        name: "feedback",
+        default: 0.2,
+        minimum: 0.0,
+        maximum: 0.95,
+    },
+];
+
+const GAIN_INPUTS: [AudioSocketSpec; 2] = [
+    AudioSocketSpec {
+        id: "in",
+        name: "Audio",
+        ty: SocketType::Audio,
+        default: 0.0,
+    },
+    AudioSocketSpec {
+        id: "gain",
+        name: "Gain",
+        ty: SocketType::Float,
+        default: 1.0,
+    },
+];
+const FILTER_INPUTS: [AudioSocketSpec; 3] = [
+    AudioSocketSpec {
+        id: "in",
+        name: "Audio",
+        ty: SocketType::Audio,
+        default: 0.0,
+    },
+    AudioSocketSpec {
+        id: "cutoff",
+        name: "Cutoff",
+        ty: SocketType::Float,
+        default: 1200.0,
+    },
+    AudioSocketSpec {
+        id: "resonance",
+        name: "Resonance",
+        ty: SocketType::Float,
+        default: 0.2,
+    },
+];
+const MIX_INPUTS: [AudioSocketSpec; 2] = [
+    AudioSocketSpec {
+        id: "in1",
+        name: "A",
+        ty: SocketType::Audio,
+        default: 0.0,
+    },
+    AudioSocketSpec {
+        id: "in2",
+        name: "B",
+        ty: SocketType::Audio,
+        default: 0.0,
+    },
+];
+
+/// Audio 域节点类型注册表。
+pub const AUDIO_NODE_TYPES: &[AudioNodeType] = &[
+    AudioNodeType {
+        id: "audio.group",
+        name: "Voice Group",
+        category: "Instrument",
+        inputs: &[],
+        outputs: &AUDIO_OUT,
+        params: &[],
+    },
+    AudioNodeType {
+        id: "audio.output",
+        name: "Output",
+        category: "Output",
+        inputs: &[AudioSocketSpec {
+            id: "in",
+            name: "Audio",
+            ty: SocketType::Audio,
+            default: 0.0,
+        }],
+        outputs: &[],
+        params: &[],
+    },
+    AudioNodeType {
+        id: "audio.gain",
+        name: "Gain",
+        category: "Audio",
+        inputs: &GAIN_INPUTS,
+        outputs: &AUDIO_OUT,
+        params: &GAIN_PARAMS,
+    },
+    AudioNodeType {
+        id: "audio.mix",
+        name: "Mix",
+        category: "Audio",
+        inputs: &MIX_INPUTS,
+        outputs: &AUDIO_OUT,
+        params: &[],
+    },
+    AudioNodeType {
+        id: "audio.filter.lowpass",
+        name: "Lowpass",
+        category: "Filter",
+        inputs: &FILTER_INPUTS,
+        outputs: &AUDIO_OUT,
+        params: &FILTER_PARAMS,
+    },
+    AudioNodeType {
+        id: "audio.filter.highpass",
+        name: "Highpass",
+        category: "Filter",
+        inputs: &FILTER_INPUTS,
+        outputs: &AUDIO_OUT,
+        params: &FILTER_PARAMS,
+    },
+    AudioNodeType {
+        id: "audio.drive",
+        name: "Drive",
+        category: "Audio",
+        inputs: &[
+            AudioSocketSpec {
+                id: "in",
+                name: "Audio",
+                ty: SocketType::Audio,
+                default: 0.0,
+            },
+            AudioSocketSpec {
+                id: "drive",
+                name: "Drive",
+                ty: SocketType::Float,
+                default: 1.0,
+            },
+        ],
+        outputs: &AUDIO_OUT,
+        params: &DRIVE_PARAMS,
+    },
+    AudioNodeType {
+        id: "audio.delay",
+        name: "Delay",
+        category: "Audio",
+        inputs: &[
+            AudioSocketSpec {
+                id: "in",
+                name: "Audio",
+                ty: SocketType::Audio,
+                default: 0.0,
+            },
+            AudioSocketSpec {
+                id: "time",
+                name: "Time",
+                ty: SocketType::Float,
+                default: 0.25,
+            },
+            AudioSocketSpec {
+                id: "feedback",
+                name: "Feedback",
+                ty: SocketType::Float,
+                default: 0.2,
+            },
+        ],
+        outputs: &AUDIO_OUT,
+        params: &DELAY_PARAMS,
+    },
+    AudioNodeType {
+        id: "audio.value",
+        name: "Value",
+        category: "Input",
+        inputs: &[],
+        outputs: &FLOAT_OUT,
+        params: &[ParamSpec {
+            name: "value",
+            default: 0.0,
+            minimum: -1000.0,
+            maximum: 1000.0,
+        }],
+    },
+];
+
+pub fn audio_node_type(id: &str) -> Option<&'static AudioNodeType> {
+    AUDIO_NODE_TYPES.iter().find(|node_type| node_type.id == id)
+}
+
+/// Audio 图中的一个节点。
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AudioNode {
+    pub id: NodeId,
+    pub type_id: String,
+    #[serde(default)]
+    pub params: BTreeMap<String, f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub position: Option<[f64; 2]>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub group: Option<String>,
+}
+
+impl AudioNode {
+    pub fn new(id: NodeId, type_id: &str) -> Self {
+        let params = audio_node_type(type_id)
+            .map(|node_type| {
+                node_type
+                    .params
+                    .iter()
+                    .map(|param| (param.name.to_string(), param.default))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Self {
+            id,
+            type_id: type_id.to_string(),
+            params,
+            position: None,
+            group: None,
+        }
+    }
+}
+
+/// Audio 图连接。
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AudioConnection {
+    pub from: PortRef,
+    pub to: PortRef,
+}
+
+impl AudioConnection {
+    pub fn new(from: PortRef, to: PortRef) -> Self {
+        Self { from, to }
+    }
+}
+
+/// 类型化 Audio 图。
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AudioGraph {
+    pub nodes: BTreeMap<NodeId, AudioNode>,
+    pub connections: Vec<AudioConnection>,
+}
+
+impl AudioGraph {
+    pub fn empty_track(group: &str) -> Self {
+        let mut instrument = AudioNode::new(NodeId::fixed("instrument"), "audio.group");
+        instrument.group = Some(group.to_string());
+        instrument.position = Some([60.0, 220.0]);
+        let mut output = AudioNode::new(NodeId::fixed("output"), "audio.output");
+        output.position = Some([940.0, 220.0]);
+        let mut nodes = BTreeMap::new();
+        nodes.insert(instrument.id.clone(), instrument);
+        nodes.insert(output.id.clone(), output);
+        Self {
+            nodes,
+            connections: vec![AudioConnection {
+                from: PortRef::fixed(NodeId::fixed("instrument"), "out"),
+                to: PortRef::fixed(NodeId::fixed("output"), "in"),
+            }],
+        }
+    }
+
+    pub fn node(&self, id: &NodeId) -> Option<&AudioNode> {
+        self.nodes.get(id)
+    }
+
+    pub fn inputs(node: &AudioNode) -> Result<Vec<AudioSocketSpec>, GraphError> {
+        audio_node_type(&node.type_id)
+            .map(|node_type| node_type.inputs.to_vec())
+            .ok_or_else(|| GraphError::UnknownAudioNodeType(node.type_id.clone()))
+    }
+
+    pub fn outputs(node: &AudioNode) -> Result<Vec<AudioSocketSpec>, GraphError> {
+        audio_node_type(&node.type_id)
+            .map(|node_type| node_type.outputs.to_vec())
+            .ok_or_else(|| GraphError::UnknownAudioNodeType(node.type_id.clone()))
+    }
+
+    pub fn validate(&self, groups: &BTreeMap<String, crate::NodeGroup>) -> Result<(), GraphError> {
+        let mut outputs = 0;
+        for node in self.nodes.values() {
+            let node_type = audio_node_type(&node.type_id)
+                .ok_or_else(|| GraphError::UnknownAudioNodeType(node.type_id.clone()))?;
+            if node.type_id == "audio.group" {
+                let group = node.group.as_deref().ok_or(GraphError::EmptyGroupId)?;
+                if !groups.contains_key(group) {
+                    return Err(GraphError::GroupMissing(group.to_string()));
+                }
+            }
+            for param in node_type.params {
+                if let Some(value) = node.params.get(param.name) {
+                    if !value.is_finite() || *value < param.minimum || *value > param.maximum {
+                        return Err(GraphError::InvalidParam {
+                            name: param.name.to_string(),
+                            value: *value,
+                            minimum: param.minimum,
+                            maximum: param.maximum,
+                        });
+                    }
+                }
+            }
+            if node.type_id == "audio.output" {
+                outputs += 1;
+            }
+        }
+        if outputs != 1 {
+            return Err(GraphError::AudioOutputCount(outputs));
+        }
+        let mut occupied = BTreeSet::new();
+        for connection in &self.connections {
+            let source = self
+                .nodes
+                .get(&connection.from.node)
+                .ok_or_else(|| GraphError::UnknownNode(connection.from.node.clone()))?;
+            let target = self
+                .nodes
+                .get(&connection.to.node)
+                .ok_or_else(|| GraphError::UnknownNode(connection.to.node.clone()))?;
+            let source_ports = Self::outputs(source)?;
+            let target_ports = Self::inputs(target)?;
+            let Some(source_port) = source_ports
+                .iter()
+                .find(|port| port.id == connection.from.port)
+            else {
+                return Err(GraphError::AudioUnknownPort(connection.from.port.clone()));
+            };
+            let Some(target_port) = target_ports
+                .iter()
+                .find(|port| port.id == connection.to.port)
+            else {
+                return Err(GraphError::AudioUnknownPort(connection.to.port.clone()));
+            };
+            if source_port.ty != target_port.ty {
+                return Err(GraphError::AudioTypeMismatch {
+                    from: source_port.ty,
+                    to: target_port.ty,
+                });
+            }
+            let key = (connection.to.node.clone(), connection.to.port.clone());
+            if !occupied.insert(key) {
+                return Err(GraphError::PortOccupied);
+            }
+        }
+        self.topological_order()?;
+        Ok(())
+    }
+
+    pub fn topological_order(&self) -> Result<Vec<NodeId>, GraphError> {
+        let mut incoming = BTreeMap::<NodeId, usize>::new();
+        let mut outgoing = BTreeMap::<NodeId, Vec<NodeId>>::new();
+        for id in self.nodes.keys() {
+            incoming.insert(id.clone(), 0);
+        }
+        for connection in &self.connections {
+            *incoming
+                .get_mut(&connection.to.node)
+                .ok_or_else(|| GraphError::UnknownNode(connection.to.node.clone()))? += 1;
+            outgoing
+                .entry(connection.from.node.clone())
+                .or_default()
+                .push(connection.to.node.clone());
+        }
+        let mut queue: VecDeque<NodeId> = incoming
+            .iter()
+            .filter(|(_, count)| **count == 0)
+            .map(|(id, _)| id.clone())
+            .collect();
+        let mut order = Vec::new();
+        while let Some(id) = queue.pop_front() {
+            order.push(id.clone());
+            for next in outgoing.get(&id).into_iter().flatten() {
+                let count = incoming
+                    .get_mut(next)
+                    .ok_or_else(|| GraphError::UnknownNode(next.clone()))?;
+                *count -= 1;
+                if *count == 0 {
+                    queue.push_back(next.clone());
+                }
+            }
+        }
+        if order.len() != self.nodes.len() {
+            return Err(GraphError::Cycle);
+        }
+        Ok(order)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::NodeGroup;
+
+    fn groups() -> BTreeMap<String, NodeGroup> {
+        BTreeMap::from([("piano.voice".to_string(), NodeGroup::piano_default())])
+    }
+
+    #[test]
+    fn default_audio_graph_validates() {
+        let graph = AudioGraph::empty_track("piano.voice");
+        graph.validate(&groups()).unwrap();
+        assert_eq!(graph.topological_order().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn audio_links_are_type_checked() {
+        let mut graph = AudioGraph::empty_track("piano.voice");
+        let value = NodeId::new("value").unwrap();
+        graph
+            .nodes
+            .insert(value.clone(), AudioNode::new(value.clone(), "audio.value"));
+        graph.connections.push(AudioConnection {
+            from: PortRef::new(value, "out"),
+            to: PortRef::fixed(NodeId::fixed("output"), "in"),
+        });
+        let error = graph.validate(&groups()).unwrap_err();
+        assert!(matches!(error, GraphError::AudioTypeMismatch { .. }));
+    }
+}

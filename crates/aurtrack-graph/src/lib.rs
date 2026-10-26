@@ -17,6 +17,12 @@
 )]
 #![cfg_attr(test, allow(clippy::unwrap_used))]
 
+mod audio;
+pub use audio::{
+    AUDIO_NODE_TYPES, AudioConnection, AudioGraph, AudioNode, AudioNodeType, AudioSocketSpec,
+    audio_node_type,
+};
+
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 
@@ -2115,6 +2121,14 @@ pub enum GraphError {
     GroupAudioOutput,
     #[error("节点组循环引用：{0}")]
     GroupCycle(String),
+    #[error("未知的 Audio 节点类型：{0}")]
+    UnknownAudioNodeType(String),
+    #[error("Audio 图必须恰好有一个 audio.output，当前 {0} 个")]
+    AudioOutputCount(usize),
+    #[error("Audio 端口不存在：{0}")]
+    AudioUnknownPort(String),
+    #[error("Audio 端口类型不匹配：{from:?} → {to:?}")]
+    AudioTypeMismatch { from: SocketType, to: SocketType },
 }
 
 #[cfg(test)]
