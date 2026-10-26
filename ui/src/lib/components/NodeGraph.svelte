@@ -1039,6 +1039,31 @@
     event.stopPropagation();
     const point = worldPoint(event);
     if (!point) return;
+    if (event.ctrlKey && side === "in" && !wireDrag) {
+      const existing = connections.find(
+        (connection) =>
+          connection.to.node === node.id && connection.to.port === port,
+      );
+      if (existing && track) {
+        void onDisconnect(
+          track.id,
+          existing.from.node,
+          existing.from.port,
+          existing.to.node,
+          existing.to.port,
+        );
+        wireDrag = {
+          side: "out",
+          node: existing.from.node,
+          port: existing.from.port,
+          x: point.x,
+          y: point.y,
+          moved: false,
+        };
+        wireHover = null;
+        return;
+      }
+    }
     wireDrag = {
       side,
       node: node.id,

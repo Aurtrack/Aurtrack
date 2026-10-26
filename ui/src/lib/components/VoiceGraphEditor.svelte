@@ -572,6 +572,37 @@
     if (circleMode) return;
     event.preventDefault();
     event.stopPropagation();
+    const point = worldPoint(event);
+    if (!point) return;
+    if (event.ctrlKey && side === "in" && !wire) {
+      const existing = voice.connections.find(
+        (connection) =>
+          connection.to.node === node.id && connection.to.port === port.id,
+      );
+      const source = existing ? voice.nodes[existing.from.node] : undefined;
+      const sourcePort =
+        existing && source
+          ? outputList(source).find(
+              (candidate) => candidate.id === existing.from.port,
+            )
+          : undefined;
+      if (existing && source && sourcePort) {
+        voice.connections = voice.connections.filter(
+          (connection) => connection !== existing,
+        );
+        selectOnly(source.id);
+        wireMoved = false;
+        wire = {
+          node: source.id,
+          port: sourcePort.id,
+          side: "out",
+          ty: sourcePort.ty,
+          x: point.x,
+          y: point.y,
+        };
+        return;
+      }
+    }
     if (wire) {
       if (wire.side !== side) finishWire(event, node, port);
       else wire = null;
@@ -580,8 +611,6 @@
     pendingLink = null;
     selectOnly(node.id);
     wireMoved = false;
-    const point = worldPoint(event);
-    if (!point) return;
     wire = {
       node: node.id,
       port: port.id,
