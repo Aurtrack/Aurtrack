@@ -842,6 +842,26 @@ fn duplicate_nodes_copies_params_and_position() {
 }
 
 #[test]
+fn node_types_expose_audio_registry() {
+    let mut session = Session::default();
+    let types = run(&mut session, "node.types", json!({}));
+    assert!(
+        types["audio_types"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|node_type| node_type["id"] == "audio.filter.highpass")
+    );
+    assert!(
+        types["types"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|node_type| node_type["id"] == "math.add")
+    );
+}
+
+#[test]
 fn highpass_and_drive_render() {
     let mut session = Session::default();
     run(&mut session, "project.create", json!({}));

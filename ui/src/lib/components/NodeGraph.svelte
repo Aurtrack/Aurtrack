@@ -1,5 +1,11 @@
 <script lang="ts">
-  import type { GraphConnection, GraphNode, NodeGroup, Track } from "../api";
+  import type {
+    GraphConnection,
+    GraphNode,
+    NodeGroup,
+    NodeTypeInfo,
+    Track,
+  } from "../api";
   import { formatNumber, t } from "../i18n.svelte";
   import { session } from "../session.svelte";
   import NumberField from "./NumberField.svelte";
@@ -57,6 +63,42 @@
     onRemoveMany,
     onParamChange,
   }: Props = $props();
+
+  let audioTypeById = $derived(
+    new Map(session.audioNodeTypes.map((nodeType) => [nodeType.id, nodeType])),
+  );
+  let deviceCategories = $derived.by(() => {
+    const groups = new Map<string, NodeTypeInfo[]>();
+    for (const nodeType of session.audioNodeTypes) {
+      if (
+        nodeType.category === "Instrument" ||
+        nodeType.category === "Output" ||
+        nodeType.category === "Input"
+      ) {
+        continue;
+      }
+      const group = groups.get(nodeType.category) ?? [];
+      group.push(nodeType);
+      groups.set(nodeType.category, group);
+    }
+    return [...groups.entries()];
+  });
+
+  function nodeTypeId(node: GraphNode): string {
+    if (node.type_id) return node.type_id;
+    if (node.kind === "amp.adsr") return "audio.adsr";
+    if (node.kind === "filter.lowpass") return "audio.filter.lowpass";
+    if (node.kind === "mix") return "audio.mix";
+    if (node.kind === "gain") return "audio.gain";
+    if (node.kind === "plugin") return "audio.plugin";
+    if (node.kind === "voice.group") return "audio.group";
+    if (node.kind === "instrument.sine") return "audio.instrument.sine";
+    return "audio.output";
+  }
+
+  function nodeType(node: GraphNode): NodeTypeInfo | undefined {
+    return audioTypeById.get(nodeTypeId(node));
+  }
 
   type Point = { x: number; y: number };
   type Position = Point & { w: number; h: number };
@@ -243,15 +285,10 @@
   }
 
   function nodeLabel(node: GraphNode): string {
-    if (node.kind === "instrument.sine") return t("graph.sine");
+    const info = nodeType(node);
+    if (info) return info.name.toUpperCase();
     if (node.kind === "instrument.silence") return t("graph.silence");
-    if (node.kind === "instrument.piano") return t("graph.piano");
     if (node.kind === "voice.group") return t("graph.group");
-    if (node.kind === "amp.adsr") return t("graph.adsr");
-    if (node.kind === "filter.lowpass") return t("graph.filter");
-    if (node.kind === "gain") return t("graph.gain");
-    if (node.kind === "mix") return t("graph.mix");
-    if (node.kind === "plugin") return t("graph.plugin");
     if (node.kind === "output") return t("graph.output");
     return node.kind.toUpperCase();
   }
@@ -282,12 +319,12 @@
   }
 
   function isDevice(node: GraphNode): boolean {
+    const category = nodeType(node)?.category;
     return (
-      node.kind === "amp.adsr" ||
-      node.kind === "filter.lowpass" ||
-      node.kind === "gain" ||
-      node.kind === "mix" ||
-      node.kind === "plugin"
+      category !== undefined &&
+      category !== "Instrument" &&
+      category !== "Output" &&
+      category !== "Input"
     );
   }
 
@@ -298,14 +335,10 @@
   type InputPort = { port: string; y: number };
 
   function inputPorts(node: GraphNode): InputPort[] {
-    if (node.kind.startsWith("instrument.")) return [];
-    if (node.kind === "mix") {
-      return [
-        { port: "in1", y: 22 },
-        { port: "in2", y: 54 },
-      ];
-    }
-    return [{ port: "in", y: HEADER_PORT_Y }];
+    return (nodeType(node)?.inputs ?? []).map((input, index) => ({
+      port: input.id,
+      y: 22 + index * 26,
+    }));
   }
 
   function outputPoint(nodeId: string): Point | null {
@@ -970,7 +1003,52 @@
               ></button>
             {/each}
 
-            {#if node.kind === "instrument.sine"}
+            {#if nodeTypeId(node) === "audio.drive"}
+              <label class="graph-param-row">
+                <span>DRIVE</span>
+                <NumberField
+                  value={paramOf(node, "drive", 1)}
+                  min={0}
+                  max={10}
+                  step={0.1}
+                  precision={1}
+                  disabled={busy}
+                  onchange={(value) =>
+                    onParamChange(owner.id, node.id, "drive", value)}
+                />
+              </label>
+            {:else if nodeTypeId(node) === "audio.delay"}
+              <div class="graph-param-grid">
+                <label>
+                  <span>TIME</span>
+                  <NumberField
+                    value={paramOf(node, "time", 0.25)}
+                    min={0.001}
+                    max={2}
+                    step={0.01}
+                    precision={2}
+                    suffix="s"
+                    disabled={busy}
+                    onchange={(value) =>
+                      onParamChange(owner.id, node.id, "time", value)}
+                  />
+                </label>
+                <label>
+                  <span>FEEDBACK</span>
+                  <NumberField
+                    value={Math.round(paramOf(node, "feedback", 0.2) * 100)}
+                    min={0}
+                    max={95}
+                    step={1}
+                    precision={0}
+                    suffix="%"
+                    disabled={busy}
+                    onchange={(value) =>
+                      onParamChange(owner.id, node.id, "feedback", value / 100)}
+                  />
+                </label>
+              </div>
+            {:else if node.kind === "instrument.sine"}
               <div class="graph-param-row">
                 <span>{t("graph.frequency")}</span>
                 <strong
@@ -1262,35 +1340,19 @@
           tabindex="-1"
           onmousedown={(event) => event.stopPropagation()}
         >
-          <div class="graph-menu-label">{t("graph.menuAudio")}</div>
-          <button
-            role="menuitem"
-            disabled={busy || hasAdsr}
-            onclick={() => addNode("amp.adsr")}
-          >
-            {t("graph.addAdsr")}
-          </button>
-          <button
-            role="menuitem"
-            disabled={busy}
-            onclick={() => addNode("filter.lowpass")}
-          >
-            {t("graph.addFilter")}
-          </button>
-          <button
-            role="menuitem"
-            disabled={busy}
-            onclick={() => addNode("mix")}
-          >
-            {t("graph.addMix")}
-          </button>
-          <button
-            role="menuitem"
-            disabled={busy}
-            onclick={() => addNode("gain")}
-          >
-            {t("graph.addGain")}
-          </button>
+          {#each deviceCategories as [category, types] (category)}
+            <div class="graph-menu-label">{category}</div>
+            {#each types as nodeType (nodeType.id)}
+              <button
+                role="menuitem"
+                disabled={busy ||
+                  (nodeType.id === "audio.adsr" && hasAdsr)}
+                onclick={() => addNode(nodeType.id)}
+              >
+                {nodeType.name}
+              </button>
+            {/each}
+          {/each}
         </div>
       {/if}
     </div>

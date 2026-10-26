@@ -528,27 +528,8 @@ impl Session {
             "track.create" => self.cmd_track_create(&request.args),
             "track.remove" => self.cmd_track_remove(&request.args),
             "node.types" => Ok(CommandResponse::ok(json!({
-                "types": aurtrack_graph::VOICE_NODE_TYPES.iter().map(|node_type| json!({
-                    "id": node_type.id,
-                    "name": node_type.name,
-                    "category": node_type.category,
-                    "inputs": node_type.inputs.iter().map(|socket| json!({
-                        "id": socket.id,
-                        "name": socket.name,
-                        "type": socket.ty,
-                    })).collect::<Vec<_>>(),
-                    "outputs": node_type.outputs.iter().map(|socket| json!({
-                        "id": socket.id,
-                        "name": socket.name,
-                        "type": socket.ty,
-                    })).collect::<Vec<_>>(),
-                    "params": node_type.params.iter().map(|param| json!({
-                        "name": param.name,
-                        "default": param.default,
-                        "minimum": param.minimum,
-                        "maximum": param.maximum,
-                    })).collect::<Vec<_>>(),
-                })).collect::<Vec<_>>(),
+                "types": voice_types_json(),
+                "audio_types": audio_types_json(),
             }))),
             "group.create" => self.cmd_group_create(&request.args),
             "group.delete" => self.cmd_group_delete(&request.args),
@@ -781,15 +762,15 @@ impl Session {
     ) -> Result<CommandResponse, CommandError> {
         let args: DeviceAddArgs = parse_args(args)?;
         let type_id = match args.kind.as_str() {
-            "gain" => "audio.gain",
-            "amp.adsr" => "audio.adsr",
-            "filter.lowpass" => "audio.filter.lowpass",
-            "filter.highpass" => "audio.filter.highpass",
-            "drive" => "audio.drive",
-            "delay" => "audio.delay",
-            "mix" => "audio.mix",
-            "plugin" => "audio.plugin",
-            "value" => "audio.value",
+            "gain" | "audio.gain" => "audio.gain",
+            "amp.adsr" | "audio.adsr" => "audio.adsr",
+            "filter.lowpass" | "audio.filter.lowpass" => "audio.filter.lowpass",
+            "filter.highpass" | "audio.filter.highpass" => "audio.filter.highpass",
+            "drive" | "audio.drive" => "audio.drive",
+            "delay" | "audio.delay" => "audio.delay",
+            "mix" | "audio.mix" => "audio.mix",
+            "plugin" | "audio.plugin" => "audio.plugin",
+            "value" | "audio.value" => "audio.value",
             other => {
                 return Err(CommandError::invalid_args(format!(
                     "不支持的 kind：{other}"
@@ -2601,6 +2582,66 @@ fn project_view(project: &Project) -> Value {
             "clips": track.clips.iter().map(|clip| clip_view(project, clip)).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
     })
+}
+
+fn voice_types_json() -> Vec<Value> {
+    aurtrack_graph::VOICE_NODE_TYPES
+        .iter()
+        .map(|node_type| {
+            json!({
+                "id": node_type.id,
+                "name": node_type.name,
+                "category": node_type.category,
+                "inputs": node_type.inputs.iter().map(|socket| json!({
+                    "id": socket.id,
+                    "name": socket.name,
+                    "type": socket.ty,
+                })).collect::<Vec<_>>(),
+                "outputs": node_type.outputs.iter().map(|socket| json!({
+                    "id": socket.id,
+                    "name": socket.name,
+                    "type": socket.ty,
+                })).collect::<Vec<_>>(),
+                "params": node_type.params.iter().map(|param| json!({
+                    "name": param.name,
+                    "default": param.default,
+                    "minimum": param.minimum,
+                    "maximum": param.maximum,
+                })).collect::<Vec<_>>(),
+            })
+        })
+        .collect()
+}
+
+fn audio_types_json() -> Vec<Value> {
+    aurtrack_graph::AUDIO_NODE_TYPES
+        .iter()
+        .map(|node_type| {
+            json!({
+                "id": node_type.id,
+                "name": node_type.name,
+                "category": node_type.category,
+                "inputs": node_type.inputs.iter().map(|socket| json!({
+                    "id": socket.id,
+                    "name": socket.name,
+                    "type": socket.ty,
+                    "default": socket.default,
+                })).collect::<Vec<_>>(),
+                "outputs": node_type.outputs.iter().map(|socket| json!({
+                    "id": socket.id,
+                    "name": socket.name,
+                    "type": socket.ty,
+                    "default": socket.default,
+                })).collect::<Vec<_>>(),
+                "params": node_type.params.iter().map(|param| json!({
+                    "name": param.name,
+                    "default": param.default,
+                    "minimum": param.minimum,
+                    "maximum": param.maximum,
+                })).collect::<Vec<_>>(),
+            })
+        })
+        .collect()
 }
 
 fn legacy_audio_kind(type_id: &str) -> &'static str {

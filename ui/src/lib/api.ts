@@ -49,6 +49,7 @@ export type Source =
 export type GraphNode = {
   id: string;
   kind: string;
+  type_id?: string;
   params: Record<string, number>;
   position?: [number, number];
   plugin?: { path: string; id: string; state?: string };
@@ -88,6 +89,7 @@ export type NodeTypeSocket = {
   id: string;
   name: string;
   type: "float" | "gate" | "audio";
+  default?: number;
 };
 
 export type NodeTypeParam = {

@@ -127,6 +127,7 @@ function loadRecentProjects(): RecentProject[] {
 export class SessionStore {
   private project = $state<Project | null>(null);
   private nodeTypesState = $state<NodeTypeInfo[]>([]);
+  private audioNodeTypesState = $state<NodeTypeInfo[]>([]);
   selectedTrackId = $state("");
   selectedClipId = $state("");
   selectedNoteIds = $state<string[]>([]);
@@ -794,6 +795,10 @@ export class SessionStore {
 
   get nodeTypes(): NodeTypeInfo[] {
     return this.nodeTypesState;
+  }
+
+  get audioNodeTypes(): NodeTypeInfo[] {
+    return this.audioNodeTypesState;
   }
 
   async setGroupVoice(
@@ -1816,8 +1821,12 @@ export class SessionStore {
         "describe",
       );
       this.commandCount = description.commands.length;
-      const nodeTypes = await call<{ types: NodeTypeInfo[] }>("node.types");
+      const nodeTypes = await call<{
+        types: NodeTypeInfo[];
+        audio_types: NodeTypeInfo[];
+      }>("node.types");
       this.nodeTypesState = nodeTypes.types;
+      this.audioNodeTypesState = nodeTypes.audio_types;
       this.setStatus("status.ready");
     } catch (error) {
       this.fail("status.initFailed", error);
