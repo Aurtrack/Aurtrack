@@ -119,20 +119,12 @@ const FILTER_INPUTS: [AudioSocketSpec; 3] = [
         default: 0.2,
     },
 ];
-const MIX_INPUTS: [AudioSocketSpec; 2] = [
-    AudioSocketSpec {
-        id: "in1",
-        name: "A",
-        ty: SocketType::Audio,
-        default: 0.0,
-    },
-    AudioSocketSpec {
-        id: "in2",
-        name: "B",
-        ty: SocketType::Audio,
-        default: 0.0,
-    },
-];
+const MIX_INPUTS: [AudioSocketSpec; 1] = [AudioSocketSpec {
+    id: "in",
+    name: "Audio",
+    ty: SocketType::Audio,
+    default: 0.0,
+}];
 
 /// Audio 域节点类型注册表。
 pub const AUDIO_NODE_TYPES: &[AudioNodeType] = &[
@@ -434,6 +426,11 @@ pub const AUDIO_NODE_TYPES: &[AudioNodeType] = &[
 
 pub fn audio_node_type(id: &str) -> Option<&'static AudioNodeType> {
     AUDIO_NODE_TYPES.iter().find(|node_type| node_type.id == id)
+}
+
+/// 多输入节点允许同一个 socket 接多条连线。
+pub fn audio_multi_input(id: &str) -> bool {
+    id == "audio.mix"
 }
 
 /// Audio 图中的一个节点。
@@ -910,9 +907,11 @@ impl AudioGraph {
                     to: target_port.ty,
                 });
             }
-            let key = (connection.to.node.clone(), connection.to.port.clone());
-            if !occupied.insert(key) {
-                return Err(GraphError::PortOccupied);
+            if !audio_multi_input(&target.type_id) {
+                let key = (connection.to.node.clone(), connection.to.port.clone());
+                if !occupied.insert(key) {
+                    return Err(GraphError::PortOccupied);
+                }
             }
         }
         self.topological_order()?;

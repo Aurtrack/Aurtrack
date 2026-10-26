@@ -20,7 +20,7 @@
 mod audio;
 pub use audio::{
     AUDIO_NODE_TYPES, AudioConnection, AudioGraph, AudioNode, AudioNodeType, AudioSocketSpec,
-    audio_node_type,
+    audio_multi_input, audio_node_type,
 };
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};

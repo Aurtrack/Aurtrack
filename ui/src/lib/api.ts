@@ -103,6 +103,7 @@ export type NodeTypeInfo = {
   id: string;
   name: string;
   category: string;
+  multi_input?: boolean;
   inputs: NodeTypeSocket[];
   outputs: NodeTypeSocket[];
   params: NodeTypeParam[];

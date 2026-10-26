@@ -292,9 +292,15 @@ impl Track {
             .iter()
             .filter(|port| port.ty == aurtrack_graph::SocketType::Audio)
         {
-            let Some(connection) = self.graph.connections.iter().find(|connection| {
-                connection.to.node() == &node.id && connection.to.port() == port.id
-            }) else {
+            let connections: Vec<_> = self
+                .graph
+                .connections
+                .iter()
+                .filter(|connection| {
+                    connection.to.node() == &node.id && connection.to.port() == port.id
+                })
+                .collect();
+            if connections.is_empty() {
                 let index = nodes.len();
                 nodes.push(GraphNodePlan {
                     op: GraphOp::Constant(0.0),
@@ -303,13 +309,15 @@ impl Track {
                 });
                 inputs.push(index);
                 continue;
-            };
-            inputs.push(
-                indices
-                    .get(connection.from.node())
-                    .copied()
-                    .ok_or(GraphError::NotConnected)?,
-            );
+            }
+            for connection in connections {
+                inputs.push(
+                    indices
+                        .get(connection.from.node())
+                        .copied()
+                        .ok_or(GraphError::NotConnected)?,
+                );
+            }
         }
         Ok(inputs)
     }
@@ -2676,6 +2684,7 @@ fn audio_types_json() -> Vec<Value> {
                 "id": node_type.id,
                 "name": node_type.name,
                 "category": node_type.category,
+                "multi_input": aurtrack_graph::audio_multi_input(node_type.id),
                 "inputs": node_type.inputs.iter().map(|socket| json!({
                     "id": socket.id,
                     "name": socket.name,

@@ -1040,7 +1040,7 @@ fn branch_graph_connects_mix_and_renders() {
         json!({
             "from": "/tracks/track-1/nodes/instrument",
             "to": format!("/tracks/track-1/nodes/{mix_id}"),
-            "to_port": "in2"
+            "to_port": "in"
         }),
     );
     let state = run(&mut session, "project.state", json!({}));
@@ -1066,7 +1066,7 @@ fn branch_graph_connects_mix_and_renders() {
         json!({
             "from": "/tracks/track-1/nodes/instrument",
             "to": format!("/tracks/track-1/nodes/{mix_id}"),
-            "to_port": "in2"
+            "to_port": "in"
         }),
     );
     let state = run(&mut session, "project.state", json!({}));
