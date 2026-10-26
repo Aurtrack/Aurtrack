@@ -34,7 +34,8 @@ use aurtrack_engine::{
     midi_to_hz, note_envelope,
 };
 use aurtrack_graph::{
-    GraphError, NodeGroup, NodeGroupInterface, NodeGroupSocketType, NodeId, PortRef, VoiceGraph,
+    GraphError, NodeGroup, NodeGroupInterface, NodeGroupSocket, NodeGroupSocketType, NodeId,
+    PortRef, VoiceConnection, VoiceGraph, VoiceNode, node_inputs, node_outputs,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -600,6 +601,8 @@ impl Session {
             "group.rename" => self.cmd_group_rename(&request.args),
             "group.interface" => self.cmd_group_interface(&request.args),
             "group.voice" => self.cmd_group_voice(&request.args),
+            "group.from_nodes" => self.cmd_group_from_nodes(&request.args),
+            "group.ungroup" => self.cmd_group_ungroup(&request.args),
             "clip.create" => self.cmd_clip_create(&request.args),
             "clip.update" => self.cmd_clip_update(&request.args),
             "clip.remove" => self.cmd_clip_remove(&request.args),
@@ -1304,6 +1307,423 @@ impl Session {
         Ok(CommandResponse::ok(json!({
             "group_id": args.group_id,
             "voice": "updated",
+        }))
+        .with_undo(token))
+    }
+
+    fn cmd_group_from_nodes(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct FromNodesArgs {
+            source_group_id: String,
+            node_ids: Vec<String>,
+            #[serde(default)]
+            name: Option<String>,
+            #[serde(default)]
+            group_id: Option<String>,
+        }
+
+        struct InputBoundary {
+            socket: NodeGroupSocket,
+            target: PortRef,
+            external: PortRef,
+        }
+        struct OutputBoundary {
+            socket: NodeGroupSocket,
+            source: PortRef,
+            external: PortRef,
+        }
+
+        let args: FromNodesArgs = parse_args(args)?;
+        if args.node_ids.is_empty() {
+            return Err(CommandError::invalid_args("node_ids 不能为空"));
+        }
+        let token = self.snapshot("group.from_nodes");
+        let project = self
+            .project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let mut groups = project.node_groups.clone();
+        let source = groups.get(&args.source_group_id).cloned().ok_or_else(|| {
+            CommandError::not_found(format!("找不到节点组：{}", args.source_group_id))
+        })?;
+
+        let mut selected = BTreeSet::new();
+        for raw in &args.node_ids {
+            let id = NodeId::new(raw.clone()).map_err(graph_error)?;
+            let node = source
+                .graph
+                .nodes
+                .get(&id)
+                .ok_or_else(|| CommandError::not_found(format!("找不到节点：{id}")))?;
+            if matches!(node.type_id.as_str(), "group.input" | "group.output") {
+                return Err(CommandError::invalid_args("不能把组输入/输出打成组"));
+            }
+            if node.group.as_deref() == Some(args.source_group_id.as_str()) {
+                return Err(CommandError::invalid_args("不能把组自身放进子组"));
+            }
+            selected.insert(id);
+        }
+
+        let group_id = if let Some(id) = args.group_id {
+            NodeId::new(id.clone()).map_err(graph_error)?;
+            if groups.contains_key(&id) {
+                return Err(CommandError::invalid_args(format!("节点组已存在：{id}")));
+            }
+            id
+        } else {
+            let mut number = groups.len() + 1;
+            loop {
+                let id = format!("group-{number}");
+                if !groups.contains_key(&id) {
+                    break id;
+                }
+                number += 1;
+            }
+        };
+        let name = args
+            .name
+            .unwrap_or_else(|| format!("Group {group_id}"))
+            .trim()
+            .to_string();
+        if name.is_empty() {
+            return Err(CommandError::invalid_args("name 不能为空"));
+        }
+
+        let mut inputs = Vec::new();
+        let mut outputs = Vec::new();
+        for connection in &source.graph.connections {
+            let from_selected = selected.contains(connection.from().node());
+            let to_selected = selected.contains(connection.to().node());
+            if from_selected == to_selected {
+                continue;
+            }
+            if to_selected {
+                let target_node = source
+                    .graph
+                    .nodes
+                    .get(connection.to().node())
+                    .ok_or_else(|| CommandError::not_found("连线目标节点不存在"))?;
+                let ports =
+                    node_inputs(target_node, &source.interface, &groups).map_err(graph_error)?;
+                let port = ports
+                    .iter()
+                    .find(|port| port.id == connection.to().port())
+                    .ok_or_else(|| CommandError::invalid_args("连线目标端口不存在"))?;
+                let socket =
+                    NodeGroupSocket::new(&format!("in-{}", inputs.len() + 1), &port.name, port.ty);
+                inputs.push(InputBoundary {
+                    socket,
+                    target: connection.to().clone(),
+                    external: connection.from().clone(),
+                });
+            } else {
+                let source_node = source
+                    .graph
+                    .nodes
+                    .get(connection.from().node())
+                    .ok_or_else(|| CommandError::not_found("连线来源节点不存在"))?;
+                let ports =
+                    node_outputs(source_node, &source.interface, &groups).map_err(graph_error)?;
+                let port = ports
+                    .iter()
+                    .find(|port| port.id == connection.from().port())
+                    .ok_or_else(|| CommandError::invalid_args("连线来源端口不存在"))?;
+                let socket = NodeGroupSocket::new(
+                    &format!("out-{}", outputs.len() + 1),
+                    &port.name,
+                    port.ty,
+                );
+                outputs.push(OutputBoundary {
+                    socket,
+                    source: connection.from().clone(),
+                    external: connection.to().clone(),
+                });
+            }
+        }
+
+        let mut interface = NodeGroupInterface::empty();
+        interface.inputs = inputs
+            .iter()
+            .map(|boundary| boundary.socket.clone())
+            .collect();
+        interface.outputs = outputs
+            .iter()
+            .map(|boundary| boundary.socket.clone())
+            .collect();
+        let mut child = VoiceGraph::shell(&interface);
+        for id in &selected {
+            if let Some(node) = source.graph.nodes.get(id) {
+                child.nodes.insert(id.clone(), node.clone());
+            }
+        }
+        for connection in &source.graph.connections {
+            if selected.contains(connection.from().node())
+                && selected.contains(connection.to().node())
+            {
+                child.connections.push(connection.clone());
+            }
+        }
+        let input_node_id = NodeId::new("voice-in").map_err(graph_error)?;
+        let output_node_id = NodeId::new("out").map_err(graph_error)?;
+        for boundary in &inputs {
+            child.connections.push(VoiceConnection::new(
+                PortRef::new(input_node_id.clone(), boundary.socket.id.clone()),
+                boundary.target.clone(),
+            ));
+        }
+        for boundary in &outputs {
+            child.connections.push(VoiceConnection::new(
+                boundary.source.clone(),
+                PortRef::new(output_node_id.clone(), boundary.socket.id.clone()),
+            ));
+        }
+        let child_group = NodeGroup::new(group_id.clone(), name.clone(), interface, child);
+        child_group
+            .validate_with_groups(&groups)
+            .map_err(graph_error)?;
+
+        groups.insert(group_id.clone(), child_group);
+        let parent = groups
+            .get_mut(&args.source_group_id)
+            .ok_or_else(|| CommandError::not_found("源节点组不存在"))?;
+        for id in &selected {
+            parent.graph.nodes.remove(id);
+        }
+        parent.graph.connections.retain(|connection| {
+            !selected.contains(connection.from().node())
+                && !selected.contains(connection.to().node())
+        });
+
+        let mut number = 1;
+        let group_node_id = loop {
+            let candidate = NodeId::new(format!("group-{number}")).map_err(graph_error)?;
+            if !parent.graph.nodes.contains_key(&candidate) {
+                break candidate;
+            }
+            number += 1;
+        };
+        let positions: Vec<[f64; 2]> = selected
+            .iter()
+            .filter_map(|id| source.graph.nodes.get(id)?.position)
+            .collect();
+        let position = if positions.is_empty() {
+            [80.0, 80.0]
+        } else {
+            let count = positions.len() as f64;
+            [
+                positions.iter().map(|position| position[0]).sum::<f64>() / count,
+                positions.iter().map(|position| position[1]).sum::<f64>() / count,
+            ]
+        };
+        let mut group_node = VoiceNode::new(group_node_id.clone(), "voice.group");
+        group_node.position = Some(position);
+        group_node.group = Some(group_id.clone());
+        parent.graph.nodes.insert(group_node_id.clone(), group_node);
+        for boundary in &inputs {
+            parent.graph.connections.push(VoiceConnection::new(
+                boundary.external.clone(),
+                PortRef::new(group_node_id.clone(), boundary.socket.id.clone()),
+            ));
+        }
+        for boundary in &outputs {
+            parent.graph.connections.push(VoiceConnection::new(
+                PortRef::new(group_node_id.clone(), boundary.socket.id.clone()),
+                boundary.external.clone(),
+            ));
+        }
+        let parent_interface = parent.interface.clone();
+        let parent_graph = parent.graph.clone();
+        parent_graph
+            .validate_with_groups(&parent_interface, &groups)
+            .map_err(graph_error)?;
+
+        project.node_groups = groups;
+        Ok(CommandResponse::ok(json!({
+            "group_id": group_id,
+            "node_id": group_node_id,
+            "name": name,
+        }))
+        .with_undo(token))
+    }
+
+    fn cmd_group_ungroup(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct UngroupArgs {
+            group_id: String,
+            node_id: String,
+        }
+        let args: UngroupArgs = parse_args(args)?;
+        let token = self.snapshot("group.ungroup");
+        let project = self
+            .project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let mut groups = project.node_groups.clone();
+        let source = groups
+            .get(&args.group_id)
+            .cloned()
+            .ok_or_else(|| CommandError::not_found(format!("找不到节点组：{}", args.group_id)))?;
+        let group_node_id = NodeId::new(args.node_id.clone()).map_err(graph_error)?;
+        let group_node = source
+            .graph
+            .nodes
+            .get(&group_node_id)
+            .cloned()
+            .ok_or_else(|| CommandError::not_found(format!("找不到节点：{}", args.node_id)))?;
+        if group_node.type_id != "voice.group" {
+            return Err(CommandError::invalid_args("只有组节点可以解组"));
+        }
+        let child_id = group_node
+            .group
+            .clone()
+            .ok_or_else(|| CommandError::invalid_args("组节点没有引用节点组"))?;
+        let child = groups
+            .get(&child_id)
+            .cloned()
+            .ok_or_else(|| CommandError::not_found(format!("找不到节点组：{child_id}")))?;
+        let origin = group_node.position.unwrap_or([0.0, 0.0]);
+
+        let parent = groups
+            .get_mut(&args.group_id)
+            .ok_or_else(|| CommandError::not_found("源节点组不存在"))?;
+        let incoming: Vec<(PortRef, String)> = parent
+            .graph
+            .connections
+            .iter()
+            .filter(|connection| connection.to().node() == &group_node_id)
+            .map(|connection| {
+                (
+                    connection.from().clone(),
+                    connection.to().port().to_string(),
+                )
+            })
+            .collect();
+        let outgoing: Vec<(String, PortRef)> = parent
+            .graph
+            .connections
+            .iter()
+            .filter(|connection| connection.from().node() == &group_node_id)
+            .map(|connection| {
+                (
+                    connection.from().port().to_string(),
+                    connection.to().clone(),
+                )
+            })
+            .collect();
+
+        let mut id_map: BTreeMap<NodeId, NodeId> = BTreeMap::new();
+        for (old_id, child_node) in &child.graph.nodes {
+            if matches!(child_node.type_id.as_str(), "group.input" | "group.output") {
+                continue;
+            }
+            let mut suffix = 0;
+            let new_id = loop {
+                let candidate = if suffix == 0 {
+                    old_id.to_string()
+                } else {
+                    format!("{old_id}-{suffix}")
+                };
+                let candidate = NodeId::new(candidate).map_err(graph_error)?;
+                if !parent.graph.nodes.contains_key(&candidate)
+                    && !id_map.values().any(|id| id == &candidate)
+                {
+                    break candidate;
+                }
+                suffix += 1;
+            };
+            id_map.insert(old_id.clone(), new_id);
+        }
+        for (old_id, new_id) in &id_map {
+            let Some(node) = child.graph.nodes.get(old_id) else {
+                continue;
+            };
+            let mut node = node.clone();
+            node.id = new_id.clone();
+            if let Some(position) = node.position.as_mut() {
+                position[0] += origin[0];
+                position[1] += origin[1];
+            }
+            parent.graph.nodes.insert(new_id.clone(), node);
+        }
+        for connection in &child.graph.connections {
+            let (Some(from), Some(to)) = (
+                id_map.get(connection.from().node()),
+                id_map.get(connection.to().node()),
+            ) else {
+                continue;
+            };
+            parent.graph.connections.push(VoiceConnection::new(
+                PortRef::new(from.clone(), connection.from().port().to_string()),
+                PortRef::new(to.clone(), connection.to().port().to_string()),
+            ));
+        }
+        for socket in &child.interface.inputs {
+            let targets: Vec<PortRef> = child
+                .graph
+                .connections
+                .iter()
+                .filter(|connection| {
+                    connection.from().node().to_string() == "voice-in"
+                        && connection.from().port() == socket.id
+                })
+                .map(|connection| connection.to().clone())
+                .collect();
+            for (external, port) in &incoming {
+                if port != &socket.id {
+                    continue;
+                }
+                for target in &targets {
+                    let Some(new_target) = id_map.get(target.node()) else {
+                        continue;
+                    };
+                    parent.graph.connections.push(VoiceConnection::new(
+                        external.clone(),
+                        PortRef::new(new_target.clone(), target.port().to_string()),
+                    ));
+                }
+            }
+        }
+        for socket in &child.interface.outputs {
+            let sources: Vec<PortRef> = child
+                .graph
+                .connections
+                .iter()
+                .filter(|connection| {
+                    connection.to().node().to_string() == "out"
+                        && connection.to().port() == socket.id
+                })
+                .map(|connection| connection.from().clone())
+                .collect();
+            for (port, external) in &outgoing {
+                if port != &socket.id {
+                    continue;
+                }
+                for source in &sources {
+                    let Some(new_source) = id_map.get(source.node()) else {
+                        continue;
+                    };
+                    parent.graph.connections.push(VoiceConnection::new(
+                        PortRef::new(new_source.clone(), source.port().to_string()),
+                        external.clone(),
+                    ));
+                }
+            }
+        }
+        parent.graph.nodes.remove(&group_node_id);
+        parent.graph.connections.retain(|connection| {
+            connection.from().node() != &group_node_id && connection.to().node() != &group_node_id
+        });
+        let parent_interface = parent.interface.clone();
+        let parent_graph = parent.graph.clone();
+        parent_graph
+            .validate_with_groups(&parent_interface, &groups)
+            .map_err(graph_error)?;
+        project.node_groups = groups;
+        Ok(CommandResponse::ok(json!({
+            "group_id": args.group_id,
+            "node_ids": id_map.values().map(ToString::to_string).collect::<Vec<_>>(),
         }))
         .with_undo(token))
     }

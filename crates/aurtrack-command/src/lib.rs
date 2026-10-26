@@ -237,6 +237,32 @@ fn group_create_schema() -> Value {
     )
 }
 
+fn group_from_nodes_schema() -> Value {
+    object_schema(
+        json!({
+            "source_group_id": { "type": "string" },
+            "node_ids": {
+                "type": "array",
+                "items": { "type": "string" },
+                "minItems": 1
+            },
+            "name": { "type": "string" },
+            "group_id": { "type": "string" }
+        }),
+        &["source_group_id", "node_ids"],
+    )
+}
+
+fn group_ungroup_schema() -> Value {
+    object_schema(
+        json!({
+            "group_id": { "type": "string" },
+            "node_id": { "type": "string" }
+        }),
+        &["group_id", "node_id"],
+    )
+}
+
 fn group_delete_schema() -> Value {
     object_schema(json!({ "group_id": { "type": "string" } }), &["group_id"])
 }
@@ -805,7 +831,7 @@ fn transport_metronome_schema() -> Value {
     )
 }
 
-static COMMANDS: [CommandSpec; 59] = [
+static COMMANDS: [CommandSpec; 61] = [
     CommandSpec {
         id: "project.create",
         summary: "创建或替换当前工程",
@@ -979,6 +1005,18 @@ static COMMANDS: [CommandSpec; 59] = [
         summary: "替换节点组的 Voice 图",
         undo: UndoKind::Snapshot,
         input_schema: group_voice_schema,
+    },
+    CommandSpec {
+        id: "group.from_nodes",
+        summary: "把选中节点打包成子节点组",
+        undo: UndoKind::Snapshot,
+        input_schema: group_from_nodes_schema,
+    },
+    CommandSpec {
+        id: "group.ungroup",
+        summary: "把组节点展开回父图",
+        undo: UndoKind::Snapshot,
+        input_schema: group_ungroup_schema,
     },
     CommandSpec {
         id: "device.add",

@@ -330,10 +330,10 @@ fn batch_note_edits_and_cross_track_clip_move_share_snapshots() {
 }
 
 #[test]
-fn describe_lists_fifty_nine_commands() {
+fn describe_lists_all_commands() {
     let mut session = Session::default();
     let out = run(&mut session, "describe", json!({}));
-    assert_eq!(out["commands"].as_array().unwrap().len(), 59);
+    assert_eq!(out["commands"].as_array().unwrap().len(), 61);
     assert!(out["project"].is_null());
 }
 
@@ -1476,6 +1476,77 @@ fn nested_group_compiles_into_voice_plan() {
         json!({ "group_id": "piano.voice", "voice": voice }),
     );
     let project = session.project().unwrap().clone();
+    let plan = project.tracks[0]
+        .playback_graph(&project.node_groups)
+        .unwrap()
+        .2;
+    assert!(plan.piano.unwrap().voice.unwrap().nodes.len() > 6);
+}
+
+#[test]
+fn group_from_nodes_rewires_boundaries() {
+    let mut session = Session::default();
+    run(
+        &mut session,
+        "project.create",
+        json!({ "name": "group-make" }),
+    );
+    run(
+        &mut session,
+        "track.create",
+        json!({ "name": "piano", "source": "piano" }),
+    );
+    let result = run(
+        &mut session,
+        "group.from_nodes",
+        json!({
+            "source_group_id": "piano.voice",
+            "node_ids": ["osc", "env"],
+            "name": "Osc Env"
+        }),
+    );
+    let group_id = result["group_id"].as_str().unwrap();
+    let node_id = result["node_id"].as_str().unwrap();
+    let project = session.project().unwrap();
+    let parent = &project.node_groups["piano.voice"];
+    assert!(!parent.graph.nodes.keys().any(|id| id.to_string() == "osc"));
+    assert!(!parent.graph.nodes.keys().any(|id| id.to_string() == "env"));
+    let group_node = parent
+        .graph
+        .nodes
+        .iter()
+        .find(|(id, _)| id.to_string() == node_id)
+        .map(|(_, node)| node)
+        .unwrap();
+    assert_eq!(group_node.type_id, "voice.group");
+    assert_eq!(group_node.group.as_deref(), Some(group_id));
+    let child = &project.node_groups[group_id];
+    assert_eq!(child.interface.inputs.len(), 2);
+    assert_eq!(child.interface.outputs.len(), 1);
+    assert!(child.graph.nodes.keys().any(|id| id.to_string() == "osc"));
+    assert!(child.graph.nodes.keys().any(|id| id.to_string() == "env"));
+    let plan = project.tracks[0]
+        .playback_graph(&project.node_groups)
+        .unwrap()
+        .2;
+    assert!(plan.piano.unwrap().voice.unwrap().nodes.len() > 6);
+
+    run(
+        &mut session,
+        "group.ungroup",
+        json!({ "group_id": "piano.voice", "node_id": node_id }),
+    );
+    let project = session.project().unwrap();
+    let parent = &project.node_groups["piano.voice"];
+    assert!(
+        !parent
+            .graph
+            .nodes
+            .keys()
+            .any(|id| id.to_string() == node_id)
+    );
+    assert!(parent.graph.nodes.keys().any(|id| id.to_string() == "osc"));
+    assert!(parent.graph.nodes.keys().any(|id| id.to_string() == "env"));
     let plan = project.tracks[0]
         .playback_graph(&project.node_groups)
         .unwrap()

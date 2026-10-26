@@ -449,6 +449,14 @@ pub struct NodeGroupInterface {
 }
 
 impl NodeGroupInterface {
+    /// 空接口，没有输入或输出 socket。
+    pub fn empty() -> Self {
+        Self {
+            inputs: Vec::new(),
+            outputs: Vec::new(),
+        }
+    }
+
     pub fn piano() -> Self {
         Self {
             inputs: vec![
@@ -1016,7 +1024,8 @@ pub struct VoiceNode {
 }
 
 impl VoiceNode {
-    fn new(id: NodeId, type_id: &str) -> Self {
+    /// 按节点类型创建节点并填入参数默认值。
+    pub fn new(id: NodeId, type_id: &str) -> Self {
         let params = voice_node_type(type_id)
             .map(|node_type| {
                 node_type
@@ -1049,8 +1058,19 @@ pub struct VoiceConnection {
 }
 
 impl VoiceConnection {
-    fn new(from: PortRef, to: PortRef) -> Self {
+    /// 创建一条 Voice 连接。
+    pub fn new(from: PortRef, to: PortRef) -> Self {
         Self { from, to }
+    }
+
+    /// 连接的来源端口。
+    pub fn from(&self) -> &PortRef {
+        &self.from
+    }
+
+    /// 连接的目标端口。
+    pub fn to(&self) -> &PortRef {
+        &self.to
     }
 }
 
