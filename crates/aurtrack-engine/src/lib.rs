@@ -19,7 +19,7 @@
 )]
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
 use arc_swap::ArcSwap;
 
@@ -447,8 +447,53 @@ impl HighpassPlan {
     }
 }
 
+/// 无锁延迟线；缓冲区在构建计划时分配，实时线程只读写原子槽。
+#[derive(Debug, Clone)]
+pub struct DelayPlan {
+    pub time: f64,
+    pub feedback: f64,
+    buffer: Arc<Vec<AtomicU64>>,
+    write: Arc<AtomicUsize>,
+}
+
+impl DelayPlan {
+    pub fn new(time: f64, feedback: f64) -> Self {
+        Self {
+            time: time.clamp(0.001, 2.0),
+            feedback: feedback.clamp(0.0, 0.95),
+            buffer: Arc::new((0..DELAY_SLOTS).map(|_| AtomicU64::new(0)).collect()),
+            write: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    pub fn process(&self, sample_rate: u32, input: f64) -> f64 {
+        let rate = f64::from(sample_rate.max(1));
+        let delay = (self.time * rate).round() as usize;
+        let delay = delay.clamp(1, DELAY_SLOTS - 1);
+        let write = self.write.load(Ordering::Relaxed) % DELAY_SLOTS;
+        let read = (write + DELAY_SLOTS - delay) % DELAY_SLOTS;
+        let delayed = f64::from_bits(self.buffer[read].load(Ordering::Relaxed));
+        self.buffer[write].store(
+            (input + delayed * self.feedback).to_bits(),
+            Ordering::Relaxed,
+        );
+        self.write
+            .store((write + 1) % DELAY_SLOTS, Ordering::Relaxed);
+        delayed
+    }
+
+    pub fn reset(&self) {
+        for slot in self.buffer.iter() {
+            slot.store(0.0_f64.to_bits(), Ordering::Relaxed);
+        }
+        self.write.store(0, Ordering::Relaxed);
+    }
+}
+
 /// DAG 计划最多允许的节点数。
 pub const MAX_GRAPH_NODES: usize = 64;
+
+const DELAY_SLOTS: usize = 384_000;
 
 /// DAG 中的一个节点。
 #[derive(Debug, Clone)]
@@ -463,6 +508,7 @@ pub enum GraphOp {
     Voice,
     Filter(FilterPlan),
     Highpass(HighpassPlan),
+    Delay(DelayPlan),
     Gain(f64),
     Drive(f64),
     Mix,
@@ -496,6 +542,10 @@ impl GraphPlan {
                     .inputs
                     .first()
                     .map_or(0.0, |input| filter.process(sample_rate, values[*input])),
+                GraphOp::Delay(delay) => node
+                    .inputs
+                    .first()
+                    .map_or(0.0, |input| delay.process(sample_rate, values[*input])),
                 GraphOp::Gain(gain) => {
                     node.inputs.first().map_or(0.0, |input| values[*input]) * gain
                 },

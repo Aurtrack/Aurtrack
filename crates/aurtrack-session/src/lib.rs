@@ -29,9 +29,9 @@ use std::path::Path;
 
 use aurtrack_command::{CommandError, CommandRequest, CommandResponse, registry};
 use aurtrack_engine::{
-    AdsrPlan, FilterPlan, FilterSettings, GraphNodePlan, GraphOp, GraphPlan, HighpassPlan,
-    NotePlan, PluginPlan, VoiceNodePlan, VoiceOp, VoicePlan, adsr_envelope, midi_to_hz,
-    note_envelope,
+    AdsrPlan, DelayPlan, FilterPlan, FilterSettings, GraphNodePlan, GraphOp, GraphPlan,
+    HighpassPlan, NotePlan, PluginPlan, VoiceNodePlan, VoiceOp, VoicePlan, adsr_envelope,
+    midi_to_hz, note_envelope,
 };
 use aurtrack_graph::{
     GraphError, NodeGroup, NodeGroupInterface, NodeGroupSocketType, NodeId, PortRef, VoiceGraph,
@@ -223,7 +223,11 @@ impl Track {
                     node.param("resonance").unwrap_or(0.2),
                 )),
                 "audio.drive" => GraphOp::Drive(node.param("drive").unwrap_or(1.0)),
-                "audio.adsr" | "audio.delay" => GraphOp::Gain(1.0),
+                "audio.delay" => GraphOp::Delay(DelayPlan::new(
+                    node.param("time").unwrap_or(0.25),
+                    node.param("feedback").unwrap_or(0.2),
+                )),
+                "audio.adsr" => GraphOp::Gain(1.0),
                 "audio.plugin" => GraphOp::Plugin,
                 "audio.output" => {
                     output = Some(nodes.len());

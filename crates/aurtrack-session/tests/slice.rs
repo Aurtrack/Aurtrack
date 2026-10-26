@@ -884,6 +884,15 @@ fn highpass_and_drive_render() {
             "params": { "drive": 2.0 }
         }),
     );
+    run(
+        &mut session,
+        "device.add",
+        json!({
+            "track_id": "track-1",
+            "kind": "delay",
+            "params": { "time": 0.05, "feedback": 0.1 }
+        }),
+    );
     let path = temp_path("highpass-drive");
     let rendered = run(
         &mut session,
