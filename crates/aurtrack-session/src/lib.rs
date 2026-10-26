@@ -1509,7 +1509,9 @@ impl Session {
         let mut child = VoiceGraph::shell(&interface);
         for id in &selected {
             if let Some(node) = source.graph.nodes.get(id) {
-                child.nodes.insert(id.clone(), node.clone());
+                let mut node = node.clone();
+                node.frame = None;
+                child.nodes.insert(id.clone(), node);
             }
         }
         for connection in &source.graph.connections {
@@ -1696,6 +1698,7 @@ impl Session {
             };
             let mut node = node.clone();
             node.id = new_id.clone();
+            node.frame = None;
             if let Some(position) = node.position.as_mut() {
                 position[0] += origin[0];
                 position[1] += origin[1];

@@ -5,6 +5,7 @@
     NodeGroupInterface,
     NodeTypeInfo,
     VoiceConnection,
+    VoiceFrame,
     VoiceGraph,
     VoiceNode,
   } from "../api";
@@ -189,6 +190,19 @@
   let nodeMenu = $state<{ x: number; y: number; nodeId: string } | null>(null);
   let pendingLink = $state<Wire | null>(null);
   let wireMoved = false;
+  let frameDrag = $state<{
+    id: string;
+    startX: number;
+    startY: number;
+    origin: [number, number];
+    children: Record<string, [number, number]>;
+  } | null>(null);
+  let frameResize = $state<{
+    id: string;
+    startX: number;
+    startY: number;
+    size: [number, number];
+  } | null>(null);
   let wire = $state<Wire | null>(null);
   let error = $state("");
   let saving = $state(false);
@@ -201,6 +215,7 @@
   );
 
   let nodes = $derived(Object.values(voice.nodes));
+  let frames = $derived(Object.values(voice.frames ?? {}));
   let positions = $derived.by(() => {
     const result: Record<string, { x: number; y: number }> = {};
     nodes.forEach((node, index) => {
@@ -491,6 +506,29 @@
       if (point) marquee = { ...marquee, x2: point.x, y2: point.y };
       return;
     }
+    if (frameDrag) {
+      const dx = (event.clientX - frameDrag.startX) / view.scale;
+      const dy = (event.clientY - frameDrag.startY) / view.scale;
+      const frame = voice.frames?.[frameDrag.id];
+      if (frame) {
+        frame.position = [frameDrag.origin[0] + dx, frameDrag.origin[1] + dy];
+      }
+      for (const [id, origin] of Object.entries(frameDrag.children)) {
+        const node = voice.nodes[id];
+        if (node) node.position = [origin[0] + dx, origin[1] + dy];
+      }
+      return;
+    }
+    if (frameResize) {
+      const frame = voice.frames?.[frameResize.id];
+      if (frame) {
+        frame.size = [
+          Math.max(160, frameResize.size[0] + (event.clientX - frameResize.startX) / view.scale),
+          Math.max(100, frameResize.size[1] + (event.clientY - frameResize.startY) / view.scale),
+        ];
+      }
+      return;
+    }
     if (!drag) return;
     const dx = (event.clientX - drag.startX) / view.scale;
     const dy = (event.clientY - drag.startY) / view.scale;
@@ -625,6 +663,8 @@
     }
     pan = null;
     drag = null;
+    frameDrag = null;
+    frameResize = null;
     wire = null;
   }
 
@@ -930,6 +970,92 @@
     cloneSelection([26, 26]);
   }
 
+  function createFrame() {
+    const members = nodes.filter(
+      (node) =>
+        selected.has(node.id) && node.id !== "voice-in" && node.id !== "out",
+    );
+    let left = Infinity;
+    let top = Infinity;
+    let right = -Infinity;
+    let bottom = -Infinity;
+    for (const node of members) {
+      const position = positions[node.id];
+      if (!position) continue;
+      left = Math.min(left, position.x);
+      top = Math.min(top, position.y);
+      right = Math.max(right, position.x + NODE_WIDTH);
+      bottom = Math.max(bottom, position.y + nodeHeight(node));
+    }
+    if (!Number.isFinite(left)) {
+      const rect = boardElement?.getBoundingClientRect();
+      const center = rect
+        ? worldPoint({
+            clientX: rect.left + rect.width / 2,
+            clientY: rect.top + rect.height / 2,
+          })
+        : null;
+      left = (center?.x ?? 200) - 160;
+      top = (center?.y ?? 200) - 100;
+      right = left + 320;
+      bottom = top + 200;
+    }
+    const frame: VoiceFrame = {
+      id: `frame-${Date.now().toString(36)}`,
+      name: t("voice.frame"),
+      position: [left - 24, top - 42],
+      size: [right - left + 48, bottom - top + 66],
+    };
+    voice.frames = { ...(voice.frames ?? {}), [frame.id]: frame };
+    for (const node of members) node.frame = frame.id;
+  }
+
+  function unframeSelection() {
+    for (const id of selected) {
+      const node = voice.nodes[id];
+      if (node) node.frame = undefined;
+    }
+  }
+
+  function frameMouseDown(event: MouseEvent, frame: VoiceFrame) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const children: Record<string, [number, number]> = {};
+    for (const node of nodes) {
+      if (node.frame === frame.id && node.position) {
+        children[node.id] = [...node.position];
+      }
+    }
+    frameDrag = {
+      id: frame.id,
+      startX: event.clientX,
+      startY: event.clientY,
+      origin: [...frame.position],
+      children,
+    };
+  }
+
+  function deleteFrame(frame: VoiceFrame) {
+    if (!window.confirm(t("voice.confirmDeleteFrame"))) return;
+    for (const node of nodes) {
+      if (node.frame === frame.id) node.frame = undefined;
+    }
+    if (voice.frames) delete voice.frames[frame.id];
+  }
+
+  function frameResizeDown(event: MouseEvent, frame: VoiceFrame) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    frameResize = {
+      id: frame.id,
+      startX: event.clientX,
+      startY: event.clientY,
+      size: [...frame.size],
+    };
+  }
+
   function toggleCollapsed() {
     for (const id of selected) {
       const node = voice.nodes[id];
@@ -1202,6 +1328,16 @@
       );
       return;
     }
+    if (event.ctrlKey && !event.altKey && event.key.toLowerCase() === "p") {
+      event.preventDefault();
+      createFrame();
+      return;
+    }
+    if (event.altKey && event.key.toLowerCase() === "p") {
+      event.preventDefault();
+      unframeSelection();
+      return;
+    }
     if (
       event.key.toLowerCase() === "h" &&
       !event.ctrlKey &&
@@ -1413,6 +1549,37 @@
         class="voice-editor-canvas"
         style:transform={`translate(${view.x}px, ${view.y}px) scale(${view.scale})`}
       >
+      {#each frames as frame (frame.id)}
+        <div
+          class="voice-frame"
+          style:left={`${frame.position[0]}px`}
+          style:top={`${frame.position[1]}px`}
+          style:width={`${frame.size[0]}px`}
+          style:height={`${frame.size[1]}px`}
+        >
+          <div
+            class="voice-frame-head"
+            role="button"
+            tabindex="0"
+            aria-label={frame.name}
+            onmousedown={(event) => frameMouseDown(event, frame)}
+            oncontextmenu={(event) => {
+              event.preventDefault();
+              event.stopPropagation();
+              deleteFrame(frame);
+            }}
+          >
+            {frame.name}
+          </div>
+          <div
+            class="voice-frame-resize"
+            role="button"
+            tabindex="0"
+            aria-label={t("voice.resizeFrame")}
+            onmousedown={(event) => frameResizeDown(event, frame)}
+          ></div>
+        </div>
+      {/each}
       <svg class="voice-editor-wires" viewBox={`0 0 ${CANVAS_WIDTH} ${CANVAS_HEIGHT}`}>
         {#each voice.connections as connection (connection.from.node + connection.from.port + connection.to.node + connection.to.port)}
           <path d={wirePath(connection)} style:stroke={wireColor(connection)} />

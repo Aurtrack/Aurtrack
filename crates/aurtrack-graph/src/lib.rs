@@ -847,6 +847,18 @@ pub fn voice_node_type(id: &str) -> Option<&'static VoiceNodeType> {
 pub struct VoiceGraph {
     pub nodes: BTreeMap<NodeId, VoiceNode>,
     pub connections: Vec<VoiceConnection>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub frames: BTreeMap<String, VoiceFrame>,
+}
+
+/// Voice 图里的背景框，只影响编辑器的组织方式。
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct VoiceFrame {
+    pub id: String,
+    pub name: String,
+    pub position: [f64; 2],
+    pub size: [f64; 2],
 }
 
 impl Default for VoiceGraph {
@@ -872,6 +884,7 @@ impl VoiceGraph {
         Self {
             nodes,
             connections: Vec::new(),
+            frames: BTreeMap::new(),
         }
     }
 
@@ -931,6 +944,7 @@ impl VoiceGraph {
                     PortRef::fixed(NodeId::fixed("out"), "audio"),
                 ),
             ],
+            frames: BTreeMap::new(),
         }
     }
 
@@ -1071,6 +1085,8 @@ pub struct VoiceNode {
     pub position: Option<[f64; 2]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame: Option<String>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub muted: bool,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -1100,6 +1116,7 @@ impl VoiceNode {
             params,
             position: None,
             group: None,
+            frame: None,
             muted: false,
             collapsed: false,
         }

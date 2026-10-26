@@ -64,8 +64,16 @@ export type VoiceNode = {
   params: Record<string, number>;
   position?: [number, number];
   group?: string;
+  frame?: string;
   muted?: boolean;
   collapsed?: boolean;
+};
+
+export type VoiceFrame = {
+  id: string;
+  name: string;
+  position: [number, number];
+  size: [number, number];
 };
 
 export type VoiceConnection = {
@@ -76,6 +84,7 @@ export type VoiceConnection = {
 export type VoiceGraph = {
   nodes: Record<string, VoiceNode>;
   connections: VoiceConnection[];
+  frames?: Record<string, VoiceFrame>;
 };
 
 export type NodeGroupSocket = {
