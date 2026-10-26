@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { onDestroy } from "svelte";
   import type {
     NodeGroup,
     NodeGroupInterface,
@@ -10,6 +11,7 @@
   import { errorMessage } from "../api";
   import { t } from "../i18n.svelte";
   import { session } from "../session.svelte";
+  import NumberField from "./NumberField.svelte";
 
   interface Props {
     groupId: string;
@@ -58,7 +60,7 @@
   };
 
   type PortType = "float" | "gate" | "audio";
-  type PortInfo = { id: string; ty: PortType };
+  type PortInfo = { id: string; name: string; ty: PortType };
 
   let typeById = $derived(
     new Map(nodeTypes.map((nodeType) => [nodeType.id, nodeType])),
@@ -89,7 +91,11 @@
   }
 
   function interfacePorts(sockets: NodeGroupInterface["inputs"]): PortInfo[] {
-    return sockets.map((socket) => ({ id: socket.id, ty: socket.type }));
+    return sockets.map((socket) => ({
+      id: socket.id,
+      name: socket.name,
+      ty: socket.type,
+    }));
   }
 
   function typePorts(
@@ -98,6 +104,7 @@
   ): PortInfo[] {
     return (typeById.get(node.type_id)?.[side] ?? []).map((socket) => ({
       id: socket.id,
+      name: socket.name,
       ty: socket.type,
     }));
   }
@@ -138,6 +145,8 @@
   let libraryOpen = $state(false);
   let libraryError = $state("");
   let newGroupName = $state("");
+  let autoSaveReady = false;
+  let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
   const interfaceSides = [
     { key: "inputs" as const, label: "INPUTS" },
     { key: "outputs" as const, label: "OUTPUTS" },
@@ -304,6 +313,23 @@
     libraryOpen = false;
   }
 
+  $effect(() => {
+    const snapshot = JSON.stringify(voice);
+    if (!autoSaveReady) {
+      autoSaveReady = true;
+      return;
+    }
+    void snapshot;
+    if (autoSaveTimer) clearTimeout(autoSaveTimer);
+    autoSaveTimer = setTimeout(() => {
+      void save(false);
+    }, 500);
+  });
+
+  onDestroy(() => {
+    if (autoSaveTimer) clearTimeout(autoSaveTimer);
+  });
+
   function openInterface() {
     interfaceDraft = JSON.parse(
       JSON.stringify(groupInterface),
@@ -425,12 +451,31 @@
   }
 
   function handleKey(event: KeyboardEvent) {
-    if (event.key === "Escape" && addMenu) {
-      addMenu = null;
+    const active = document.activeElement;
+    const typing =
+      active instanceof HTMLInputElement ||
+      active instanceof HTMLTextAreaElement ||
+      active instanceof HTMLSelectElement;
+    if (
+      event.key === "Tab" &&
+      !typing &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey
+    ) {
+      event.preventDefault();
+      const node = voice.nodes[selected];
+      if (node && node.type_id === "voice.group" && nodeGroup(node)) {
+        void enterGroup(node);
+      } else {
+        void leave();
+      }
       return;
     }
     if (event.key === "Escape") {
-      void leave();
+      addMenu = null;
+      libraryOpen = false;
+      interfaceOpen = false;
       return;
     }
     if (
@@ -477,7 +522,6 @@
             </button>
           {/each}
         </div>
-        <span>{t("voice.hint")}</span>
       </div>
       <div class="voice-editor-actions">
         <button class="ghost small" onclick={() => (libraryOpen = !libraryOpen)}>
@@ -486,10 +530,13 @@
         <button class="ghost small" onclick={openInterface}>
           {t("voice.interface")}
         </button>
-        <button class="ghost small" disabled={saving} onclick={() => void save()}>
-          {t("voice.apply")}
+        <button
+          class="ghost small"
+          title={t("voice.close")}
+          onclick={() => void leave()}
+        >
+          ×
         </button>
-        <button class="ghost small" onclick={() => void leave()}>{t("voice.close")}</button>
       </div>
     </header>
 
@@ -694,6 +741,14 @@
               aria-label={port.id}
               onmousedown={(event) => startWire(event, node, port)}
             ></button>
+            {#if !(typeById.get(node.type_id)?.params.length)}
+              <span
+                class="voice-port-label out"
+                style:top={`${portY(node.type_id, index) - 6}px`}
+              >
+                {port.name}
+              </span>
+            {/if}
           {/each}
           {#each inputList(node) as port, index (port.id)}
             <button
@@ -706,21 +761,27 @@
               aria-label={port.id}
               onmousedown={(event) => finishWire(event, node, port)}
             ></button>
+            {#if !(typeById.get(node.type_id)?.params.length)}
+              <span
+                class="voice-port-label in"
+                style:top={`${portY(node.type_id, index) - 6}px`}
+              >
+                {port.name}
+              </span>
+            {/if}
           {/each}
 
           {#if typeById.get(node.type_id)?.params.length}
             <div class="voice-node-params">
               {#each typeById.get(node.type_id)?.params ?? [] as param (param.name)}
                 <span>{param.name}</span>
-                <input
-                  class="voice-param-input"
-                  type="number"
+                <NumberField
+                  value={node.params[param.name] ?? param.default}
                   min={param.minimum}
                   max={param.maximum}
-                  step="0.01"
-                  value={node.params[param.name] ?? param.default}
-                  onchange={(event) =>
-                    setParam(node, param.name, Number(event.currentTarget.value))}
+                  step={0.01}
+                  precision={2}
+                  onchange={(value) => setParam(node, param.name, value)}
                 />
               {/each}
             </div>

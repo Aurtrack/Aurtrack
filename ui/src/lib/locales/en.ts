@@ -205,7 +205,7 @@ export const en: Record<MessageKey, Message> = {
   "graph.addNode": "ADD NODE",
   "graph.menuAudio": "AUDIO",
   "graph.selectAll": "SELECT ALL",
-  "graph.foot": "Home all · F selected · Shift+A add · Shift+D duplicate · Del remove · undo",
+  "graph.foot": "Home all · F selected · Shift+A add · Shift+D duplicate · Tab group · Del remove",
   "graph.direction": "IN → OUT",
   "number.decrease": "Decrease",
   "number.increase": "Increase",

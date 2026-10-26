@@ -784,6 +784,24 @@
       return;
     }
     if (isEditing()) return;
+    if (
+      event.key === "Tab" &&
+      !event.shiftKey &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey &&
+      !editingGroup
+    ) {
+      const groupNode = nodes.find(
+        (node) =>
+          selected.has(node.id) && nodeTypeId(node) === "audio.group",
+      );
+      if (groupNode) {
+        event.preventDefault();
+        openVoiceGroup(groupNode);
+        return;
+      }
+    }
     if (event.key === "Home") {
       event.preventDefault();
       frameAll();
@@ -881,9 +899,14 @@
     <span class="title">{t("graph.title")}</span>
     <span class="rule"></span>
     <span class="meta">
-      {track
-        ? `${track.id} · ${nodes.length} ${t("graph.nodes")}`
-        : t("graph.noTrack")}
+      {#if editingGroup}
+        {editingGroup.name} · {Object.keys(editingGroup.graph.nodes).length}
+        {t("graph.nodes")}
+      {:else if track}
+        {track.id} · {nodes.length} {t("graph.nodes")}
+      {:else}
+        {t("graph.noTrack")}
+      {/if}
     </span>
   </div>
 

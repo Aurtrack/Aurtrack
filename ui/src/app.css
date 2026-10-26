@@ -2233,3 +2233,49 @@ button:disabled {
   font-size: 9px;
   padding: 2px 3px;
 }
+.voice-editor-head {
+  min-height: 30px;
+  padding: 4px 8px;
+}
+
+.voice-editor-head > div:first-child {
+  display: flex;
+  min-width: 0;
+  align-items: center;
+  gap: 10px;
+}
+
+.voice-editor-path {
+  margin-bottom: 0;
+}
+
+.voice-editor-board {
+  flex: 1;
+  min-height: 0;
+}
+
+.voice-node-params .number-field {
+  width: 86px;
+  height: 20px;
+}
+
+.voice-node-params .number-field .number-value,
+.voice-node-params .number-field .number-input {
+  font-size: 8px;
+}
+.voice-port-label {
+  position: absolute;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 7px;
+  pointer-events: none;
+  line-height: 1;
+}
+
+.voice-port-label.out {
+  right: 9px;
+}
+
+.voice-port-label.in {
+  left: 9px;
+}

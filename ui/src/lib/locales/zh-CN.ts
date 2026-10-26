@@ -200,7 +200,7 @@ export const zhCN = {
   "graph.addNode": "添加节点",
   "graph.menuAudio": "音频",
   "graph.selectAll": "全选",
-  "graph.foot": "Home 全览 · F 选中 · Shift+A 添加 · Shift+D 复制 · Del 删除 · 操作可撤销",
+  "graph.foot": "Home 全览 · F 选中 · Shift+A 添加 · Shift+D 复制 · Tab 进出组 · Del 删除",
   "graph.direction": "输入 → 输出",
   "number.decrease": "减小",
   "number.increase": "增大",
