@@ -152,6 +152,10 @@
   });
   let interfaceOpen = $state(false);
   let sidebarOpen = $state(false);
+  let groupNameDraft = $state("");
+  $effect(() => {
+    groupNameDraft = groups[groupId]?.name ?? "";
+  });
   let interfaceDraft = $state<NodeGroupInterface>({
     inputs: [],
     outputs: [],
@@ -183,6 +187,8 @@
   } | null>(null);
   let drag = $state<Drag | null>(null);
   let nodeMenu = $state<{ x: number; y: number; nodeId: string } | null>(null);
+  let pendingLink = $state<Wire | null>(null);
+  let wireMoved = false;
   let wire = $state<Wire | null>(null);
   let error = $state("");
   let saving = $state(false);
@@ -367,7 +373,9 @@
       else wire = null;
       return;
     }
+    pendingLink = null;
     selectOnly(node.id);
+    wireMoved = false;
     const point = worldPoint(event);
     if (!point) return;
     wire = {
@@ -465,6 +473,7 @@
   function move(event: MouseEvent) {
     lastPointer = { x: event.clientX, y: event.clientY };
     if (wire) {
+      wireMoved = true;
       const point = worldPoint(event);
       if (point) wire = { ...wire, x: point.x, y: point.y };
       return;
@@ -573,6 +582,20 @@
             )
           : undefined;
         if (node && port) finishWire(event, node, port);
+      } else if (wireMoved && boardElement) {
+        const point = boardPoint(event);
+        const rect = boardElement.getBoundingClientRect();
+        if (
+          point &&
+          point.x >= 0 &&
+          point.y >= 0 &&
+          point.x <= rect.width &&
+          point.y <= rect.height
+        ) {
+          pendingLink = wire;
+          addMenu = { x: event.clientX, y: event.clientY };
+          wire = null;
+        }
       }
     }
     if (marquee) {
@@ -640,6 +663,7 @@
 
   onDestroy(() => {
     if (autoSaveTimer) clearTimeout(autoSaveTimer);
+    if (interfaceTimer) clearTimeout(interfaceTimer);
   });
 
   function openInterface() {
@@ -655,6 +679,27 @@
     sidebarOpen = !sidebarOpen;
   }
 
+  async function renameCurrentGroup() {
+    const name = groupNameDraft.trim();
+    if (!name || name === groups[groupId]?.name) return;
+    try {
+      await session.renameGroup(groupId, name);
+      error = "";
+    } catch (caught) {
+      error = errorMessage(caught);
+    }
+  }
+
+  async function deleteCurrentGroup() {
+    if (!window.confirm(`删除节点组 ${groupNameDraft || groupId}？`)) return;
+    try {
+      await session.deleteGroup(groupId);
+      onClose();
+    } catch (caught) {
+      error = errorMessage(caught);
+    }
+  }
+
   function addSocket(side: "inputs" | "outputs") {
     const list = interfaceDraft[side];
     const prefix = side === "inputs" ? "in" : "out";
@@ -667,20 +712,32 @@
       name: `${prefix.toUpperCase()} ${number}`,
       type: side === "outputs" ? "audio" : "float",
     });
+    queueInterfaceSave();
   }
 
   function removeSocket(side: "inputs" | "outputs", index: number) {
     interfaceDraft[side].splice(index, 1);
+    queueInterfaceSave();
   }
 
-  async function saveInterface() {
+  let interfaceTimer: ReturnType<typeof setTimeout> | null = null;
+
+  async function saveInterface(close = true) {
     interfaceError = "";
     try {
       await session.setGroupInterface(groupId, interfaceDraft);
-      interfaceOpen = false;
+      if (close) interfaceOpen = false;
     } catch (error) {
       interfaceError = errorMessage(error);
     }
+  }
+
+  function queueInterfaceSave() {
+    if (interfaceTimer) clearTimeout(interfaceTimer);
+    interfaceTimer = setTimeout(() => {
+      interfaceTimer = null;
+      void saveInterface(false);
+    }, 500);
   }
 
   function setParam(node: VoiceNode, name: string, value: number) {
@@ -697,31 +754,64 @@
     return [Math.max(10, point.x - 20), Math.max(10, point.y - 10)];
   }
 
+  function connectPending(node: VoiceNode) {
+    const link = pendingLink;
+    pendingLink = null;
+    if (!link) return;
+    if (link.side === "out") {
+      const target = inputList(node).find((port) => port.ty === link.ty);
+      if (!target) return;
+      voice.connections = voice.connections.filter(
+        (connection) =>
+          !(connection.to.node === node.id && connection.to.port === target.id),
+      );
+      voice.connections.push({
+        from: { node: link.node, port: link.port },
+        to: { node: node.id, port: target.id },
+      });
+    } else {
+      const source = outputList(node).find((port) => port.ty === link.ty);
+      if (!source) return;
+      voice.connections = voice.connections.filter(
+        (connection) =>
+          !(connection.to.node === link.node && connection.to.port === link.port),
+      );
+      voice.connections.push({
+        from: { node: node.id, port: source.id },
+        to: { node: link.node, port: link.port },
+      });
+    }
+  }
+
   function addNode(kind: string) {
     const id = `voice-${Date.now().toString(36)}`;
     const params: Record<string, number> = {};
     for (const param of typeById.get(kind)?.params ?? []) {
       params[param.name] = param.default;
     }
-    voice.nodes[id] = {
+    const node: VoiceNode = {
       id,
       type_id: kind,
       params,
       position: addPosition(),
     };
+    voice.nodes[id] = node;
+    connectPending(node);
     selectOnly(id);
     addMenu = null;
   }
 
   function addGroupNode(groupId: string) {
     const id = `voice-${Date.now().toString(36)}`;
-    voice.nodes[id] = {
+    const node: VoiceNode = {
       id,
       type_id: "voice.group",
       params: {},
       position: addPosition(),
       group: groupId,
     };
+    voice.nodes[id] = node;
+    connectPending(node);
     selectOnly(id);
     addMenu = null;
   }
@@ -1061,6 +1151,7 @@
     if (event.key === "Escape") {
       addMenu = null;
       nodeMenu = null;
+      pendingLink = null;
       libraryOpen = false;
       interfaceOpen = false;
       sidebarOpen = false;
@@ -1272,7 +1363,10 @@
         groupLabel={t("voice.groupNode")}
         onPickType={(typeId) => addNode(typeId)}
         onPickGroup={(groupId) => addGroupNode(groupId)}
-        onClose={() => (addMenu = null)}
+        onClose={() => {
+          addMenu = null;
+          pendingLink = null;
+        }}
       />
     {/if}
 
@@ -1488,6 +1582,28 @@
         {#if interfaceOpen}
 
       <div class="voice-interface-panel">
+        <div class="node-group-meta">
+          <label>
+            <span>{t("voice.groupName")}</span>
+            <input
+              class="voice-interface-name"
+              bind:value={groupNameDraft}
+              onchange={() => void renameCurrentGroup()}
+              onkeydown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault();
+                  void renameCurrentGroup();
+                }
+              }}
+            />
+          </label>
+          <button
+            class="ghost small danger"
+            onclick={() => void deleteCurrentGroup()}
+          >
+            {t("voice.deleteGroup")}
+          </button>
+        </div>
         <div class="voice-interface-head">
           <strong>{t("voice.interface")}</strong>
           <button class="ghost small" onclick={() => (interfaceOpen = false)}>
@@ -1512,8 +1628,10 @@
                 <input
                   class="voice-interface-name"
                   value={socket.name}
-                  oninput={(event) =>
-                    (socket.name = event.currentTarget.value)}
+                  oninput={(event) => {
+                    socket.name = event.currentTarget.value;
+                    queueInterfaceSave();
+                  }}
                 />
                 <select
                   class="voice-interface-type"
@@ -1521,6 +1639,7 @@
                   onchange={(event) => {
                     socket.type = event.currentTarget
                       .value as NodeGroupInterface["inputs"][number]["type"];
+                    queueInterfaceSave();
                   }}
                 >
                   <option value="float">FLOAT</option>
@@ -1541,9 +1660,7 @@
           <p class="error-text">{interfaceError}</p>
         {/if}
         <div class="voice-interface-actions">
-          <button class="ghost small" onclick={() => void saveInterface()}>
-            {t("voice.apply")}
-          </button>
+          <span class="node-sidebar-label">{t("voice.autoSaved")}</span>
         </div>
       </div>
         {:else if voice.nodes[active]}

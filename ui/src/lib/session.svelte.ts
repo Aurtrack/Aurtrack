@@ -838,6 +838,11 @@ export class SessionStore {
     return data;
   }
 
+  async deleteGroup(groupId: string): Promise<void> {
+    await this.run("group.delete", { group_id: groupId });
+    await this.refreshProject();
+  }
+
   async renameGroup(groupId: string, name: string): Promise<void> {
     await this.run("group.rename", { group_id: groupId, name });
     await this.refreshProject();

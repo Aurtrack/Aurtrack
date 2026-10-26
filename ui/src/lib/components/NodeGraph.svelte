@@ -73,6 +73,7 @@
       (nodeType) =>
         nodeType.category !== "Instrument" &&
         nodeType.category !== "Output" &&
+        nodeType.id !== "audio.group" &&
         !(nodeType.id === "audio.adsr" && hasAdsr),
     ),
   );
