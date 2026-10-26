@@ -177,6 +177,7 @@ export const zhCN = {
   "voice.makeGroup": "成组",
   "voice.groupName": "组名",
   "voice.deleteGroup": "删除组",
+  "voice.confirmDeleteGroup": "删除节点组？",
   "voice.ungroup": "解组",
   "voice.library": "组库",
   "voice.newGroupName": "新组名",

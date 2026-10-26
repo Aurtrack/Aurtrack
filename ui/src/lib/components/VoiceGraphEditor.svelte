@@ -691,7 +691,13 @@
   }
 
   async function deleteCurrentGroup() {
-    if (!window.confirm(`删除节点组 ${groupNameDraft || groupId}？`)) return;
+    if (
+      !window.confirm(
+        `${t("voice.confirmDeleteGroup")} ${groupNameDraft || groupId}`,
+      )
+    ) {
+      return;
+    }
     try {
       await session.deleteGroup(groupId);
       onClose();
@@ -986,6 +992,12 @@
     active = created.at(-1) ?? "";
   }
 
+  function sidebarParams(node: VoiceNode) {
+    return (typeById.get(node.type_id)?.params ?? []).filter(
+      (param) => !isLinked(node, param.name),
+    );
+  }
+
   function reloadFromSession() {
     const group = session.nodeGroups[groupId];
     if (group) {
@@ -1119,6 +1131,11 @@
     ) {
       event.preventDefault();
       void makeGroup();
+      return;
+    }
+    if (event.key === "Tab" && event.ctrlKey && !typing) {
+      event.preventDefault();
+      void leave();
       return;
     }
     if (
@@ -1382,6 +1399,12 @@
         addMenu = { x: event.clientX, y: event.clientY };
       }}
       onmousedown={boardMouseDown}
+      ondblclick={(event) => {
+        const target = event.target as Element | null;
+        if (!target?.closest(".voice-node, .node-sidebar, .node-add-menu")) {
+          void leave();
+        }
+      }}
       onwheel={handleWheel}
       style:background-position={`${view.x}px ${view.y}px`}
       style:background-size={`${18 * view.scale}px ${18 * view.scale}px`}
@@ -1678,7 +1701,7 @@
                 {t("graph.editGroup")}
               </button>
             {/if}
-            {#each typeById.get(node.type_id)?.params ?? [] as param (param.name)}
+            {#each sidebarParams(node) as param (param.name)}
               <label class="node-sidebar-param">
                 <span>{param.name}</span>
                 <NumberField

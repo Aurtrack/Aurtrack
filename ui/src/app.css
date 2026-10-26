@@ -2918,3 +2918,7 @@ button:disabled {
 .node-group-meta .danger {
   color: #8a3030;
 }
+.voice-node[data-category="Layout"] .voice-node-head {
+  background: #e9e9e9;
+  color: #555;
+}

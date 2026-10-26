@@ -107,6 +107,7 @@
     port: string;
     x: number;
     y: number;
+    moved: boolean;
   };
   type NodeDrag = {
     start: Point;
@@ -147,6 +148,7 @@
   let panDrag = $state<PanDrag | null>(null);
   let marquee = $state<Marquee | null>(null);
   let wireDrag = $state<WireDrag | null>(null);
+  let pendingWire = $state<WireDrag | null>(null);
   let wireError = $state("");
   let wireHover = $state<{ node: string; port: string } | null>(null);
   let active = $state("");
@@ -436,6 +438,12 @@
     return sockets?.find((socket) => socket.id === port)?.type;
   }
 
+  function sidebarParams(node: GraphNode) {
+    return (nodeType(node)?.params ?? []).filter(
+      (param) => !isLinked(node, param.name),
+    );
+  }
+
   function inputPorts(node: GraphNode): InputPort[] {
     return nodeInputs(node).map((input, index) => ({
       port: input.id,
@@ -678,7 +686,14 @@
     event.stopPropagation();
     const point = worldPoint(event);
     if (!point) return;
-    wireDrag = { side, node: node.id, port, x: point.x, y: point.y };
+    wireDrag = {
+      side,
+      node: node.id,
+      port,
+      x: point.x,
+      y: point.y,
+      moved: false,
+    };
     wireHover = null;
   }
 
@@ -736,7 +751,7 @@
     }
     if (wireDrag) {
       const point = worldPoint(event);
-      if (point) wireDrag = { ...wireDrag, x: point.x, y: point.y };
+      if (point) wireDrag = { ...wireDrag, x: point.x, y: point.y, moved: true };
       updateWireHover(event);
     }
   }
@@ -802,7 +817,17 @@
       const target = wireHover;
       wireDrag = null;
       wireHover = null;
-      if (!track || !target) return;
+      if (!track) return;
+      if (!target) {
+        if (drag.moved) {
+          pendingWire = drag;
+          addMenu = {
+            x: Math.max(10, lastPointer.x),
+            y: Math.max(10, lastPointer.y),
+          };
+        }
+        return;
+      }
       const fromNode = drag.side === "out" ? drag.node : target.node;
       const fromPort = drag.side === "out" ? drag.port : "out";
       const toNode = drag.side === "out" ? target.node : drag.node;
@@ -1036,7 +1061,7 @@
     if (event.code === "Space" || event.key === " ") spaceHeld = false;
   }
 
-  function addNode(kind: string, at?: Point) {
+  async function addNode(kind: string, at?: Point) {
     if (!track) return;
     const point =
       at ??
@@ -1050,8 +1075,32 @@
       x: (point.x - view.x) / view.scale,
       y: (point.y - view.y) / view.scale,
     };
+    const pending = pendingWire;
+    pendingWire = null;
     addMenu = null;
-    void onAddNode(track.id, kind, world.x, world.y);
+    const nodeId = await onAddNode(track.id, kind, world.x, world.y);
+    if (!nodeId || !pending) return;
+    const info = audioTypeById.get(kind);
+    if (!info) return;
+    if (pending.side === "out") {
+      const type = socketType(pending.node, "out", pending.port);
+      const input = info.inputs.find((candidate) => candidate.type === type);
+      if (input) {
+        onConnect(track.id, pending.node, pending.port, nodeId, input.id);
+      }
+    } else {
+      const type = socketType(pending.node, "in", pending.port);
+      const output = info.outputs.find((candidate) => candidate.type === type);
+      if (output) {
+        onConnect(
+          track.id,
+          nodeId,
+          output.id,
+          pending.node,
+          pending.port,
+        );
+      }
+    }
   }
 </script>
 
@@ -1447,8 +1496,11 @@
           x={addMenu.x}
           y={addMenu.y}
           nodeTypes={addNodeTypes}
-          onPickType={(typeId) => addNode(typeId)}
-          onClose={() => (addMenu = null)}
+          onPickType={(typeId) => void addNode(typeId)}
+          onClose={() => {
+            addMenu = null;
+            pendingWire = null;
+          }}
         />
       {/if}
     </div>
@@ -1481,7 +1533,7 @@
                 {t("graph.editGroup")}
               </button>
             {/if}
-            {#each nodeType(node)?.params ?? [] as param (param.name)}
+            {#each sidebarParams(node) as param (param.name)}
               <label class="node-sidebar-param">
                 <span>{param.name}</span>
                 <NumberField

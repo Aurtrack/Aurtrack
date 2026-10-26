@@ -181,6 +181,7 @@ export const en: Record<MessageKey, Message> = {
   "voice.makeGroup": "GROUP",
   "voice.groupName": "NAME",
   "voice.deleteGroup": "DELETE GROUP",
+  "voice.confirmDeleteGroup": "Delete this node group?",
   "voice.ungroup": "UNGROUP",
   "voice.library": "LIBRARY",
   "voice.newGroupName": "Group name",
