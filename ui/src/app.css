@@ -1715,6 +1715,16 @@ button:disabled {
   border-bottom: 0;
 }
 
+.graph-menu-label {
+  padding: 5px 10px 3px;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 7px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
 .graph-add-menu button:hover {
   background: var(--blue);
   color: #fff;
@@ -2006,24 +2016,25 @@ button:disabled {
   position: absolute;
   display: flex;
   flex-direction: column;
-  border: 1px solid var(--line);
-  background: var(--paper);
-  box-shadow: 1px 1px 0 var(--line);
+  border: 1px solid var(--line-strong);
+  background: #fbfbfa;
   cursor: grab;
 }
 
 .voice-node.selected {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
   border-color: var(--blue);
-  box-shadow: 0 0 0 1px var(--blue);
 }
 
 .voice-node-head {
   border-bottom: 1px solid var(--line);
-  padding: 5px 8px;
+  padding: 6px 8px;
+  background: #eef0ef;
   color: var(--blue);
   font-family: var(--mono);
   font-size: 9px;
-  letter-spacing: 0.05em;
+  letter-spacing: 0.12em;
 }
 
 .voice-node-id {

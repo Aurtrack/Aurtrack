@@ -111,6 +111,7 @@
   let wireHover = $state<{ node: string; port: string } | null>(null);
   let addMenu = $state<AddMenu | null>(null);
   let nodeMenu = $state<NodeMenu | null>(null);
+  let canvasMenu = $state<Point | null>(null);
   type VoicePathEntry = { id: string; name: string };
   let voicePath = $state<VoicePathEntry[]>([]);
   let spaceHeld = $state(false);
@@ -184,10 +185,11 @@
     nodeList: GraphNode[],
     edges: GraphConnection[],
   ): Layout {
-    if (nodeList.length === 0) {
+    const layoutNodes = nodeList.filter((node) => !node.position);
+    if (layoutNodes.length === 0) {
       return { positions: {}, width: 0, height: 0 };
     }
-    const byId = new Map(nodeList.map((node) => [node.id, node]));
+    const byId = new Map(layoutNodes.map((node) => [node.id, node]));
     const memo = new Map<string, number>();
     const visiting = new Set<string>();
     function depthOf(id: string): number {
@@ -206,7 +208,7 @@
       return depth;
     }
     const groups = new Map<number, GraphNode[]>();
-    for (const node of nodeList) {
+    for (const node of layoutNodes) {
       const depth = depthOf(node.id);
       const group = groups.get(depth) ?? [];
       group.push(node);
@@ -405,6 +407,16 @@
     frameNodes(group.length > 0 ? group : nodes);
   }
 
+  function openCanvasMenu(event: MouseEvent) {
+    if (event.button !== 2) return;
+    const target = event.target as Element | null;
+    if (target?.closest(".graph-node, .graph-wire-hit")) return;
+    event.preventDefault();
+    canvasMenu = { x: event.clientX, y: event.clientY };
+    addMenu = null;
+    nodeMenu = null;
+  }
+
   function boardMouseDown(event: MouseEvent) {
     if (event.button === 1 || (spaceHeld && event.button === 0)) {
       event.preventDefault();
@@ -418,7 +430,11 @@
     }
     if (event.button !== 0) return;
     const target = event.target as Element | null;
-    if (target?.closest(".graph-node, .graph-wire-hit, .graph-add-menu")) {
+    if (
+      target?.closest(
+        ".graph-node, .graph-wire-hit, .graph-add-menu, .graph-context-menu",
+      )
+    ) {
       return;
     }
     const point = worldPoint(event);
@@ -434,6 +450,7 @@
     };
     addMenu = null;
     nodeMenu = null;
+    canvasMenu = null;
     event.preventDefault();
   }
 
@@ -775,6 +792,7 @@
       selected = new Set();
       addMenu = null;
       nodeMenu = null;
+      canvasMenu = null;
     }
   }
 
@@ -845,6 +863,7 @@
       role="application"
       aria-label={t("graph.title")}
       onmousedown={boardMouseDown}
+      oncontextmenu={openCanvasMenu}
       onwheel={handleWheel}
       style:background-position={`${view.x}px ${view.y}px`}
       style:background-size={`${24 * view.scale}px ${24 * view.scale}px`}
@@ -1185,6 +1204,53 @@
         </div>
       {/if}
 
+      {#if canvasMenu}
+        <div
+          class="graph-context-menu"
+          style:left={`${canvasMenu.x}px`}
+          style:top={`${canvasMenu.y}px`}
+          role="menu"
+          tabindex="-1"
+          onmousedown={(event) => event.stopPropagation()}
+        >
+          <button
+            role="menuitem"
+            onclick={() => {
+              addMenu = { x: canvasMenu?.x ?? 0, y: canvasMenu?.y ?? 0 };
+              canvasMenu = null;
+            }}
+          >
+            {t("graph.addNode")}
+          </button>
+          <button role="menuitem" onclick={() => { frameAll(); canvasMenu = null; }}>
+            {t("graph.frameAll")}
+          </button>
+          <button role="menuitem" onclick={() => { frameSelected(); canvasMenu = null; }}>
+            {t("graph.frameSelected")}
+          </button>
+          <button
+            role="menuitem"
+            onclick={() => {
+              selected = new Set(nodes.map((node) => node.id));
+              canvasMenu = null;
+            }}
+          >
+            {t("graph.selectAll")}
+          </button>
+          <button
+            role="menuitem"
+            class="danger"
+            disabled={selected.size === 0}
+            onclick={() => {
+              deleteSelected();
+              canvasMenu = null;
+            }}
+          >
+            {t("graph.delete")}
+          </button>
+        </div>
+      {/if}
+
       {#if addMenu}
         <div
           class="graph-add-menu"
@@ -1194,6 +1260,7 @@
           tabindex="-1"
           onmousedown={(event) => event.stopPropagation()}
         >
+          <div class="graph-menu-label">{t("graph.menuAudio")}</div>
           <button
             role="menuitem"
             disabled={busy || hasAdsr}
