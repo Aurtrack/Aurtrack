@@ -147,6 +147,7 @@
   let nodeDrag = $state<NodeDrag | null>(null);
   let panDrag = $state<PanDrag | null>(null);
   let marquee = $state<Marquee | null>(null);
+  let lasso = $state<{ points: Point[]; subtract: boolean } | null>(null);
   let wireDrag = $state<WireDrag | null>(null);
   let pendingWire = $state<WireDrag | null>(null);
   let wireError = $state("");
@@ -588,6 +589,14 @@
     ) {
       return;
     }
+    if (event.ctrlKey && event.altKey) {
+      const screen = pointer(event);
+      if (screen) {
+        lasso = { points: [screen], subtract: event.shiftKey };
+      }
+      event.preventDefault();
+      return;
+    }
     const point = worldPoint(event);
     if (!point) return;
     const additive = event.shiftKey;
@@ -717,6 +726,19 @@
 
   function handleMouseMove(event: MouseEvent) {
     lastPointer = pointer(event) ?? lastPointer;
+    if (lasso) {
+      const point = pointer(event);
+      if (point) {
+        const previous = lasso.points.at(-1);
+        if (
+          !previous ||
+          Math.hypot(point.x - previous.x, point.y - previous.y) > 2
+        ) {
+          lasso = { ...lasso, points: [...lasso.points, point] };
+        }
+      }
+      return;
+    }
     if (panDrag) {
       view = {
         ...view,
@@ -783,7 +805,45 @@
     selected = area.additive ? new Set([...selected, ...hits]) : new Set(hits);
   }
 
+  function pointInPolygon(point: Point, polygon: Point[]): boolean {
+    let inside = false;
+    for (let index = 0, previous = polygon.length - 1; index < polygon.length; previous = index++) {
+      const current = polygon[index];
+      const before = polygon[previous];
+      if (!current || !before) continue;
+      const intersects =
+        current.y > point.y !== before.y > point.y &&
+        point.x <
+          ((before.x - current.x) * (point.y - current.y)) /
+            (before.y - current.y) +
+            current.x;
+      if (intersects) inside = !inside;
+    }
+    return inside;
+  }
+
   function handleMouseUp() {
+    if (lasso) {
+      const area = lasso;
+      lasso = null;
+      if (area.points.length > 2) {
+        const next = new Set(selected);
+        for (const node of nodes) {
+          const position = nodePositions[node.id];
+          if (!position) continue;
+          const center = {
+            x: view.x + (position.x + position.w / 2) * view.scale,
+            y: view.y + (position.y + position.h / 2) * view.scale,
+          };
+          if (pointInPolygon(center, area.points)) {
+            if (area.subtract) next.delete(node.id);
+            else next.add(node.id);
+          }
+        }
+        selected = next;
+      }
+      return;
+    }
     if (panDrag) {
       panDrag = null;
       return;
@@ -1211,6 +1271,15 @@
 
         {#if marquee}
           <div class="graph-marquee" style={marqueeStyle()}></div>
+        {/if}
+        {#if lasso}
+          <svg class="graph-lasso" aria-hidden="true">
+            <polyline
+              points={lasso.points
+                .map((point) => `${point.x},${point.y}`)
+                .join(" ")}
+            />
+          </svg>
         {/if}
 
         {#each nodes as node (node.id)}

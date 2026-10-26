@@ -55,6 +55,7 @@
     startX: number;
     startY: number;
     origins: Record<string, Point>;
+    moved: boolean;
   };
   type Wire = {
     node: string;
@@ -186,6 +187,8 @@
     x2: number;
     y2: number;
   } | null>(null);
+  let lasso = $state<{ points: Point[]; subtract: boolean } | null>(null);
+  let insertTarget = $state<VoiceConnection | null>(null);
   let drag = $state<Drag | null>(null);
   let nodeMenu = $state<{ x: number; y: number; nodeId: string } | null>(null);
   let pendingLink = $state<Wire | null>(null);
@@ -328,6 +331,140 @@
     const y2 = to.y + portY(target, inIndex);
     const bend = Math.max(40, Math.abs(x2 - x1) * 0.45);
     return `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`;
+  }
+
+  function connectionEnds(
+    connection: VoiceConnection,
+  ): { from: Point; to: Point } | null {
+    const source = voice.nodes[connection.from.node];
+    const target = voice.nodes[connection.to.node];
+    const sourcePosition = positions[connection.from.node];
+    const targetPosition = positions[connection.to.node];
+    if (!source || !target || !sourcePosition || !targetPosition) return null;
+    const outIndex = Math.max(
+      0,
+      outputList(source).findIndex((port) => port.id === connection.from.port),
+    );
+    const inIndex = Math.max(
+      0,
+      inputList(target).findIndex((port) => port.id === connection.to.port),
+    );
+    return {
+      from: {
+        x: sourcePosition.x + NODE_WIDTH,
+        y: sourcePosition.y + portY(source, outIndex),
+      },
+      to: {
+        x: targetPosition.x,
+        y: targetPosition.y + portY(target, inIndex),
+      },
+    };
+  }
+
+  function pointSegmentDistance(
+    point: Point,
+    from: Point,
+    to: Point,
+  ): number {
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const length = dx * dx + dy * dy;
+    const t =
+      length === 0
+        ? 0
+        : Math.max(
+            0,
+            Math.min(
+              1,
+              ((point.x - from.x) * dx + (point.y - from.y) * dy) / length,
+            ),
+          );
+    return Math.hypot(
+      point.x - (from.x + dx * t),
+      point.y - (from.y + dy * t),
+    );
+  }
+
+  function findInsertTarget(node: VoiceNode): VoiceConnection | null {
+    const position = positions[node.id];
+    if (!position) return null;
+    const center = {
+      x: position.x + NODE_WIDTH / 2,
+      y: position.y + nodeHeight(node) / 2,
+    };
+    const inputs = inputList(node);
+    const outputs = outputList(node);
+    if (inputs.length === 0 || outputs.length === 0) return null;
+    for (const connection of voice.connections) {
+      if (
+        connection.from.node === node.id ||
+        connection.to.node === node.id
+      ) {
+        continue;
+      }
+      const ends = connectionEnds(connection);
+      if (!ends) continue;
+      const bend = Math.max(40, Math.abs(ends.to.x - ends.from.x) * 0.45);
+      let closest = Infinity;
+      let previous = ends.from;
+      for (let step = 1; step <= 18; step += 1) {
+        const t = step / 18;
+        const inverse = 1 - t;
+        const point = {
+          x:
+            inverse ** 3 * ends.from.x +
+            3 * inverse ** 2 * t * (ends.from.x + bend) +
+            3 * inverse * t ** 2 * (ends.to.x - bend) +
+            t ** 3 * ends.to.x,
+          y:
+            inverse ** 3 * ends.from.y +
+            3 * inverse ** 2 * t * ends.from.y +
+            3 * inverse * t ** 2 * ends.to.y +
+            t ** 3 * ends.to.y,
+        };
+        closest = Math.min(
+          closest,
+          pointSegmentDistance(center, previous, point),
+        );
+        previous = point;
+      }
+      const source = voice.nodes[connection.from.node];
+      const type = source
+        ? outputList(source).find((port) => port.id === connection.from.port)
+            ?.ty
+        : undefined;
+      if (
+        closest <= 26 &&
+        type &&
+        inputs.some((port) => port.ty === type) &&
+        outputs.some((port) => port.ty === type)
+      ) {
+        return connection;
+      }
+    }
+    return null;
+  }
+
+  function insertNodeOnLink(node: VoiceNode, connection: VoiceConnection) {
+    const source = voice.nodes[connection.from.node];
+    const type = source
+      ? outputList(source).find((port) => port.id === connection.from.port)?.ty
+      : undefined;
+    if (!type) return;
+    const input = inputList(node).find((port) => port.ty === type);
+    const output = outputList(node).find((port) => port.ty === type);
+    if (!input || !output) return;
+    voice.connections = voice.connections.filter(
+      (candidate) => candidate !== connection,
+    );
+    voice.connections.push({
+      from: { ...connection.from },
+      to: { node: node.id, port: input.id },
+    });
+    voice.connections.push({
+      from: { node: node.id, port: output.id },
+      to: { ...connection.to },
+    });
   }
 
   function tempWirePath(): string {
@@ -482,6 +619,7 @@
       startX: event.clientX,
       startY: event.clientY,
       origins,
+      moved: false,
     };
   }
 
@@ -491,6 +629,19 @@
       wireMoved = true;
       const point = worldPoint(event);
       if (point) wire = { ...wire, x: point.x, y: point.y };
+      return;
+    }
+    if (lasso) {
+      const point = boardPoint(event);
+      if (point) {
+        const previous = lasso.points.at(-1);
+        if (
+          !previous ||
+          Math.hypot(point.x - previous.x, point.y - previous.y) > 2
+        ) {
+          lasso = { ...lasso, points: [...lasso.points, point] };
+        }
+      }
       return;
     }
     if (pan) {
@@ -532,12 +683,18 @@
     if (!drag) return;
     const dx = (event.clientX - drag.startX) / view.scale;
     const dy = (event.clientY - drag.startY) / view.scale;
+    if (!drag.moved && Math.hypot(dx, dy) < 3) return;
+    drag.moved = true;
     for (const id of drag.ids) {
       const node = voice.nodes[id];
       const origin = drag.origins[id];
       if (!node || !origin) continue;
       node.position = [origin.x + dx, origin.y + dy];
     }
+    insertTarget =
+      drag.ids.length === 1 && voice.nodes[drag.ids[0] ?? ""]
+        ? findInsertTarget(voice.nodes[drag.ids[0] ?? ""]!)
+        : null;
   }
 
   function boardMouseDown(event: MouseEvent) {
@@ -558,6 +715,17 @@
     addMenu = null;
     nodeMenu = null;
     if (event.button !== 0) return;
+    if (event.button === 0 && event.ctrlKey && event.altKey) {
+      event.preventDefault();
+      const point = boardPoint(event);
+      if (point) {
+        lasso = {
+          points: [point],
+          subtract: event.shiftKey,
+        };
+      }
+      return;
+    }
     if (event.altKey) {
       event.preventDefault();
       pan = {
@@ -589,6 +757,23 @@
       x: point.x - (point.x - view.x) * ratio,
       y: point.y - (point.y - view.y) * ratio,
     };
+  }
+
+  function pointInPolygon(point: Point, polygon: Point[]): boolean {
+    let inside = false;
+    for (let index = 0, previous = polygon.length - 1; index < polygon.length; previous = index++) {
+      const current = polygon[index];
+      const before = polygon[previous];
+      if (!current || !before) continue;
+      const intersects =
+        current.y > point.y !== before.y > point.y &&
+        point.x <
+          ((before.x - current.x) * (point.y - current.y)) /
+            (before.y - current.y) +
+            current.x;
+      if (intersects) inside = !inside;
+    }
+    return inside;
   }
 
   function marqueeStyle(): string {
@@ -636,6 +821,28 @@
         }
       }
     }
+    if (lasso) {
+      const area = lasso;
+      lasso = null;
+      if (area.points.length > 2) {
+        const next = new Set(selected);
+        for (const node of nodes) {
+          const position = positions[node.id];
+          if (!position) continue;
+          const center = {
+            x: view.x + (position.x + NODE_WIDTH / 2) * view.scale,
+            y:
+              view.y +
+              (position.y + nodeHeight(node) / 2) * view.scale,
+          };
+          if (pointInPolygon(center, area.points)) {
+            if (area.subtract) next.delete(node.id);
+            else next.add(node.id);
+          }
+        }
+        selected = next;
+      }
+    }
     if (marquee) {
       const left = Math.min(marquee.x1, marquee.x2);
       const right = Math.max(marquee.x1, marquee.x2);
@@ -661,6 +868,16 @@
       selected = next;
       marquee = null;
     }
+    if (
+      drag &&
+      drag.moved &&
+      drag.ids.length === 1 &&
+      insertTarget &&
+      voice.nodes[drag.ids[0] ?? ""]
+    ) {
+      insertNodeOnLink(voice.nodes[drag.ids[0] ?? ""]!, insertTarget);
+    }
+    insertTarget = null;
     pan = null;
     drag = null;
     frameDrag = null;
@@ -1584,6 +1801,9 @@
         {#each voice.connections as connection (connection.from.node + connection.from.port + connection.to.node + connection.to.port)}
           <path d={wirePath(connection)} style:stroke={wireColor(connection)} />
         {/each}
+        {#if insertTarget}
+          <path class="voice-wire-insert" d={wirePath(insertTarget)} />
+        {/if}
         {#if wire}
           <path
             class="voice-wire-temp"
@@ -1752,6 +1972,13 @@
       </div>
       {#if marquee}
         <div class="voice-marquee" style={marqueeStyle()}></div>
+      {/if}
+      {#if lasso}
+        <svg class="voice-lasso" aria-hidden="true">
+          <polyline
+            points={lasso.points.map((point) => `${point.x},${point.y}`).join(" ")}
+          />
+        </svg>
       {/if}
     </div>
 

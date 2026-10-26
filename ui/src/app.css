@@ -2962,3 +2962,25 @@ button:disabled {
 .voice-node {
   z-index: 2;
 }
+.voice-lasso,
+.graph-lasso {
+  position: absolute;
+  z-index: 5;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.voice-lasso polyline,
+.graph-lasso polyline {
+  fill: rgb(47 107 160 / 6%);
+  stroke: var(--blue);
+  stroke-width: 1;
+  stroke-dasharray: 3 2;
+}
+.voice-wire-insert {
+  fill: none;
+  stroke: var(--blue);
+  stroke-width: 4;
+  opacity: 0.55;
+}
