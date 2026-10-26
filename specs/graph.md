@@ -83,7 +83,11 @@ instrument.silence -> output
 
 嵌套组的端口来自被引用组的接口；编译器递归展开，循环引用会被拒绝。
 
-Voice 节点实例用 `type_id` 引用注册表，端口和参数由 `node.types` 声明。当前类型：`group.input`、`osc.partials`、`env.percussive`、`noise.burst`、`voice.mix`、`voice.group`、`group.output`、`math.add`、`math.multiply`、`math.map_range`、`math.clamp`、`value.float`。
+Voice 节点实例用 `type_id` 引用注册表，端口和参数由 `node.types` 声明。轨道图使用 `AudioGraph`，同样以 `type_id` 引用 `AUDIO_NODE_TYPES`，节点不再保存固定 kind。
+
+Audio 节点类型：`audio.group`、`audio.instrument.sine`、`audio.instrument.silence`、`audio.adsr`、`audio.plugin`、`audio.gain`、`audio.mix`、`audio.filter.lowpass`、`audio.filter.highpass`、`audio.drive`、`audio.delay`、`audio.value`、`audio.output`。
+
+工程视图同时输出 `type_id` 和兼容用 `kind`；写入只认 `type_id`。当前类型：`group.input`、`osc.partials`、`env.percussive`、`noise.burst`、`voice.mix`、`voice.group`、`group.output`、`math.add`、`math.multiply`、`math.map_range`、`math.clamp`、`value.float`。
 
 插件节点必须带 `plugin` 配置：
 
