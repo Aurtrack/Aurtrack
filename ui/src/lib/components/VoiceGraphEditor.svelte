@@ -194,6 +194,7 @@
   } | null>(null);
   let lasso = $state<{ points: Point[]; subtract: boolean } | null>(null);
   let insertTarget = $state<VoiceConnection | null>(null);
+  let cutLine = $state<Point[] | null>(null);
   let drag = $state<Drag | null>(null);
   let nodeMenu = $state<{ x: number; y: number; nodeId: string } | null>(null);
   let pendingLink = $state<Wire | null>(null);
@@ -348,6 +349,63 @@
         y: targetPosition.y + portY(target, inIndex),
       },
     };
+  }
+
+  function wireSamples(
+    connection: VoiceConnection,
+    steps = 24,
+  ): Point[] {
+    const ends = connectionEnds(connection);
+    if (!ends) return [];
+    const bend = Math.max(40, Math.abs(ends.to.x - ends.from.x) * 0.45);
+    const points: Point[] = [];
+    for (let step = 0; step <= steps; step += 1) {
+      const t = step / steps;
+      const inverse = 1 - t;
+      points.push({
+        x:
+          inverse ** 3 * ends.from.x +
+          3 * inverse ** 2 * t * (ends.from.x + bend) +
+          3 * inverse * t ** 2 * (ends.to.x - bend) +
+          t ** 3 * ends.to.x,
+        y:
+          inverse ** 3 * ends.from.y +
+          3 * inverse ** 2 * t * ends.from.y +
+          3 * inverse * t ** 2 * ends.to.y +
+          t ** 3 * ends.to.y,
+      });
+    }
+    return points;
+  }
+
+  function segmentsIntersect(
+    a: Point,
+    b: Point,
+    c: Point,
+    d: Point,
+  ): boolean {
+    const cross = (p: Point, q: Point, r: Point) =>
+      (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+    const d1 = cross(a, b, c);
+    const d2 = cross(a, b, d);
+    const d3 = cross(c, d, a);
+    const d4 = cross(c, d, b);
+    return d1 * d2 <= 0 && d3 * d4 <= 0;
+  }
+
+  function cutWire(connection: VoiceConnection, line: Point[]): boolean {
+    const samples = wireSamples(connection);
+    for (let index = 1; index < line.length; index += 1) {
+      const a = line[index - 1];
+      const b = line[index];
+      if (!a || !b) continue;
+      for (let step = 1; step < samples.length; step += 1) {
+        const c = samples[step - 1];
+        const d = samples[step];
+        if (c && d && segmentsIntersect(a, b, c, d)) return true;
+      }
+    }
+    return false;
   }
 
   function pointSegmentDistance(
@@ -614,6 +672,19 @@
 
   function move(event: MouseEvent) {
     lastPointer = { x: event.clientX, y: event.clientY };
+    if (cutLine) {
+      const point = boardPoint(event);
+      if (point) {
+        const previous = cutLine.at(-1);
+        if (
+          !previous ||
+          Math.hypot(point.x - previous.x, point.y - previous.y) > 2
+        ) {
+          cutLine = [...cutLine, point];
+        }
+      }
+      return;
+    }
     if (wire) {
       wireMoved = true;
       const point = worldPoint(event);
@@ -687,6 +758,16 @@
   }
 
   function boardMouseDown(event: MouseEvent) {
+    if (event.button === 2 && event.ctrlKey) {
+      event.preventDefault();
+      const point = boardPoint(event);
+      if (point) {
+        cutLine = [point];
+        addMenu = null;
+        nodeMenu = null;
+      }
+      return;
+    }
     if (event.button === 1) {
       event.preventDefault();
       pan = {
@@ -775,6 +856,16 @@
   }
 
   function end(event?: MouseEvent) {
+    if (cutLine) {
+      const line = cutLine;
+      cutLine = null;
+      if (line.length > 1) {
+        voice.connections = voice.connections.filter(
+          (connection) => !cutWire(connection, line),
+        );
+      }
+      return;
+    }
     if (wire && event) {
       const element = document.elementFromPoint(event.clientX, event.clientY);
       const target = element?.closest<HTMLElement>(".voice-port");
@@ -1738,6 +1829,7 @@
       bind:this={boardElement}
       oncontextmenu={(event) => {
         event.preventDefault();
+        if (event.ctrlKey) return;
         addMenu = { x: event.clientX, y: event.clientY };
       }}
       onmousedown={boardMouseDown}
@@ -1966,6 +2058,13 @@
         <svg class="voice-lasso" aria-hidden="true">
           <polyline
             points={lasso.points.map((point) => `${point.x},${point.y}`).join(" ")}
+          />
+        </svg>
+      {/if}
+      {#if cutLine}
+        <svg class="voice-cut" aria-hidden="true">
+          <polyline
+            points={cutLine.map((point) => `${point.x},${point.y}`).join(" ")}
           />
         </svg>
       {/if}

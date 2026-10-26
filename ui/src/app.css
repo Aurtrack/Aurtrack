@@ -2991,3 +2991,19 @@ button:disabled {
   opacity: 0.55;
   pointer-events: none;
 }
+.voice-cut,
+.graph-cut {
+  position: absolute;
+  z-index: 6;
+  inset: 0;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.voice-cut polyline,
+.graph-cut polyline {
+  fill: none;
+  stroke: #b23a3a;
+  stroke-width: 1.4;
+  stroke-dasharray: 4 2;
+}

@@ -160,6 +160,7 @@
   let pendingWire = $state<WireDrag | null>(null);
   let insertTarget = $state<GraphConnection | null>(null);
   let clipboard = $state<string[]>([]);
+  let cutLine = $state<Point[] | null>(null);
   let frameDraft = $state<Record<string, VoiceFrame> | null>(null);
   let frameDrag = $state<{
     id: string;
@@ -514,6 +515,64 @@
     );
   }
 
+  function wireSamples(
+    connection: GraphConnection,
+    steps = 24,
+  ): Point[] {
+    const from = outputPoint(connection.from.node);
+    const to = inputPoint(connection.to.node, connection.to.port);
+    if (!from || !to) return [];
+    const bend = Math.max(48, Math.abs(to.x - from.x) * 0.4);
+    const points: Point[] = [];
+    for (let step = 0; step <= steps; step += 1) {
+      const t = step / steps;
+      const inverse = 1 - t;
+      points.push({
+        x:
+          inverse ** 3 * from.x +
+          3 * inverse ** 2 * t * (from.x + bend) +
+          3 * inverse * t ** 2 * (to.x - bend) +
+          t ** 3 * to.x,
+        y:
+          inverse ** 3 * from.y +
+          3 * inverse ** 2 * t * from.y +
+          3 * inverse * t ** 2 * to.y +
+          t ** 3 * to.y,
+      });
+    }
+    return points;
+  }
+
+  function segmentsIntersect(
+    a: Point,
+    b: Point,
+    c: Point,
+    d: Point,
+  ): boolean {
+    const cross = (p: Point, q: Point, r: Point) =>
+      (q.x - p.x) * (r.y - p.y) - (q.y - p.y) * (r.x - p.x);
+    const d1 = cross(a, b, c);
+    const d2 = cross(a, b, d);
+    const d3 = cross(c, d, a);
+    const d4 = cross(c, d, b);
+    return d1 * d2 <= 0 && d3 * d4 <= 0;
+  }
+
+  function cutWire(connection: GraphConnection, line: Point[]): boolean {
+    const samples = wireSamples(connection);
+    for (let index = 1; index < line.length; index += 1) {
+      const a = line[index - 1];
+      const b = line[index];
+      if (!a || !b) continue;
+      for (let step = 1; step < samples.length; step += 1) {
+        const c = samples[step - 1];
+        const d = samples[step];
+        if (c && d && segmentsIntersect(a, b, c, d)) return true;
+      }
+    }
+    return false;
+  }
+
   function findInsertTarget(nodeId: string): GraphConnection | null {
     const node = graph?.nodes[nodeId];
     const position = nodePositions[nodeId];
@@ -699,7 +758,7 @@
   }
 
   function openCanvasMenu(event: MouseEvent) {
-    if (event.button !== 2) return;
+    if (event.button !== 2 || event.ctrlKey) return;
     const target = event.target as Element | null;
     if (target?.closest(".graph-node, .graph-wire-hit")) return;
     event.preventDefault();
@@ -709,6 +768,17 @@
   }
 
   function boardMouseDown(event: MouseEvent) {
+    if (event.button === 2 && event.ctrlKey) {
+      event.preventDefault();
+      const point = pointer(event);
+      if (point) {
+        cutLine = [point];
+        canvasMenu = null;
+        addMenu = null;
+        nodeMenu = null;
+      }
+      return;
+    }
     if (event.button === 1 || (spaceHeld && event.button === 0)) {
       event.preventDefault();
       panDrag = {
@@ -952,6 +1022,19 @@
 
   function handleMouseMove(event: MouseEvent) {
     lastPointer = pointer(event) ?? lastPointer;
+    if (cutLine) {
+      const point = pointer(event);
+      if (point) {
+        const previous = cutLine.at(-1);
+        if (
+          !previous ||
+          Math.hypot(point.x - previous.x, point.y - previous.y) > 2
+        ) {
+          cutLine = [...cutLine, point];
+        }
+      }
+      return;
+    }
     if (lasso) {
       const point = pointer(event);
       if (point) {
@@ -1103,7 +1186,25 @@
     return inside;
   }
 
-  function handleMouseUp() {
+  async function handleMouseUp() {
+    if (cutLine) {
+      const line = cutLine;
+      cutLine = null;
+      if (!track || line.length < 2) return;
+      const doomed = connections.filter((connection) =>
+        cutWire(connection, line),
+      );
+      for (const connection of doomed) {
+        await onDisconnect(
+          track.id,
+          connection.from.node,
+          connection.from.port,
+          connection.to.node,
+          connection.to.port,
+        );
+      }
+      return;
+    }
     if (frameDrag || frameResize) {
       const frames = frameDraft;
       const children = frameDrag?.children ?? {};
@@ -1659,6 +1760,15 @@
           <svg class="graph-lasso" aria-hidden="true">
             <polyline
               points={lasso.points
+                .map((point) => `${point.x},${point.y}`)
+                .join(" ")}
+            />
+          </svg>
+        {/if}
+        {#if cutLine}
+          <svg class="graph-cut" aria-hidden="true">
+            <polyline
+              points={cutLine
                 .map((point) => `${point.x},${point.y}`)
                 .join(" ")}
             />
