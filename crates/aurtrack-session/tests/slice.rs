@@ -333,7 +333,7 @@ fn batch_note_edits_and_cross_track_clip_move_share_snapshots() {
 fn describe_lists_all_commands() {
     let mut session = Session::default();
     let out = run(&mut session, "describe", json!({}));
-    assert_eq!(out["commands"].as_array().unwrap().len(), 61);
+    assert_eq!(out["commands"].as_array().unwrap().len(), 62);
     assert!(out["project"].is_null());
 }
 
@@ -1552,6 +1552,31 @@ fn group_from_nodes_rewires_boundaries() {
         .unwrap()
         .2;
     assert!(plan.piano.unwrap().voice.unwrap().nodes.len() > 6);
+}
+
+#[test]
+fn node_flags_are_stored_in_project_view() {
+    let mut session = Session::default();
+    run(&mut session, "project.create", json!({ "name": "flags" }));
+    run(
+        &mut session,
+        "track.create",
+        json!({ "name": "sine", "source": "sine" }),
+    );
+    run(
+        &mut session,
+        "node.flags",
+        json!({
+            "track_id": "track-1",
+            "node_id": "instrument",
+            "collapsed": true,
+            "muted": true
+        }),
+    );
+    let state = run(&mut session, "project.state", json!({}));
+    let node = &state["project"]["tracks"][0]["graph"]["nodes"]["instrument"];
+    assert_eq!(node["collapsed"], true);
+    assert_eq!(node["muted"], true);
 }
 
 #[test]

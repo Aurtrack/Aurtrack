@@ -198,7 +198,7 @@ mod tests {
         )
         .unwrap();
         let value: Value = serde_json::from_str(&list).unwrap();
-        assert_eq!(value["result"]["tools"].as_array().unwrap().len(), 61);
+        assert_eq!(value["result"]["tools"].as_array().unwrap().len(), 62);
     }
 
     #[test]

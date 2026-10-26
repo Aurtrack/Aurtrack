@@ -474,6 +474,10 @@ pub struct AudioNode {
     pub group: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin: Option<PluginConfig>,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub muted: bool,
+    #[serde(default, skip_serializing_if = "crate::is_false")]
+    pub collapsed: bool,
 }
 
 impl AudioNode {
@@ -494,6 +498,8 @@ impl AudioNode {
             position: None,
             group: None,
             plugin: None,
+            muted: false,
+            collapsed: false,
         }
     }
 
@@ -664,6 +670,26 @@ impl AudioGraph {
 
     pub fn node(&self, id: &NodeId) -> Option<&AudioNode> {
         self.nodes.get(id)
+    }
+
+    /// 修改节点的显示状态。
+    pub fn set_flags(
+        &mut self,
+        id: &NodeId,
+        muted: Option<bool>,
+        collapsed: Option<bool>,
+    ) -> Result<(), GraphError> {
+        let node = self
+            .nodes
+            .get_mut(id)
+            .ok_or_else(|| GraphError::UnknownNode(id.clone()))?;
+        if let Some(muted) = muted {
+            node.muted = muted;
+        }
+        if let Some(collapsed) = collapsed {
+            node.collapsed = collapsed;
+        }
+        Ok(())
     }
 
     pub fn nodes(&self) -> impl Iterator<Item = &AudioNode> {

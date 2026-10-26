@@ -237,6 +237,18 @@ fn group_create_schema() -> Value {
     )
 }
 
+fn node_flags_schema() -> Value {
+    object_schema(
+        json!({
+            "track_id": { "type": "string" },
+            "node_id": { "type": "string" },
+            "muted": { "type": "boolean" },
+            "collapsed": { "type": "boolean" }
+        }),
+        &["track_id", "node_id"],
+    )
+}
+
 fn group_from_nodes_schema() -> Value {
     object_schema(
         json!({
@@ -831,7 +843,7 @@ fn transport_metronome_schema() -> Value {
     )
 }
 
-static COMMANDS: [CommandSpec; 61] = [
+static COMMANDS: [CommandSpec; 62] = [
     CommandSpec {
         id: "project.create",
         summary: "创建或替换当前工程",
@@ -1017,6 +1029,12 @@ static COMMANDS: [CommandSpec; 61] = [
         summary: "把组节点展开回父图",
         undo: UndoKind::Snapshot,
         input_schema: group_ungroup_schema,
+    },
+    CommandSpec {
+        id: "node.flags",
+        summary: "设置节点静音或折叠状态",
+        undo: UndoKind::Snapshot,
+        input_schema: node_flags_schema,
     },
     CommandSpec {
         id: "device.add",

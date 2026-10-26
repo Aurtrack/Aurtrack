@@ -208,7 +208,31 @@ impl Track {
                 .graph
                 .node(&id)
                 .ok_or_else(|| GraphError::UnknownNode(id.clone()))?;
-            let inputs = self.audio_inputs(node, &indices, &mut nodes)?;
+            let mut inputs = self.audio_inputs(node, &indices, &mut nodes)?;
+            if node.muted && node.type_id != "audio.output" {
+                let target = if let Some(index) = inputs.first().copied() {
+                    index
+                } else {
+                    let index = nodes.len();
+                    nodes.push(GraphNodePlan {
+                        op: GraphOp::Constant(0.0),
+                        inputs: Vec::new(),
+                        controls: Vec::new(),
+                    });
+                    index
+                };
+                indices.insert(id, target);
+                continue;
+            }
+            if node.muted {
+                let index = nodes.len();
+                nodes.push(GraphNodePlan {
+                    op: GraphOp::Constant(0.0),
+                    inputs: Vec::new(),
+                    controls: Vec::new(),
+                });
+                inputs = vec![index];
+            }
             let controls = self.audio_controls(node, &indices, &mut nodes)?;
             let op = match node.type_id.as_str() {
                 "audio.group" | "audio.instrument.sine" | "audio.instrument.silence" => {
@@ -425,6 +449,23 @@ fn compile_voice_inner(
             }
             continue;
         }
+        if node.muted && node.type_id != "group.output" {
+            let ports = aurtrack_graph::node_inputs(node, interface, groups)?;
+            let audio_index = ports
+                .iter()
+                .position(|port| port.ty == NodeGroupSocketType::Audio);
+            let target = if let Some(index) = audio_index.and_then(|index| inputs.get(index)) {
+                *index
+            } else {
+                let index = nodes.len();
+                nodes.push(VoiceNodePlan::new(VoiceOp::Constant(0.0), Vec::new()));
+                index
+            };
+            for port in aurtrack_graph::node_outputs(node, interface, groups)? {
+                indices.insert((id.clone(), port.id), target);
+            }
+            continue;
+        }
         if node.type_id == "voice.group" {
             let group_id = node.group.as_deref().ok_or(GraphError::EmptyGroupId)?;
             if stack.iter().any(|item| item == group_id) {
@@ -625,6 +666,7 @@ impl Session {
             "node.connect" => self.cmd_node_connect(&request.args),
             "node.disconnect" => self.cmd_node_disconnect(&request.args),
             "node.position" => self.cmd_node_position(&request.args),
+            "node.flags" => self.cmd_node_flags(&request.args),
             "node.duplicate" => self.cmd_node_duplicate(&request.args),
             "node.remove_many" => self.cmd_node_remove_many(&request.args),
             "param.set" => self.cmd_param_set(&request.args),
@@ -2880,6 +2922,41 @@ impl Session {
         Ok(CommandResponse::ok(json!({ "positions": args.positions })).with_undo(token))
     }
 
+    fn cmd_node_flags(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct FlagsArgs {
+            track_id: String,
+            node_id: String,
+            #[serde(default)]
+            muted: Option<bool>,
+            #[serde(default)]
+            collapsed: Option<bool>,
+        }
+        let args: FlagsArgs = parse_args(args)?;
+        if args.muted.is_none() && args.collapsed.is_none() {
+            return Err(CommandError::invalid_args(
+                "muted 和 collapsed 至少提供一个",
+            ));
+        }
+        let node_id = NodeId::new(args.node_id).map_err(graph_error)?;
+        let token = self.snapshot("node.flags");
+        let project = self
+            .project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let track = project
+            .tracks
+            .iter_mut()
+            .find(|track| track.id == args.track_id)
+            .ok_or_else(|| CommandError::not_found(format!("找不到轨道：{}", args.track_id)))?;
+        track
+            .graph
+            .set_flags(&node_id, args.muted, args.collapsed)
+            .map_err(graph_error)?;
+        Ok(CommandResponse::ok(json!({ "node_id": node_id.to_string() })).with_undo(token))
+    }
+
     fn cmd_node_duplicate(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
         let args: NodeDuplicateArgs = parse_args(args)?;
         if args.paths.is_empty() {
@@ -3173,6 +3250,12 @@ fn graph_view(graph: &aurtrack_graph::AudioGraph) -> Value {
             }
             if let Some(plugin) = &node.plugin {
                 view["plugin"] = json!(plugin);
+            }
+            if node.muted {
+                view["muted"] = json!(true);
+            }
+            if node.collapsed {
+                view["collapsed"] = json!(true);
             }
             (id.to_string(), view)
         })

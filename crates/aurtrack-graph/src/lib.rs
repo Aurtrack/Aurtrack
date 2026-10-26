@@ -1021,6 +1021,15 @@ pub struct VoiceNode {
     pub position: Option<[f64; 2]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub muted: bool,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub collapsed: bool,
+}
+
+#[allow(clippy::trivially_copy_pass_by_ref)]
+fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl VoiceNode {
@@ -1041,6 +1050,8 @@ impl VoiceNode {
             params,
             position: None,
             group: None,
+            muted: false,
+            collapsed: false,
         }
     }
 
@@ -2204,16 +2215,9 @@ mod tests {
         let interface = NodeGroupInterface::piano();
         let mut graph = VoiceGraph::shell(&interface);
         let id = NodeId::new("nested").unwrap();
-        graph.nodes.insert(
-            id.clone(),
-            VoiceNode {
-                id: id.clone(),
-                type_id: "voice.group".to_string(),
-                params: BTreeMap::new(),
-                position: None,
-                group: Some("missing.voice".to_string()),
-            },
-        );
+        let mut nested = VoiceNode::new(id.clone(), "voice.group");
+        nested.group = Some("missing.voice".to_string());
+        graph.nodes.insert(id.clone(), nested);
         graph.connections.push(VoiceConnection {
             from: PortRef::fixed(NodeId::fixed("voice-in"), "pitch"),
             to: PortRef::new(id, "pitch"),
