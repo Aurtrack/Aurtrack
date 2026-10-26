@@ -416,6 +416,37 @@ impl FilterPlan {
     }
 }
 
+/// 一阶高通，使用原子状态以便实时线程无锁。
+#[derive(Debug, Clone)]
+pub struct HighpassPlan {
+    pub cutoff: f64,
+    pub resonance: f64,
+    state: Arc<AtomicU64>,
+}
+
+impl HighpassPlan {
+    pub fn new(cutoff: f64, resonance: f64) -> Self {
+        Self {
+            cutoff: cutoff.clamp(20.0, 20_000.0),
+            resonance: resonance.clamp(0.0, 0.95),
+            state: Arc::new(AtomicU64::new(0.0_f64.to_bits())),
+        }
+    }
+
+    pub fn process(&self, sample_rate: u32, input: f64) -> f64 {
+        let rate = f64::from(sample_rate.max(1));
+        let alpha = (1.0 - (-std::f64::consts::TAU * self.cutoff / rate).exp()).clamp(0.0, 1.0);
+        let low = f64::from_bits(self.state.load(Ordering::Relaxed));
+        let low = low + alpha * (input - low);
+        self.state.store(low.to_bits(), Ordering::Relaxed);
+        (input - low) * (1.0 + self.resonance)
+    }
+
+    pub fn reset(&self) {
+        self.state.store(0.0_f64.to_bits(), Ordering::Relaxed);
+    }
+}
+
 /// DAG 计划最多允许的节点数。
 pub const MAX_GRAPH_NODES: usize = 64;
 
@@ -431,7 +462,9 @@ pub struct GraphNodePlan {
 pub enum GraphOp {
     Voice,
     Filter(FilterPlan),
+    Highpass(HighpassPlan),
     Gain(f64),
+    Drive(f64),
     Mix,
     Plugin,
     Output,
@@ -459,8 +492,16 @@ impl GraphPlan {
                     .inputs
                     .first()
                     .map_or(0.0, |input| filter.process(sample_rate, values[*input])),
+                GraphOp::Highpass(filter) => node
+                    .inputs
+                    .first()
+                    .map_or(0.0, |input| filter.process(sample_rate, values[*input])),
                 GraphOp::Gain(gain) => {
                     node.inputs.first().map_or(0.0, |input| values[*input]) * gain
+                },
+                GraphOp::Drive(drive) => {
+                    let input = node.inputs.first().map_or(0.0, |input| values[*input]);
+                    (input * drive.max(1.0)).tanh()
                 },
                 GraphOp::Mix => node.inputs.iter().map(|input| values[*input]).sum(),
                 GraphOp::Plugin => node.inputs.first().map_or(0.0, |input| values[*input]),

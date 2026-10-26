@@ -842,6 +842,39 @@ fn duplicate_nodes_copies_params_and_position() {
 }
 
 #[test]
+fn highpass_and_drive_render() {
+    let mut session = Session::default();
+    run(&mut session, "project.create", json!({}));
+    run(
+        &mut session,
+        "track.create",
+        json!({ "name": "lead", "source": "sine" }),
+    );
+    run(
+        &mut session,
+        "device.add",
+        json!({ "track_id": "track-1", "kind": "filter.highpass" }),
+    );
+    run(
+        &mut session,
+        "device.add",
+        json!({
+            "track_id": "track-1",
+            "kind": "drive",
+            "params": { "drive": 2.0 }
+        }),
+    );
+    let path = temp_path("highpass-drive");
+    let rendered = run(
+        &mut session,
+        "render.segment",
+        json!({ "duration_seconds": 0.5, "path": path }),
+    );
+    assert!(rendered["rms"].as_f64().unwrap() > 0.001);
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn branch_graph_connects_mix_and_renders() {
     let mut session = Session::default();
     run(&mut session, "project.create", json!({}));

@@ -29,8 +29,9 @@ use std::path::Path;
 
 use aurtrack_command::{CommandError, CommandRequest, CommandResponse, registry};
 use aurtrack_engine::{
-    AdsrPlan, FilterPlan, FilterSettings, GraphNodePlan, GraphOp, GraphPlan, NotePlan, PluginPlan,
-    VoiceNodePlan, VoiceOp, VoicePlan, adsr_envelope, midi_to_hz, note_envelope,
+    AdsrPlan, FilterPlan, FilterSettings, GraphNodePlan, GraphOp, GraphPlan, HighpassPlan,
+    NotePlan, PluginPlan, VoiceNodePlan, VoiceOp, VoicePlan, adsr_envelope, midi_to_hz,
+    note_envelope,
 };
 use aurtrack_graph::{
     GraphError, NodeGroup, NodeGroupInterface, NodeGroupSocketType, NodeId, PortRef, VoiceGraph,
@@ -217,13 +218,18 @@ impl Track {
                     node.param("cutoff").unwrap_or(1200.0),
                     node.param("resonance").unwrap_or(0.2),
                 ))),
+                "audio.filter.highpass" => GraphOp::Highpass(HighpassPlan::new(
+                    node.param("cutoff").unwrap_or(1200.0),
+                    node.param("resonance").unwrap_or(0.2),
+                )),
+                "audio.drive" => GraphOp::Drive(node.param("drive").unwrap_or(1.0)),
                 "audio.adsr" | "audio.delay" => GraphOp::Gain(1.0),
                 "audio.plugin" => GraphOp::Plugin,
                 "audio.output" => {
                     output = Some(nodes.len());
                     GraphOp::Output
                 },
-                "audio.filter.highpass" | "audio.drive" | "audio.value" => {
+                "audio.value" => {
                     return Err(GraphError::UnknownAudioNodeType(node.type_id.clone()));
                 },
                 other => return Err(GraphError::UnknownAudioNodeType(other.to_string())),
