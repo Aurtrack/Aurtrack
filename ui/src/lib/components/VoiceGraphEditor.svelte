@@ -10,7 +10,12 @@
     VoiceNode,
   } from "../api";
   import { errorMessage } from "../api";
-  import { t } from "../i18n.svelte";
+  import { t, tLoose } from "../i18n.svelte";
+  import {
+    nodeTypeLabel,
+    paramLabel,
+    socketLabel,
+  } from "../nodeLabels";
   import { session } from "../session.svelte";
   import NodeAddMenu from "./NodeAddMenu.svelte";
   import NumberField from "./NumberField.svelte";
@@ -96,10 +101,17 @@
   }
 
   function nodeLabel(node: VoiceNode): string {
-    if (node.type_id === "group.input") return "GROUP INPUT";
-    if (node.type_id === "group.output") return "GROUP OUTPUT";
-    if (node.type_id === "voice.group") return "VOICE GROUP";
-    return (typeById.get(node.type_id)?.name ?? node.type_id).toUpperCase();
+    if (node.type_id === "group.input") {
+      return tLoose("node.group.input", "GROUP INPUT").toUpperCase();
+    }
+    if (node.type_id === "group.output") {
+      return tLoose("node.group.output", "GROUP OUTPUT").toUpperCase();
+    }
+    if (node.type_id === "voice.group") {
+      return tLoose("node.voice.group", "VOICE GROUP").toUpperCase();
+    }
+    const info = typeById.get(node.type_id);
+    return (info ? nodeTypeLabel(info) : node.type_id).toUpperCase();
   }
 
   function interfacePorts(sockets: NodeGroupInterface["inputs"]): PortInfo[] {
@@ -1139,7 +1151,7 @@
     }
     list.push({
       id: `${prefix}-${number}`,
-      name: `${prefix.toUpperCase()} ${number}`,
+      name: `${tLoose(`socket.${prefix}`, prefix.toUpperCase())} ${number}`,
       type: side === "outputs" ? "audio" : "float",
     });
     queueInterfaceSave();
@@ -1698,7 +1710,8 @@
       event.key.toLowerCase() === "a" &&
       !event.ctrlKey &&
       !event.metaKey &&
-      !event.altKey
+      !event.altKey &&
+      !event.shiftKey
     ) {
       event.preventDefault();
       selected = new Set(nodes.map((node) => node.id));
@@ -1897,7 +1910,7 @@
         {/if}
         <div class="voice-interface-section">
           <div class="voice-interface-title">
-            <span>GROUPS</span>
+            <span>{t("voice.library")}</span>
           </div>
           {#each Object.values(groups) as group (group.id)}
             {#if group.id !== groupId}
@@ -2070,7 +2083,7 @@
                 data-port-type={port.ty}
                 onmousedown={(event) => startWire(event, node, port, "in")}
               ></button>
-              <span class="voice-socket-name in">{port.name}</span>
+              <span class="voice-socket-name in">{socketLabel(port.name)}</span>
               {#if param && !linked}
                 <div class="voice-socket-value">
                   <NumberField
@@ -2091,7 +2104,7 @@
               class="voice-socket-row out"
               style:top={`${portTop(node, index)}px`}
             >
-              <span class="voice-socket-name out">{port.name}</span>
+              <span class="voice-socket-name out">{socketLabel(port.name)}</span>
               <button
                 class="voice-port out"
                 class:port-audio={port.ty === "audio"}
@@ -2118,7 +2131,7 @@
                 index) *
                 NODE_ROW}
             <div class="voice-socket-row param" style:top={`${top}px`}>
-              <span class="voice-socket-name">{param.name}</span>
+              <span class="voice-socket-name">{paramLabel(param.name)}</span>
               <div class="voice-socket-value">
                 <NumberField
                   value={node.params[param.name] ?? param.default}
@@ -2202,8 +2215,10 @@
           <button
             class:active={!interfaceOpen}
             onclick={() => (interfaceOpen = false)}
-          >NODE</button>
-          <button class:active={interfaceOpen} onclick={openInterface}>GROUP</button>
+          >{t("graph.nodeTab")}</button>
+          <button class:active={interfaceOpen} onclick={openInterface}>
+            {t("graph.groupTab")}
+          </button>
           <button
             class="node-sidebar-close"
             title={t("voice.close")}
@@ -2273,9 +2288,9 @@
                     queueInterfaceSave();
                   }}
                 >
-                  <option value="float">FLOAT</option>
-                  <option value="gate">GATE</option>
-                  <option value="audio">AUDIO</option>
+                  <option value="float">{t("graph.typeFloat")}</option>
+                  <option value="gate">{t("graph.typeGate")}</option>
+                  <option value="audio">{t("graph.typeAudio")}</option>
                 </select>
                 <button
                   class="ghost small"
@@ -2297,7 +2312,7 @@
         {:else if voice.nodes[active]}
           {@const node = voice.nodes[active]!}
           <div class="node-sidebar-section">
-            <div class="node-sidebar-label">ACTIVE NODE</div>
+            <div class="node-sidebar-label">{t("graph.activeNode")}</div>
             <strong>{nodeLabel(node)}</strong>
             <code>{node.id}</code>
             <div class="node-sidebar-type">{node.type_id}</div>
@@ -2311,7 +2326,7 @@
             {/if}
             {#each sidebarParams(node) as param (param.name)}
               <label class="node-sidebar-param">
-                <span>{param.name}</span>
+                <span>{paramLabel(param.name)}</span>
                 <NumberField
                   value={node.params[param.name] ?? param.default}
                   min={param.minimum}
@@ -2324,7 +2339,7 @@
             {/each}
           </div>
         {:else}
-          <p class="node-sidebar-empty">No active node</p>
+          <p class="node-sidebar-empty">{t("graph.noActiveNode")}</p>
         {/if}
       </aside>
     {/if}

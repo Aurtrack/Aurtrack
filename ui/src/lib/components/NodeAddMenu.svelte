@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { NodeGroup, NodeTypeInfo } from "../api";
   import { t } from "../i18n.svelte";
+  import { nodeCategoryLabel, nodeTypeLabel } from "../nodeLabels";
 
   interface Props {
     x: number;
@@ -18,7 +19,7 @@
     y,
     nodeTypes,
     groups = [],
-    groupLabel = "GROUP",
+    groupLabel = t("graph.groups"),
     onPickType,
     onPickGroup,
     onClose,
@@ -45,7 +46,9 @@
       (nodeType) =>
         nodeType.name.toLowerCase().includes(needle) ||
         nodeType.id.toLowerCase().includes(needle) ||
-        nodeType.category.toLowerCase().includes(needle),
+        nodeType.category.toLowerCase().includes(needle) ||
+        nodeTypeLabel(nodeType).toLowerCase().includes(needle) ||
+        nodeCategoryLabel(nodeType.category).toLowerCase().includes(needle),
     );
   });
 
@@ -137,10 +140,14 @@
           onclick={() => pick(index)}
         >
           <span>
-            {item.kind === "type" ? item.nodeType.name : item.group.name}
+            {item.kind === "type"
+              ? nodeTypeLabel(item.nodeType)
+              : item.group.name}
           </span>
           <small>
-            {item.kind === "type" ? item.nodeType.category : groupLabel}
+            {item.kind === "type"
+              ? nodeCategoryLabel(item.nodeType.category)
+              : groupLabel}
           </small>
         </button>
       {/each}
@@ -149,10 +156,10 @@
       {/if}
     {:else}
       {#each categories as [category, types] (category)}
-        <div class="node-add-label">{category}</div>
+        <div class="node-add-label">{nodeCategoryLabel(category)}</div>
         {#each types as nodeType (nodeType.id)}
           <button role="menuitem" onclick={() => onPickType(nodeType.id)}>
-            <span>{nodeType.name}</span>
+            <span>{nodeTypeLabel(nodeType)}</span>
             <small>{nodeType.id}</small>
           </button>
         {/each}

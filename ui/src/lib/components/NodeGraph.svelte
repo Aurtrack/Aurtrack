@@ -13,6 +13,11 @@
   import NumberField from "./NumberField.svelte";
   import VoiceGraphEditor from "./VoiceGraphEditor.svelte";
   import {
+    nodeTypeLabel,
+    paramLabel,
+    socketLabel,
+  } from "../nodeLabels";
+  import {
     NODE_BODY_TOP,
     NODE_HEADER,
     NODE_ROW,
@@ -372,7 +377,7 @@
 
   function nodeLabel(node: GraphNode): string {
     const info = nodeType(node);
-    if (info) return info.name.toUpperCase();
+    if (info) return nodeTypeLabel(info).toUpperCase();
     if (node.kind === "instrument.silence") return t("graph.silence");
     if (node.kind === "voice.group") return t("graph.group");
     if (node.kind === "output") return t("graph.output");
@@ -1636,6 +1641,7 @@
       !event.ctrlKey &&
       !event.metaKey &&
       !event.altKey &&
+      !event.shiftKey &&
       event.key.toLowerCase() === "a"
     ) {
       event.preventDefault();
@@ -1970,7 +1976,7 @@
                   onmousedown={(event) =>
                     startWire(event, node, "in", input.id)}
                 ></button>
-                <span class="graph-socket-name">{input.name}</span>
+                <span class="graph-socket-name">{socketLabel(input.name)}</span>
                 {#if param && !linked}
                   <div class="graph-socket-value">
                     <NumberField
@@ -1993,7 +1999,7 @@
                 class="graph-socket-row out"
                 style:top={`${portTop(node, index)}px`}
               >
-                <span class="graph-socket-name">{output.name}</span>
+                <span class="graph-socket-name">{socketLabel(output.name)}</span>
                 <button
                   type="button"
                   class="graph-port graph-port-out"
@@ -2020,7 +2026,7 @@
                   index) *
                   NODE_ROW}
               <div class="graph-socket-row param" style:top={`${top}px`}>
-                <span class="graph-socket-name">{param.name}</span>
+                <span class="graph-socket-name">{paramLabel(param.name)}</span>
                 <div class="graph-socket-value">
                   <NumberField
                     value={paramOf(node, param.name, param.default)}
@@ -2045,7 +2051,7 @@
                   extraParams(node).length) *
                   NODE_ROW}
               <div class="graph-socket-row param" style:top={`${top}px`}>
-                <span class="graph-socket-name">PLUGIN</span>
+                <span class="graph-socket-name">{t("graph.plugin")}</span>
                 <strong>{node.plugin.id}</strong>
               </div>
             {/if}
@@ -2207,7 +2213,7 @@
     {#if sidebarOpen}
       <aside class="node-sidebar" aria-label={t("graph.sidebar")}>
         <div class="node-sidebar-tabs">
-          <span class="node-sidebar-tab">NODE</span>
+          <span class="node-sidebar-tab">{t("graph.nodeTab")}</span>
           <button
             class="node-sidebar-close"
             title={t("voice.close")}
@@ -2217,7 +2223,7 @@
         {#if graph?.nodes[active]}
           {@const node = graph.nodes[active]!}
           <div class="node-sidebar-section">
-            <div class="node-sidebar-label">ACTIVE NODE</div>
+            <div class="node-sidebar-label">{t("graph.activeNode")}</div>
             <strong>{nodeLabel(node)}</strong>
             <code>{node.id}</code>
             <div class="node-sidebar-type">{nodeTypeId(node)}</div>
@@ -2235,7 +2241,7 @@
             {/if}
             {#each sidebarParams(node) as param (param.name)}
               <label class="node-sidebar-param">
-                <span>{param.name}</span>
+                <span>{paramLabel(param.name)}</span>
                 <NumberField
                   value={paramOf(node, param.name, param.default)}
                   min={param.minimum}
@@ -2250,7 +2256,7 @@
             {/each}
           </div>
         {:else}
-          <p class="node-sidebar-empty">No active node</p>
+          <p class="node-sidebar-empty">{t("graph.noActiveNode")}</p>
         {/if}
       </aside>
     {/if}

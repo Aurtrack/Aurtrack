@@ -53,6 +53,13 @@ export function t(
   return typeof message === "function" ? message(params) : message;
 }
 
+export function tLoose(key: string, fallback: string): string {
+  const message =
+    dictionaries[current][key as MessageKey] ?? zhCN[key as MessageKey];
+  if (message === undefined || typeof message === "function") return fallback;
+  return message;
+}
+
 export function formatNumber(value: number, digits = 0): string {
   return new Intl.NumberFormat(current, {
     minimumFractionDigits: digits,
