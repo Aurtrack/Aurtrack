@@ -154,6 +154,8 @@ export const zhCN = {
   "graph.mix": "MIX",
   "graph.plugin": "插件",
   "graph.mixInputs": "两路输入",
+  "graph.collapse": "折叠",
+  "graph.mute": "静音",
   "graph.duplicate": "复制节点",
   "graph.delete": "删除节点",
   "graph.cutoff": "截止 Hz",

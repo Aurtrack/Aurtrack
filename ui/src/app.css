@@ -2868,3 +2868,26 @@ button:disabled {
 .voice-socket-row .voice-port::before {
   display: none;
 }
+.voice-node.muted {
+  opacity: 0.55;
+}
+
+.voice-node-muted {
+  margin-left: auto;
+  color: #8a3030;
+  font-size: 8px;
+}
+
+.voice-node.collapsed .voice-node-head {
+  border-bottom: 0;
+}
+.graph-node.muted {
+  opacity: 0.55;
+}
+
+.graph-node.collapsed .graph-node-head {
+  border-bottom: 0;
+}
+.graph-node.collapsed {
+  min-height: 0;
+}

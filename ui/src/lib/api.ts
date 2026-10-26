@@ -54,6 +54,8 @@ export type GraphNode = {
   position?: [number, number];
   plugin?: { path: string; id: string; state?: string };
   group?: string;
+  muted?: boolean;
+  collapsed?: boolean;
 };
 
 export type VoiceNode = {
@@ -62,6 +64,8 @@ export type VoiceNode = {
   params: Record<string, number>;
   position?: [number, number];
   group?: string;
+  muted?: boolean;
+  collapsed?: boolean;
 };
 
 export type VoiceConnection = {

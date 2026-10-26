@@ -158,6 +158,8 @@ export const en: Record<MessageKey, Message> = {
   "graph.filter": "FILTER",
   "graph.mix": "MIX",
   "graph.plugin": "PLUGIN",
+  "graph.collapse": "COLLAPSE",
+  "graph.mute": "MUTE",
   "graph.duplicate": "DUPLICATE",
   "graph.delete": "DELETE",
   "graph.mixInputs": "TWO INPUTS",

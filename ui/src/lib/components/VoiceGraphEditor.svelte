@@ -182,6 +182,7 @@
     y2: number;
   } | null>(null);
   let drag = $state<Drag | null>(null);
+  let nodeMenu = $state<{ x: number; y: number; nodeId: string } | null>(null);
   let wire = $state<Wire | null>(null);
   let error = $state("");
   let saving = $state(false);
@@ -238,7 +239,14 @@
     );
   }
 
+  function collapsedRows(node: VoiceNode): number {
+    return Math.max(1, Math.max(inputList(node).length, outputList(node).length));
+  }
+
   function portY(node: VoiceNode, index: number): number {
+    if (node.collapsed) {
+      return NODE_HEADER + 3 + index * 6;
+    }
     return (
       NODE_HEADER +
       groupHeaderHeight(node) +
@@ -249,10 +257,15 @@
   }
 
   function portTop(node: VoiceNode, index: number): number {
-    return portY(node, index) - NODE_ROW / 2;
+    return node.collapsed
+      ? portY(node, index)
+      : portY(node, index) - NODE_ROW / 2;
   }
 
   function nodeHeight(node: VoiceNode): number {
+    if (node.collapsed) {
+      return NODE_HEADER + 4 + collapsedRows(node) * 6;
+    }
     return (
       NODE_HEADER +
       groupHeaderHeight(node) +
@@ -408,7 +421,17 @@
     }
   }
 
+  function openNodeMenu(event: MouseEvent, node: VoiceNode) {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!selected.has(node.id)) selectOnly(node.id);
+    active = node.id;
+    addMenu = null;
+    nodeMenu = { x: event.clientX, y: event.clientY, nodeId: node.id };
+  }
+
   function nodeMouseDown(event: MouseEvent, node: VoiceNode) {
+    nodeMenu = null;
     if (event.button !== 0) return;
     const target = event.target as Element | null;
     if (target?.closest("input, button, select, textarea")) return;
@@ -486,6 +509,7 @@
       return;
     }
     addMenu = null;
+    nodeMenu = null;
     if (event.button !== 0) return;
     if (event.altKey) {
       event.preventDefault();
@@ -764,6 +788,114 @@
     }
   }
 
+  type VoiceClipboard = {
+    nodes: VoiceNode[];
+    connections: VoiceConnection[];
+  };
+  let clipboard = $state<VoiceClipboard | null>(null);
+
+  function cloneSelection(offset: readonly [number, number]) {
+    const ids = new Set(
+      [...selected].filter((id) => id !== "voice-in" && id !== "out"),
+    );
+    if (ids.size === 0) return [];
+    const mapping = new Map<string, string>();
+    const stamp = Date.now().toString(36);
+    let index = 0;
+    for (const id of ids) {
+      const source = voice.nodes[id];
+      if (!source) continue;
+      const nextId = `voice-${stamp}-${index}`;
+      index += 1;
+      mapping.set(id, nextId);
+      const position = source.position ?? [80, 80];
+      voice.nodes[nextId] = {
+        ...JSON.parse(JSON.stringify(source)) as VoiceNode,
+        id: nextId,
+        position: [position[0] + offset[0], position[1] + offset[1]],
+      };
+    }
+    for (const connection of [...voice.connections]) {
+      const from = mapping.get(connection.from.node);
+      const to = mapping.get(connection.to.node);
+      if (!from || !to) continue;
+      voice.connections.push({
+        from: { node: from, port: connection.from.port },
+        to: { node: to, port: connection.to.port },
+      });
+    }
+    const created = [...mapping.values()];
+    selected = new Set(created);
+    active = created.at(-1) ?? "";
+    return created;
+  }
+
+  function duplicateSelected() {
+    cloneSelection([26, 26]);
+  }
+
+  function toggleCollapsed() {
+    for (const id of selected) {
+      const node = voice.nodes[id];
+      if (node) node.collapsed = !node.collapsed;
+    }
+  }
+
+  function toggleMuted() {
+    for (const id of selected) {
+      const node = voice.nodes[id];
+      if (node) node.muted = !node.muted;
+    }
+  }
+
+  function copySelected() {
+    const ids = new Set(
+      [...selected].filter((id) => id !== "voice-in" && id !== "out"),
+    );
+    if (ids.size === 0) return;
+    clipboard = {
+      nodes: [...ids]
+        .map((id) => voice.nodes[id])
+        .filter((node): node is VoiceNode => Boolean(node))
+        .map((node) => JSON.parse(JSON.stringify(node)) as VoiceNode),
+      connections: voice.connections
+        .filter(
+          (connection) =>
+            ids.has(connection.from.node) && ids.has(connection.to.node),
+        )
+        .map((connection) => JSON.parse(JSON.stringify(connection)) as VoiceConnection),
+    };
+  }
+
+  function pasteClipboard() {
+    const content = clipboard;
+    if (!content || content.nodes.length === 0) return;
+    const stamp = Date.now().toString(36);
+    const mapping = new Map<string, string>();
+    content.nodes.forEach((source, index) => {
+      const nextId = `voice-${stamp}-${index}`;
+      mapping.set(source.id, nextId);
+      const position = source.position ?? [80, 80];
+      voice.nodes[nextId] = {
+        ...JSON.parse(JSON.stringify(source)) as VoiceNode,
+        id: nextId,
+        position: [position[0] + 30, position[1] + 30],
+      };
+    });
+    for (const connection of content.connections) {
+      const from = mapping.get(connection.from.node);
+      const to = mapping.get(connection.to.node);
+      if (!from || !to) continue;
+      voice.connections.push({
+        from: { node: from, port: connection.from.port },
+        to: { node: to, port: connection.to.port },
+      });
+    }
+    const created = [...mapping.values()];
+    selected = new Set(created);
+    active = created.at(-1) ?? "";
+  }
+
   function reloadFromSession() {
     const group = session.nodeGroups[groupId];
     if (group) {
@@ -849,6 +981,36 @@
         focused instanceof HTMLTextAreaElement ||
         focused instanceof HTMLSelectElement);
     if (
+      (event.ctrlKey || event.metaKey) &&
+      !event.altKey &&
+      event.key.toLowerCase() === "c" &&
+      !typing
+    ) {
+      event.preventDefault();
+      copySelected();
+      return;
+    }
+    if (
+      (event.ctrlKey || event.metaKey) &&
+      !event.altKey &&
+      event.key.toLowerCase() === "v" &&
+      !typing
+    ) {
+      event.preventDefault();
+      pasteClipboard();
+      return;
+    }
+    if (
+      ((event.shiftKey && !event.ctrlKey && !event.metaKey) ||
+        (event.ctrlKey && !event.altKey)) &&
+      event.key.toLowerCase() === "d" &&
+      !typing
+    ) {
+      event.preventDefault();
+      duplicateSelected();
+      return;
+    }
+    if (
       event.ctrlKey &&
       event.altKey &&
       event.key.toLowerCase() === "g" &&
@@ -898,6 +1060,7 @@
     }
     if (event.key === "Escape") {
       addMenu = null;
+      nodeMenu = null;
       libraryOpen = false;
       interfaceOpen = false;
       sidebarOpen = false;
@@ -929,6 +1092,28 @@
       selected = new Set(
         nodes.filter((node) => !selected.has(node.id)).map((node) => node.id),
       );
+      return;
+    }
+    if (
+      event.key.toLowerCase() === "h" &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey &&
+      !typing
+    ) {
+      event.preventDefault();
+      toggleCollapsed();
+      return;
+    }
+    if (
+      event.key.toLowerCase() === "m" &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey &&
+      !typing
+    ) {
+      event.preventDefault();
+      toggleMuted();
       return;
     }
     if (event.key === "Home") {
@@ -1129,11 +1314,14 @@
         <div
           class="voice-node"
           class:selected={selected.has(node.id)}
+          class:collapsed={node.collapsed}
+          class:muted={node.muted}
           style:left={`${position?.x ?? 0}px`}
           style:top={`${position?.y ?? 0}px`}
           style:width={`${NODE_WIDTH}px`}
           style:height={`${nodeHeight(node)}px`}
           onmousedown={(event) => nodeMouseDown(event, node)}
+          oncontextmenu={(event) => openNodeMenu(event, node)}
           ondblclick={() => void enterGroup(node)}
           role="group"
           tabindex="-1"
@@ -1141,9 +1329,11 @@
         >
           <div class="voice-node-head">
             <span class="voice-node-title">{nodeLabel(node)}</span>
+            {#if node.muted}<span class="voice-node-muted">M</span>{/if}
             <span class="voice-node-id">{node.id}</span>
           </div>
 
+          {#if !node.collapsed}
           {#if node.type_id === "voice.group"}
             <div class="voice-node-group-line">
               <span>{nodeGroup(node)?.name ?? node.group ?? "—"}</span>
@@ -1239,6 +1429,40 @@
               </div>
             </div>
           {/each}
+          {:else}
+            {#each inputList(node) as port, index (port.id)}
+              <button
+                class="voice-port in"
+                class:port-audio={port.ty === "audio"}
+                class:port-float={port.ty === "float"}
+                class:port-gate={port.ty === "gate"}
+                style:top={`${portTop(node, index)}px`}
+                title={`${port.id} (${port.ty})`}
+                aria-label={port.id}
+                data-port-node={node.id}
+                data-port-id={port.id}
+                data-port-side="in"
+                data-port-type={port.ty}
+                onmousedown={(event) => startWire(event, node, port, "in")}
+              ></button>
+            {/each}
+            {#each outputList(node) as port, index (port.id)}
+              <button
+                class="voice-port out"
+                class:port-audio={port.ty === "audio"}
+                class:port-float={port.ty === "float"}
+                class:port-gate={port.ty === "gate"}
+                style:top={`${portTop(node, index)}px`}
+                title={`${port.id} (${port.ty})`}
+                aria-label={port.id}
+                data-port-node={node.id}
+                data-port-id={port.id}
+                data-port-side="out"
+                data-port-type={port.ty}
+                onmousedown={(event) => startWire(event, node, port, "out")}
+              ></button>
+            {/each}
+          {/if}
         </div>
       {/each}
       </div>
@@ -1357,6 +1581,76 @@
       </aside>
     {/if}
     </div>
+
+    {#if nodeMenu}
+      <div
+        class="graph-context-menu"
+        style:left={`${nodeMenu.x}px`}
+        style:top={`${nodeMenu.y}px`}
+        role="menu"
+        tabindex="-1"
+        onmousedown={(event) => event.stopPropagation()}
+      >
+        {#if voice.nodes[nodeMenu.nodeId]?.type_id === "voice.group"}
+          <button
+            role="menuitem"
+            onclick={() => {
+              const node = voice.nodes[nodeMenu?.nodeId ?? ""];
+              nodeMenu = null;
+              if (node) void enterGroup(node);
+            }}
+          >
+            {t("graph.editGroup")}
+          </button>
+          <button
+            role="menuitem"
+            onclick={() => {
+              nodeMenu = null;
+              void ungroupActive();
+            }}
+          >
+            {t("voice.ungroup")}
+          </button>
+        {/if}
+        <button
+          role="menuitem"
+          onclick={() => {
+            nodeMenu = null;
+            duplicateSelected();
+          }}
+        >
+          {t("graph.duplicate")}
+        </button>
+        <button
+          role="menuitem"
+          onclick={() => {
+            nodeMenu = null;
+            toggleCollapsed();
+          }}
+        >
+          {t("graph.collapse")}
+        </button>
+        <button
+          role="menuitem"
+          onclick={() => {
+            nodeMenu = null;
+            toggleMuted();
+          }}
+        >
+          {t("graph.mute")}
+        </button>
+        <button
+          role="menuitem"
+          class="danger"
+          onclick={() => {
+            nodeMenu = null;
+            removeSelected();
+          }}
+        >
+          {t("graph.delete")}
+        </button>
+      </div>
+    {/if}
 
     {#if wire}
       <div class="voice-editor-tip">{t("voice.connecting")}</div>

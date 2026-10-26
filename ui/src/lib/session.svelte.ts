@@ -74,6 +74,7 @@ const MUTATING_COMMANDS = new Set([
   "device.add",
   "device.remove",
   "param.set",
+  "node.flags",
   "clip.create",
   "clip.update",
   "clip.remove",
@@ -900,6 +901,19 @@ export class SessionStore {
       args,
     });
     return data.result;
+  }
+
+  async setNodeFlags(
+    trackId: string,
+    nodeId: string,
+    flags: { muted?: boolean; collapsed?: boolean },
+  ): Promise<void> {
+    await this.run("node.flags", {
+      track_id: trackId,
+      node_id: nodeId,
+      ...flags,
+    });
+    await this.refreshProject();
   }
 
   async addGraphNode(

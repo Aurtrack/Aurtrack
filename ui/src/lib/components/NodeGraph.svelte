@@ -248,7 +248,14 @@
     );
   }
 
+  function collapsedRows(node: GraphNode): number {
+    return Math.max(1, Math.max(nodeInputs(node).length, nodeOutputs(node).length));
+  }
+
   function portY(node: GraphNode, index: number): number {
+    if (node.collapsed) {
+      return NODE_HEADER + 3 + index * 6;
+    }
     return (
       NODE_HEADER +
       groupHeaderHeight(node) +
@@ -259,10 +266,13 @@
   }
 
   function portTop(node: GraphNode, index: number): number {
-    return portY(node, index) - NODE_ROW / 2;
+    return node.collapsed ? portY(node, index) : portY(node, index) - NODE_ROW / 2;
   }
 
   function nodeHeight(node: GraphNode): number {
+    if (node.collapsed) {
+      return NODE_HEADER + 4 + collapsedRows(node) * 6;
+    }
     return (
       NODE_HEADER +
       groupHeaderHeight(node) +
@@ -629,6 +639,15 @@
     addMenu = null;
   }
 
+  function toggleNodeFlag(flag: "muted" | "collapsed") {
+    if (!track) return;
+    for (const node of nodes) {
+      if (!selected.has(node.id)) continue;
+      const current = Boolean(node[flag]);
+      void session.setNodeFlags(track.id, node.id, { [flag]: !current });
+    }
+  }
+
   function openNodeMenu(event: MouseEvent, node: GraphNode) {
     if (!isDevice(node)) return;
     event.preventDefault();
@@ -862,11 +881,15 @@
 
   function isEditing(): boolean {
     const element = document.activeElement;
-    return (
+    if (!(element instanceof HTMLElement)) return false;
+    const editing =
       element instanceof HTMLInputElement ||
       element instanceof HTMLTextAreaElement ||
       element instanceof HTMLSelectElement ||
-      (element instanceof HTMLElement && element.isContentEditable)
+      element.isContentEditable;
+    if (!editing) return false;
+    return Boolean(
+      element.closest(".graph-section, .node-add-menu, .node-sidebar"),
     );
   }
 
@@ -895,6 +918,26 @@
         openVoiceGroup(groupNode);
         return;
       }
+    }
+    if (
+      event.key.toLowerCase() === "h" &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey
+    ) {
+      event.preventDefault();
+      toggleNodeFlag("collapsed");
+      return;
+    }
+    if (
+      event.key.toLowerCase() === "m" &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey
+    ) {
+      event.preventDefault();
+      toggleNodeFlag("muted");
+      return;
     }
     if (event.key === "Home") {
       event.preventDefault();
@@ -1131,6 +1174,8 @@
             class:instrument={nodeTypeId(node).startsWith("audio.instrument")}
             class:output={nodeTypeId(node) === "audio.output"}
             class:selected={isSelected}
+            class:collapsed={node.collapsed}
+            class:muted={node.muted}
             class:wire-target={wireHover?.node === node.id}
             role="group"
             aria-label={nodeLabel(node)}
@@ -1154,9 +1199,11 @@
               aria-label={nodeLabel(node)}
             >
               <span class="graph-node-kind">{nodeLabel(node)}</span>
+              {#if node.muted}<span class="voice-node-muted">M</span>{/if}
               <span class="graph-node-id">{node.id}</span>
             </div>
 
+            {#if !node.collapsed}
             {#if nodeTypeId(node) === "audio.group"}
               <div class="graph-node-group-line">
                 <span>{groupFor(node)?.name ?? node.group ?? "—"}</span>
@@ -1271,6 +1318,35 @@
                 <strong>{node.plugin.id}</strong>
               </div>
             {/if}
+            {:else}
+              {#each nodeInputs(node) as input, index (input.id)}
+                <button
+                  type="button"
+                  class="graph-port graph-port-in"
+                  class:port-float={input.type === "float"}
+                  class:port-audio={input.type === "audio"}
+                  style:top={`${portTop(node, index)}px`}
+                  aria-label={t("graph.inputPort")}
+                  data-input-node={node.id}
+                  data-input-port={input.id}
+                  onmousedown={(event) =>
+                    startWire(event, node, "in", input.id)}
+                ></button>
+              {/each}
+              {#each nodeOutputs(node) as output, index (output.id)}
+                <button
+                  type="button"
+                  class="graph-port graph-port-out"
+                  class:port-float={output.type === "float"}
+                  class:port-audio={output.type === "audio"}
+                  style:top={`${portTop(node, index)}px`}
+                  aria-label={t("graph.startWire")}
+                  data-output-node={node.id}
+                  onmousedown={(event) =>
+                    startWire(event, node, "out", output.id)}
+                ></button>
+              {/each}
+            {/if}
           </div>
         {/each}
       </div>
@@ -1286,6 +1362,26 @@
         >
           <button role="menuitem" disabled={busy} onclick={duplicateFromMenu}>
             {t("graph.duplicate")}
+          </button>
+          <button
+            role="menuitem"
+            disabled={busy}
+            onclick={() => {
+              toggleNodeFlag("collapsed");
+              nodeMenu = null;
+            }}
+          >
+            {t("graph.collapse")}
+          </button>
+          <button
+            role="menuitem"
+            disabled={busy}
+            onclick={() => {
+              toggleNodeFlag("muted");
+              nodeMenu = null;
+            }}
+          >
+            {t("graph.mute")}
           </button>
           <button
             role="menuitem"
