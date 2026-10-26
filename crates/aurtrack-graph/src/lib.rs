@@ -1091,10 +1091,14 @@ impl Graph {
 
     /// 默认轨道链：`instrument.sine -> amp.adsr -> gain -> output`。
     pub fn linear_track() -> Self {
-        let instrument = Node::new(NodeId::fixed("instrument"), NodeKind::InstrumentSine);
-        let envelope = Node::new(NodeId::fixed("envelope"), NodeKind::AmpAdsr);
-        let gain = Node::new(NodeId::fixed("gain"), NodeKind::Gain);
-        let output = Node::new(NodeId::fixed("output"), NodeKind::Output);
+        let mut instrument = Node::new(NodeId::fixed("instrument"), NodeKind::InstrumentSine);
+        instrument.position = Some([60.0, 180.0]);
+        let mut envelope = Node::new(NodeId::fixed("envelope"), NodeKind::AmpAdsr);
+        envelope.position = Some([360.0, 180.0]);
+        let mut gain = Node::new(NodeId::fixed("gain"), NodeKind::Gain);
+        gain.position = Some([660.0, 180.0]);
+        let mut output = Node::new(NodeId::fixed("output"), NodeKind::Output);
+        output.position = Some([940.0, 180.0]);
         let mut nodes = BTreeMap::new();
         nodes.insert(instrument.id().clone(), instrument);
         nodes.insert(envelope.id().clone(), envelope);
@@ -1122,8 +1126,10 @@ impl Graph {
         if !instrument.is_instrument() {
             return Err(GraphError::NotInstrument(instrument));
         }
-        let instrument = Node::new(NodeId::fixed("instrument"), instrument);
-        let output = Node::new(NodeId::fixed("output"), NodeKind::Output);
+        let mut instrument = Node::new(NodeId::fixed("instrument"), instrument);
+        instrument.position = Some([60.0, 220.0]);
+        let mut output = Node::new(NodeId::fixed("output"), NodeKind::Output);
+        output.position = Some([940.0, 220.0]);
         let mut nodes = BTreeMap::new();
         nodes.insert(instrument.id().clone(), instrument);
         nodes.insert(output.id().clone(), output);
