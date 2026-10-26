@@ -237,6 +237,23 @@ fn group_create_schema() -> Value {
     )
 }
 
+fn node_frames_schema() -> Value {
+    object_schema(
+        json!({
+            "track_id": { "type": "string" },
+            "frames": {
+                "type": "object",
+                "additionalProperties": { "type": "object" }
+            },
+            "assignments": {
+                "type": "object",
+                "additionalProperties": { "type": ["string", "null"] }
+            }
+        }),
+        &["track_id", "frames"],
+    )
+}
+
 fn node_flags_schema() -> Value {
     object_schema(
         json!({
@@ -843,7 +860,7 @@ fn transport_metronome_schema() -> Value {
     )
 }
 
-static COMMANDS: [CommandSpec; 62] = [
+static COMMANDS: [CommandSpec; 63] = [
     CommandSpec {
         id: "project.create",
         summary: "创建或替换当前工程",
@@ -1029,6 +1046,12 @@ static COMMANDS: [CommandSpec; 62] = [
         summary: "把组节点展开回父图",
         undo: UndoKind::Snapshot,
         input_schema: group_ungroup_schema,
+    },
+    CommandSpec {
+        id: "node.frames",
+        summary: "替换轨道图节点框并更新节点归属",
+        undo: UndoKind::Snapshot,
+        input_schema: node_frames_schema,
     },
     CommandSpec {
         id: "node.flags",

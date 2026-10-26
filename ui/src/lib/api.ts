@@ -54,6 +54,7 @@ export type GraphNode = {
   position?: [number, number];
   plugin?: { path: string; id: string; state?: string };
   group?: string;
+  frame?: string;
   muted?: boolean;
   collapsed?: boolean;
 };
@@ -137,6 +138,7 @@ export type GraphConnection = {
 export type TrackGraph = {
   nodes: Record<string, GraphNode>;
   connections: GraphConnection[];
+  frames?: Record<string, VoiceFrame>;
 };
 
 export type Track = {

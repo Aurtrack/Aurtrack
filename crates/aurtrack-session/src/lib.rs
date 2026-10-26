@@ -35,7 +35,7 @@ use aurtrack_engine::{
 };
 use aurtrack_graph::{
     GraphError, NodeGroup, NodeGroupInterface, NodeGroupSocket, NodeGroupSocketType, NodeId,
-    PortRef, VoiceConnection, VoiceGraph, VoiceNode, node_inputs, node_outputs,
+    PortRef, VoiceConnection, VoiceFrame, VoiceGraph, VoiceNode, node_inputs, node_outputs,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -674,6 +674,7 @@ impl Session {
             "node.disconnect" => self.cmd_node_disconnect(&request.args),
             "node.position" => self.cmd_node_position(&request.args),
             "node.flags" => self.cmd_node_flags(&request.args),
+            "node.frames" => self.cmd_node_frames(&request.args),
             "node.duplicate" => self.cmd_node_duplicate(&request.args),
             "node.remove_many" => self.cmd_node_remove_many(&request.args),
             "param.set" => self.cmd_param_set(&request.args),
@@ -2973,6 +2974,33 @@ impl Session {
         Ok(CommandResponse::ok(json!({ "node_id": node_id.to_string() })).with_undo(token))
     }
 
+    fn cmd_node_frames(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct FramesArgs {
+            track_id: String,
+            frames: BTreeMap<String, VoiceFrame>,
+            #[serde(default)]
+            assignments: BTreeMap<String, Option<String>>,
+        }
+        let args: FramesArgs = parse_args(args)?;
+        let token = self.snapshot("node.frames");
+        let project = self
+            .project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let track = project
+            .tracks
+            .iter_mut()
+            .find(|track| track.id == args.track_id)
+            .ok_or_else(|| CommandError::not_found(format!("找不到轨道：{}", args.track_id)))?;
+        track
+            .graph
+            .set_frames(args.frames, args.assignments)
+            .map_err(graph_error)?;
+        Ok(CommandResponse::ok(json!({ "track_id": args.track_id })).with_undo(token))
+    }
+
     fn cmd_node_duplicate(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
         let args: NodeDuplicateArgs = parse_args(args)?;
         if args.paths.is_empty() {
@@ -3264,6 +3292,9 @@ fn graph_view(graph: &aurtrack_graph::AudioGraph) -> Value {
             if let Some(group) = &node.group {
                 view["group"] = json!(group);
             }
+            if let Some(frame) = &node.frame {
+                view["frame"] = json!(frame);
+            }
             if let Some(plugin) = &node.plugin {
                 view["plugin"] = json!(plugin);
             }
@@ -3279,6 +3310,7 @@ fn graph_view(graph: &aurtrack_graph::AudioGraph) -> Value {
     json!({
         "nodes": nodes,
         "connections": graph.connections,
+        "frames": graph.frames,
     })
 }
 

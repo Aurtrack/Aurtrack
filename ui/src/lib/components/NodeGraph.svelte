@@ -5,6 +5,7 @@
     NodeGroup,
     NodeTypeInfo,
     Track,
+    VoiceFrame,
   } from "../api";
   import { t } from "../i18n.svelte";
   import { session } from "../session.svelte";
@@ -27,14 +28,14 @@
       fromPort: string,
       toNodeId: string,
       toPort: string,
-    ) => void;
+    ) => void | Promise<unknown>;
     onDisconnect: (
       trackId: string,
       fromNodeId: string,
       fromPort: string,
       toNodeId: string,
       toPort: string,
-    ) => void;
+    ) => void | Promise<unknown>;
     onPlace: (
       trackId: string,
       nodes: { id: string; x: number; y: number }[],
@@ -150,6 +151,21 @@
   let lasso = $state<{ points: Point[]; subtract: boolean } | null>(null);
   let wireDrag = $state<WireDrag | null>(null);
   let pendingWire = $state<WireDrag | null>(null);
+  let insertTarget = $state<GraphConnection | null>(null);
+  let frameDraft = $state<Record<string, VoiceFrame> | null>(null);
+  let frameDrag = $state<{
+    id: string;
+    startX: number;
+    startY: number;
+    origin: [number, number];
+    children: Record<string, [number, number]>;
+  } | null>(null);
+  let frameResize = $state<{
+    id: string;
+    startX: number;
+    startY: number;
+    size: [number, number];
+  } | null>(null);
   let wireError = $state("");
   let wireHover = $state<{ node: string; port: string } | null>(null);
   let active = $state("");
@@ -169,6 +185,9 @@
     return current ? session.nodeGroups[current.id] : undefined;
   });
   let connections = $derived(graph?.connections ?? ([] as GraphConnection[]));
+  let frames = $derived(
+    Object.values(frameDraft ?? graph?.frames ?? {}),
+  );
   let hasAdsr = $derived(nodes.some((node) => node.kind === "amp.adsr"));
   let autoLayout = $derived.by(() => buildLayout(nodes, connections));
 
@@ -195,6 +214,7 @@
     lastTrackId = id;
     selected = new Set();
     draft = {};
+    frameDraft = null;
     addMenu = null;
     nodeMenu = null;
     view = { x: 20, y: 30, scale: 0.8 };
@@ -476,6 +496,131 @@
     };
   }
 
+  function pointSegmentDistance(
+    point: Point,
+    from: Point,
+    to: Point,
+  ): number {
+    const dx = to.x - from.x;
+    const dy = to.y - from.y;
+    const length = dx * dx + dy * dy;
+    const t =
+      length === 0
+        ? 0
+        : Math.max(
+            0,
+            Math.min(
+              1,
+              ((point.x - from.x) * dx + (point.y - from.y) * dy) / length,
+            ),
+          );
+    return Math.hypot(
+      point.x - (from.x + dx * t),
+      point.y - (from.y + dy * t),
+    );
+  }
+
+  function findInsertTarget(nodeId: string): GraphConnection | null {
+    const node = graph?.nodes[nodeId];
+    const position = nodePositions[nodeId];
+    if (!node || !position) return null;
+    const info = nodeType(node);
+    if (!info || info.inputs.length === 0 || info.outputs.length === 0) {
+      return null;
+    }
+    const center = {
+      x: position.x + position.w / 2,
+      y: position.y + position.h / 2,
+    };
+    for (const connection of connections) {
+      if (
+        connection.from.node === nodeId ||
+        connection.to.node === nodeId
+      ) {
+        continue;
+      }
+      if (connection.from.port !== "out") continue;
+      const from = outputPoint(connection.from.node);
+      const to = inputPoint(connection.to.node, connection.to.port);
+      if (!from || !to) continue;
+      const bend = Math.max(48, Math.abs(to.x - from.x) * 0.4);
+      let closest = Infinity;
+      let previous = from;
+      for (let step = 1; step <= 18; step += 1) {
+        const t = step / 18;
+        const inverse = 1 - t;
+        const point = {
+          x:
+            inverse ** 3 * from.x +
+            3 * inverse ** 2 * t * (from.x + bend) +
+            3 * inverse * t ** 2 * (to.x - bend) +
+            t ** 3 * to.x,
+          y:
+            inverse ** 3 * from.y +
+            3 * inverse ** 2 * t * from.y +
+            3 * inverse * t ** 2 * to.y +
+            t ** 3 * to.y,
+        };
+        closest = Math.min(closest, pointSegmentDistance(center, previous, point));
+        previous = point;
+      }
+      const type = socketType(
+        connection.from.node,
+        "out",
+        connection.from.port,
+      );
+      if (
+        closest <= 26 &&
+        type &&
+        info.inputs.some((port) => port.type === type) &&
+        info.outputs.some((port) => port.type === type)
+      ) {
+        return connection;
+      }
+    }
+    return null;
+  }
+
+  async function insertNodeOnConnection(
+    nodeId: string,
+    connection: GraphConnection,
+  ) {
+    if (!track) return;
+    const node = graph?.nodes[nodeId];
+    if (!node) return;
+    const info = nodeType(node);
+    if (!info) return;
+    const type = socketType(
+      connection.from.node,
+      "out",
+      connection.from.port,
+    );
+    const input = info.inputs.find((port) => port.type === type);
+    const output = info.outputs.find((port) => port.type === type);
+    if (!input || !output) return;
+    await onDisconnect(
+      track.id,
+      connection.from.node,
+      connection.from.port,
+      connection.to.node,
+      connection.to.port,
+    );
+    await onConnect(
+      track.id,
+      connection.from.node,
+      connection.from.port,
+      nodeId,
+      input.id,
+    );
+    await onConnect(
+      track.id,
+      nodeId,
+      output.id,
+      connection.to.node,
+      connection.to.port,
+    );
+  }
+
   function wirePath(connection: GraphConnection): string {
     const from = outputPoint(connection.from.node);
     const to = inputPoint(connection.to.node, connection.to.port);
@@ -666,6 +811,93 @@
     }
   }
 
+  function createFrame() {
+    if (!track) return;
+    const members = nodes.filter((node) => selected.has(node.id));
+    let left = Infinity;
+    let top = Infinity;
+    let right = -Infinity;
+    let bottom = -Infinity;
+    for (const node of members) {
+      const position = nodePositions[node.id];
+      if (!position) continue;
+      left = Math.min(left, position.x);
+      top = Math.min(top, position.y);
+      right = Math.max(right, position.x + position.w);
+      bottom = Math.max(bottom, position.y + position.h);
+    }
+    if (!Number.isFinite(left)) {
+      const rect = board?.getBoundingClientRect();
+      const center = rect
+        ? worldPoint({
+            clientX: rect.left + rect.width / 2,
+            clientY: rect.top + rect.height / 2,
+          })
+        : null;
+      left = (center?.x ?? 200) - 160;
+      top = (center?.y ?? 200) - 100;
+      right = left + 320;
+      bottom = top + 200;
+    }
+    const frame: VoiceFrame = {
+      id: `frame-${Date.now().toString(36)}`,
+      name: t("voice.frame"),
+      position: [left - 24, top - 42],
+      size: [right - left + 48, bottom - top + 66],
+    };
+    const assignments: Record<string, string | null> = {};
+    for (const node of members) assignments[node.id] = frame.id;
+    void session.setNodeFrames(
+      track.id,
+      { ...(graph?.frames ?? {}), [frame.id]: frame },
+      assignments,
+    );
+  }
+
+  function deleteFrame(frame: VoiceFrame) {
+    if (!track || !window.confirm(t("voice.confirmDeleteFrame"))) return;
+    const next = { ...(graph?.frames ?? {}) };
+    delete next[frame.id];
+    const assignments: Record<string, string | null> = {};
+    for (const node of nodes) {
+      if (node.frame === frame.id) assignments[node.id] = null;
+    }
+    void session.setNodeFrames(track.id, next, assignments);
+  }
+
+  function frameMouseDown(event: MouseEvent, frame: VoiceFrame) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const children: Record<string, [number, number]> = {};
+    for (const node of nodes) {
+      if (node.frame !== frame.id) continue;
+      const position = nodePositions[node.id];
+      if (position) children[node.id] = [position.x, position.y];
+    }
+    frameDraft = { ...(graph?.frames ?? {}) };
+    frameDrag = {
+      id: frame.id,
+      startX: event.clientX,
+      startY: event.clientY,
+      origin: [...frame.position],
+      children,
+    };
+  }
+
+  function frameResizeDown(event: MouseEvent, frame: VoiceFrame) {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    frameDraft = { ...(graph?.frames ?? {}) };
+    frameResize = {
+      id: frame.id,
+      startX: event.clientX,
+      startY: event.clientY,
+      size: [...frame.size],
+    };
+  }
+
   function openNodeMenu(event: MouseEvent, node: GraphNode) {
     if (!isDevice(node)) return;
     event.preventDefault();
@@ -747,6 +979,57 @@
       };
       return;
     }
+    if (frameDrag) {
+      const dx = (event.clientX - frameDrag.startX) / view.scale;
+      const dy = (event.clientY - frameDrag.startY) / view.scale;
+      if (frameDraft?.[frameDrag.id]) {
+        const frame = frameDraft[frameDrag.id];
+        if (frame) {
+          frameDraft = {
+            ...frameDraft,
+            [frameDrag.id]: {
+              ...frame,
+              position: [
+                frameDrag.origin[0] + dx,
+                frameDrag.origin[1] + dy,
+              ],
+            },
+          };
+        }
+      }
+      const next = { ...draft };
+      for (const [id, origin] of Object.entries(frameDrag.children)) {
+        next[id] = { x: origin[0] + dx, y: origin[1] + dy };
+      }
+      draft = next;
+      return;
+    }
+    if (frameResize) {
+      if (frameDraft?.[frameResize.id]) {
+        const frame = frameDraft[frameResize.id];
+        if (frame) {
+          frameDraft = {
+            ...frameDraft,
+            [frameResize.id]: {
+              ...frame,
+              size: [
+                Math.max(
+                  160,
+                  frameResize.size[0] +
+                    (event.clientX - frameResize.startX) / view.scale,
+                ),
+                Math.max(
+                  100,
+                  frameResize.size[1] +
+                    (event.clientY - frameResize.startY) / view.scale,
+                ),
+              ],
+            },
+          };
+        }
+      }
+      return;
+    }
     if (nodeDrag) {
       const point = worldPoint(event);
       if (!point) return;
@@ -762,6 +1045,10 @@
         };
       }
       draft = next;
+      insertTarget =
+        nodeDrag.ids.length === 1
+          ? findInsertTarget(nodeDrag.ids[0] ?? "")
+          : null;
       event.preventDefault();
       return;
     }
@@ -823,6 +1110,29 @@
   }
 
   function handleMouseUp() {
+    if (frameDrag || frameResize) {
+      const frames = frameDraft;
+      const children = frameDrag?.children ?? {};
+      frameDrag = null;
+      frameResize = null;
+      frameDraft = null;
+      if (track && frames) {
+        void session.setNodeFrames(track.id, frames);
+        const placed = Object.keys(children)
+          .map((id) => {
+            const point = draft[id];
+            return point ? { id, x: point.x, y: point.y } : null;
+          })
+          .filter((item): item is { id: string; x: number; y: number } =>
+            Boolean(item),
+          );
+        if (placed.length > 0) {
+          void onPlace(track.id, placed);
+        }
+      }
+      draft = {};
+      return;
+    }
     if (lasso) {
       const area = lasso;
       lasso = null;
@@ -855,6 +1165,14 @@
     if (nodeDrag) {
       const drag = nodeDrag;
       nodeDrag = null;
+      if (
+        drag.moved &&
+        drag.ids.length === 1 &&
+        insertTarget
+      ) {
+        void insertNodeOnConnection(drag.ids[0] ?? "", insertTarget);
+      }
+      insertTarget = null;
       if (drag.moved && track) {
         const placed = drag.ids
           .map((id) => {
@@ -1004,6 +1322,20 @@
         openVoiceGroup(groupNode);
         return;
       }
+    }
+    if (event.ctrlKey && event.key.toLowerCase() === "p" && track) {
+      event.preventDefault();
+      createFrame();
+      return;
+    }
+    if (event.altKey && event.key.toLowerCase() === "p" && track) {
+      event.preventDefault();
+      const assignments: Record<string, string | null> = {};
+      for (const node of nodes) {
+        if (selected.has(node.id)) assignments[node.id] = null;
+      }
+      void session.setNodeFrames(track.id, graph?.frames ?? {}, assignments);
+      return;
     }
     if (
       event.key.toLowerCase() === "h" &&
@@ -1233,6 +1565,37 @@
         style:height={`${canvasSize.height}px`}
         style:transform={`translate(${view.x}px, ${view.y}px) scale(${view.scale})`}
       >
+        {#each frames as frame (frame.id)}
+          <div
+            class="voice-frame"
+            style:left={`${frame.position[0]}px`}
+            style:top={`${frame.position[1]}px`}
+            style:width={`${frame.size[0]}px`}
+            style:height={`${frame.size[1]}px`}
+          >
+            <div
+              class="voice-frame-head"
+              role="button"
+              tabindex="0"
+              aria-label={frame.name}
+              onmousedown={(event) => frameMouseDown(event, frame)}
+              oncontextmenu={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                deleteFrame(frame);
+              }}
+            >
+              {frame.name}
+            </div>
+            <div
+              class="voice-frame-resize"
+              role="button"
+              tabindex="0"
+              aria-label={t("voice.resizeFrame")}
+              onmousedown={(event) => frameResizeDown(event, frame)}
+            ></div>
+          </div>
+        {/each}
         <svg
           class="graph-wires"
           width={canvasSize.width}
@@ -1240,6 +1603,9 @@
           aria-hidden="true"
         >
           {#each connections as connection, index (`${connection.from.node}:${connection.from.port}->${connection.to.node}:${connection.to.port}:${index}`)}
+            {#if insertTarget === connection}
+              <path class="graph-wire-insert" d={wirePath(connection)} />
+            {/if}
             <path
               class="graph-wire-hit"
               d={wirePath(connection)}

@@ -10,7 +10,9 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use serde::{Deserialize, Serialize};
 
-use crate::{GraphError, NodeId, NodeKind, ParamSpec, PluginConfig, PortRef, SocketType};
+use crate::{
+    GraphError, NodeId, NodeKind, ParamSpec, PluginConfig, PortRef, SocketType, VoiceFrame,
+};
 
 /// Audio 节点端口声明。
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -473,6 +475,8 @@ pub struct AudioNode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub group: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub frame: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub plugin: Option<PluginConfig>,
     #[serde(default, skip_serializing_if = "crate::is_false")]
     pub muted: bool,
@@ -497,6 +501,7 @@ impl AudioNode {
             params,
             position: None,
             group: None,
+            frame: None,
             plugin: None,
             muted: false,
             collapsed: false,
@@ -623,6 +628,8 @@ impl AudioConnection {
 pub struct AudioGraph {
     pub nodes: BTreeMap<NodeId, AudioNode>,
     pub connections: Vec<AudioConnection>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub frames: BTreeMap<String, VoiceFrame>,
 }
 
 impl AudioGraph {
@@ -641,6 +648,7 @@ impl AudioGraph {
                 from: PortRef::fixed(NodeId::fixed("instrument"), "out"),
                 to: PortRef::fixed(NodeId::fixed("output"), "in"),
             }],
+            frames: BTreeMap::new(),
         }
     }
 
@@ -658,6 +666,7 @@ impl AudioGraph {
                 from: PortRef::fixed(NodeId::fixed("instrument"), "out"),
                 to: PortRef::fixed(NodeId::fixed("output"), "in"),
             }],
+            frames: BTreeMap::new(),
         }
     }
 
@@ -670,6 +679,56 @@ impl AudioGraph {
 
     pub fn node(&self, id: &NodeId) -> Option<&AudioNode> {
         self.nodes.get(id)
+    }
+
+    /// 替换节点框，并按需更新节点归属。
+    pub fn set_frames(
+        &mut self,
+        frames: BTreeMap<String, VoiceFrame>,
+        assignments: BTreeMap<String, Option<String>>,
+    ) -> Result<(), GraphError> {
+        for (id, frame) in &frames {
+            NodeId::new(id.clone())?;
+            if frame.id != *id
+                || !frame.size[0].is_finite()
+                || !frame.size[1].is_finite()
+                || frame.size[0] <= 0.0
+                || frame.size[1] <= 0.0
+                || !frame.position[0].is_finite()
+                || !frame.position[1].is_finite()
+            {
+                return Err(GraphError::InvalidPosition);
+            }
+        }
+        for (node, frame) in &assignments {
+            let id = NodeId::new(node.clone())?;
+            if !self.nodes.contains_key(&id) {
+                return Err(GraphError::UnknownNode(id));
+            }
+            if let Some(frame) = frame {
+                if !frames.contains_key(frame) {
+                    return Err(GraphError::FrameMissing(frame.clone()));
+                }
+            }
+        }
+        self.frames = frames;
+        for (node, frame) in assignments {
+            let id = NodeId::new(node)?;
+            if let Some(node) = self.nodes.get_mut(&id) {
+                node.frame = frame;
+            }
+        }
+        let frames = &self.frames;
+        for node in self.nodes.values_mut() {
+            if node
+                .frame
+                .as_ref()
+                .is_some_and(|frame| !frames.contains_key(frame))
+            {
+                node.frame = None;
+            }
+        }
+        Ok(())
     }
 
     /// 修改节点的显示状态。

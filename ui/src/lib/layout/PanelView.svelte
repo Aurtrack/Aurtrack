@@ -108,7 +108,7 @@
     onAddNode={(trackId, kind, x, y) =>
       session.addGraphNode(trackId, kind, x, y)}
     onConnect={(trackId, fromNodeId, fromPort, toNodeId, toPort) =>
-      void session.connectNodes(
+      session.connectNodes(
         trackId,
         fromNodeId,
         fromPort,
@@ -116,7 +116,7 @@
         toPort,
       )}
     onDisconnect={(trackId, fromNodeId, fromPort, toNodeId, toPort) =>
-      void session.disconnectNodes(
+      session.disconnectNodes(
         trackId,
         fromNodeId,
         fromPort,

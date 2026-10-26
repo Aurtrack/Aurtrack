@@ -2149,6 +2149,8 @@ pub enum GraphError {
     DuplicateCount,
     #[error("找不到节点：{0}")]
     UnknownNode(NodeId),
+    #[error("找不到节点框：{0}")]
+    FrameMissing(String),
     #[error("找不到端口：{node}.{port}")]
     UnknownPort { node: NodeId, port: String },
     #[error("找不到参数：{0}")]

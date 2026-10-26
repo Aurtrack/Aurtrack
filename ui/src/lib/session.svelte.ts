@@ -22,6 +22,7 @@ import {
   type Note,
   type Project,
   type ProjectState,
+  type VoiceFrame,
 } from "./api";
 import {
   errorText,
@@ -75,6 +76,7 @@ const MUTATING_COMMANDS = new Set([
   "device.remove",
   "param.set",
   "node.flags",
+  "node.frames",
   "clip.create",
   "clip.update",
   "clip.remove",
@@ -917,6 +919,19 @@ export class SessionStore {
       track_id: trackId,
       node_id: nodeId,
       ...flags,
+    });
+    await this.refreshProject();
+  }
+
+  async setNodeFrames(
+    trackId: string,
+    frames: Record<string, VoiceFrame>,
+    assignments: Record<string, string | null> = {},
+  ): Promise<void> {
+    await this.run("node.frames", {
+      track_id: trackId,
+      frames,
+      assignments,
     });
     await this.refreshProject();
   }

@@ -2984,3 +2984,10 @@ button:disabled {
   stroke-width: 4;
   opacity: 0.55;
 }
+.graph-wire-insert {
+  fill: none;
+  stroke: var(--blue);
+  stroke-width: 4;
+  opacity: 0.55;
+  pointer-events: none;
+}
