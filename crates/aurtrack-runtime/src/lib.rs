@@ -187,18 +187,9 @@ impl Runtime {
                 project
                     .tracks
                     .iter()
-                    .map(|track| {
-                        track
-                            .graph
-                            .compile_graph()
-                            .map(|compiled| compiled.plugin)
-                            .map_err(|error| {
-                                CommandError::invalid_args(format!("编译轨道插件失败：{error}"))
-                            })
-                    })
-                    .collect::<Result<Vec<_>, _>>()
+                    .map(|track| track.graph.plugin().cloned())
+                    .collect::<Vec<_>>()
             })
-            .transpose()?
             .unwrap_or_default();
         if self.metronome {
             track_configs.push(None);
@@ -726,10 +717,7 @@ mod tests {
             tracks: vec![Track {
                 id: "track-1".to_string(),
                 name: "lead".to_string(),
-                graph: aurtrack_graph::Graph::empty_track(
-                    aurtrack_graph::NodeKind::InstrumentSilence,
-                )
-                .unwrap(),
+                graph: aurtrack_graph::AudioGraph::track("audio.instrument.silence"),
                 clips: vec![Clip {
                     id: "clip-1".to_string(),
                     name: "verse".to_string(),

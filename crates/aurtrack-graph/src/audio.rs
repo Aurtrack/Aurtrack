@@ -365,6 +365,37 @@ impl AudioNode {
         }
     }
 
+    pub fn id(&self) -> &NodeId {
+        &self.id
+    }
+
+    pub fn type_id(&self) -> &str {
+        &self.type_id
+    }
+
+    pub fn params(&self) -> &BTreeMap<String, f64> {
+        &self.params
+    }
+
+    pub fn position(&self) -> Option<[f64; 2]> {
+        self.position
+    }
+
+    pub fn group(&self) -> Option<&str> {
+        self.group.as_deref()
+    }
+
+    pub fn plugin(&self) -> Option<&PluginConfig> {
+        self.plugin.as_ref()
+    }
+
+    pub fn is_instrument(&self) -> bool {
+        matches!(
+            self.type_id.as_str(),
+            "audio.instrument.sine" | "audio.instrument.silence" | "audio.group"
+        )
+    }
+
     pub fn kind(&self) -> NodeKind {
         match self.type_id.as_str() {
             "audio.instrument.sine" => NodeKind::InstrumentSine,
@@ -492,6 +523,13 @@ impl AudioGraph {
         }
     }
 
+    pub fn plugin(&self) -> Option<&PluginConfig> {
+        self.nodes
+            .values()
+            .find(|node| node.type_id == "audio.plugin")
+            .and_then(|node| node.plugin())
+    }
+
     pub fn node(&self, id: &NodeId) -> Option<&AudioNode> {
         self.nodes.get(id)
     }
@@ -515,6 +553,137 @@ impl AudioGraph {
         }
         self.nodes.insert(node.id.clone(), node);
         Ok(())
+    }
+
+    pub fn insert_before_output(&mut self, node: AudioNode) -> Result<(), GraphError> {
+        let node_id = node.id.clone();
+        let input_port = Self::inputs(&node)?
+            .into_iter()
+            .find(|port| port.ty == SocketType::Audio)
+            .ok_or_else(|| GraphError::AudioUnknownPort("in".to_string()))?
+            .id;
+        self.add_node(node)?;
+        let output_id = NodeId::fixed("output");
+        let previous = self
+            .connections
+            .iter()
+            .find(|connection| connection.to.node == output_id)
+            .map(|connection| connection.from.clone());
+        self.connections
+            .retain(|connection| connection.to.node != output_id);
+        if let Some(previous) = previous {
+            self.connections.push(AudioConnection::new(
+                previous,
+                PortRef::fixed(node_id.clone(), input_port),
+            ));
+        }
+        self.connections.push(AudioConnection::new(
+            PortRef::fixed(node_id, "out"),
+            PortRef::fixed(output_id, "in"),
+        ));
+        Ok(())
+    }
+
+    pub fn remove_chain_node(&mut self, id: &NodeId) -> Result<(), GraphError> {
+        let previous = self
+            .connections
+            .iter()
+            .find(|connection| &connection.to.node == id)
+            .map(|connection| connection.from.clone());
+        let next = self
+            .connections
+            .iter()
+            .find(|connection| &connection.from.node == id)
+            .map(|connection| connection.to.clone());
+        self.remove_node(id)?;
+        if let (Some(previous), Some(next)) = (previous, next) {
+            self.connections.push(AudioConnection::new(previous, next));
+        }
+        Ok(())
+    }
+
+    pub fn move_before(&mut self, id: &NodeId, target: &NodeId) -> Result<(), GraphError> {
+        if id == target {
+            return Ok(());
+        }
+        let previous = self
+            .connections
+            .iter()
+            .find(|connection| &connection.to.node == id)
+            .map(|connection| connection.from.clone());
+        let next = self
+            .connections
+            .iter()
+            .find(|connection| &connection.from.node == id)
+            .map(|connection| connection.to.clone());
+        let node = self
+            .nodes
+            .remove(id)
+            .ok_or_else(|| GraphError::UnknownNode(id.clone()))?;
+        self.connections
+            .retain(|connection| &connection.from.node != id && &connection.to.node != id);
+        if let (Some(previous), Some(next)) = (previous, next) {
+            self.connections.push(AudioConnection::new(previous, next));
+        }
+        let target_input = self
+            .connections
+            .iter()
+            .find(|connection| &connection.to.node == target)
+            .map(|connection| connection.from.clone())
+            .ok_or(GraphError::NotConnected)?;
+        self.connections
+            .retain(|connection| connection.to.node != *target);
+        self.connections.push(AudioConnection::new(
+            target_input,
+            PortRef::fixed(id.clone(), "in"),
+        ));
+        self.connections.push(AudioConnection::new(
+            PortRef::fixed(id.clone(), "out"),
+            PortRef::fixed(target.clone(), "in"),
+        ));
+        self.nodes.insert(id.clone(), node);
+        Ok(())
+    }
+
+    pub fn duplicate_nodes(
+        &mut self,
+        ids: &[NodeId],
+        new_ids: &[NodeId],
+        offset: [f64; 2],
+    ) -> Result<Vec<(NodeId, NodeId)>, GraphError> {
+        if ids.len() != new_ids.len() {
+            return Err(GraphError::DuplicateCount);
+        }
+        let mut mapping = BTreeMap::new();
+        for (old, new) in ids.iter().zip(new_ids) {
+            if self.nodes.contains_key(new) {
+                return Err(GraphError::DuplicateNode(new.clone()));
+            }
+            let mut node = self
+                .nodes
+                .get(old)
+                .ok_or_else(|| GraphError::UnknownNode(old.clone()))?
+                .clone();
+            node.id = new.clone();
+            if let Some(position) = node.position {
+                node.position = Some([position[0] + offset[0], position[1] + offset[1]]);
+            }
+            mapping.insert(old.clone(), new.clone());
+            self.nodes.insert(new.clone(), node);
+        }
+        for connection in self.connections.clone() {
+            let Some(from) = mapping.get(&connection.from.node) else {
+                continue;
+            };
+            let Some(to) = mapping.get(&connection.to.node) else {
+                continue;
+            };
+            self.connections.push(AudioConnection {
+                from: PortRef::new(from.clone(), connection.from.port.clone()),
+                to: PortRef::new(to.clone(), connection.to.port.clone()),
+            });
+        }
+        Ok(mapping.into_iter().collect())
     }
 
     pub fn remove_node(&mut self, id: &NodeId) -> Result<(), GraphError> {

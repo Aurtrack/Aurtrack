@@ -33,8 +33,7 @@ use aurtrack_engine::{
     VoiceNodePlan, VoiceOp, VoicePlan, adsr_envelope, midi_to_hz, note_envelope,
 };
 use aurtrack_graph::{
-    Graph, GraphError, Node, NodeGroup, NodeGroupInterface, NodeGroupSocketType, NodeId, NodeKind,
-    PORT_IN, PortRef, VoiceGraph,
+    GraphError, NodeGroup, NodeGroupInterface, NodeGroupSocketType, NodeId, PortRef, VoiceGraph,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -133,20 +132,20 @@ impl Project {
 pub struct Track {
     pub id: String,
     pub name: String,
-    pub graph: Graph,
+    pub graph: aurtrack_graph::AudioGraph,
     pub clips: Vec<Clip>,
 }
 
 impl Track {
     pub fn source(&self) -> Source {
-        let instrument = self.graph.nodes().find(|node| node.kind().is_instrument());
-        match instrument.map(Node::kind) {
-            Some(NodeKind::InstrumentSine) => Source::Sine {
+        let instrument = self.graph.nodes().find(|node| node.is_instrument());
+        match instrument.map(|node| node.type_id.as_str()) {
+            Some("audio.instrument.sine") => Source::Sine {
                 frequency: instrument
                     .and_then(|node| node.param("frequency"))
                     .unwrap_or(440.0),
             },
-            Some(NodeKind::InstrumentPiano | NodeKind::VoiceGroup) => Source::Piano,
+            Some("audio.group") => Source::Piano,
             _ => Source::Silence,
         }
     }
@@ -158,46 +157,85 @@ impl Track {
             .into_iter()
             .map(|node| Device {
                 id: node.id().to_string(),
-                kind: node.kind().as_str().to_string(),
+                kind: legacy_audio_kind(&node.type_id).to_string(),
                 params: node.params().clone(),
             })
             .collect()
-    }
-
-    pub fn compiled(&self) -> Result<aurtrack_graph::CompiledChain, GraphError> {
-        self.graph.compile_linear()
     }
 
     pub fn playback_graph(
         &self,
         groups: &BTreeMap<String, NodeGroup>,
     ) -> Result<(Option<f64>, Option<aurtrack_graph::AdsrSettings>, GraphPlan), GraphError> {
-        let compiled = self.graph.compile_graph()?;
-        let nodes: Vec<GraphNodePlan> = compiled
-            .nodes
-            .iter()
-            .map(|node| {
-                let op = match &node.op {
-                    aurtrack_graph::CompiledOp::Voice => GraphOp::Voice,
-                    aurtrack_graph::CompiledOp::Filter(settings) => GraphOp::Filter(
-                        FilterPlan::new(FilterSettings::new(settings.cutoff, settings.resonance)),
-                    ),
-                    aurtrack_graph::CompiledOp::Gain(gain) => GraphOp::Gain(*gain),
-                    aurtrack_graph::CompiledOp::Mix => GraphOp::Mix,
-                    aurtrack_graph::CompiledOp::Plugin => GraphOp::Plugin,
-                    aurtrack_graph::CompiledOp::Output => GraphOp::Output,
-                    _ => return Err(GraphError::NotConnected),
-                };
-                Ok(GraphNodePlan {
-                    op,
-                    inputs: node.inputs.clone(),
-                })
-            })
-            .collect::<Result<_, _>>()?;
+        self.graph.validate(groups)?;
+        let mut group_id = None;
+        let mut source_frequency = None;
+        let mut adsr = None;
+        let mut plugin = None;
+        for node in self.graph.nodes() {
+            match node.type_id.as_str() {
+                "audio.group" => {
+                    if let Some(group) = &node.group {
+                        group_id = Some(group.clone());
+                    }
+                },
+                "audio.instrument.sine" => {
+                    source_frequency = Some(node.param("frequency").unwrap_or(440.0));
+                },
+                "audio.adsr" => {
+                    adsr = Some(aurtrack_graph::AdsrSettings::new(
+                        node.param("attack").unwrap_or(0.01),
+                        node.param("decay").unwrap_or(0.12),
+                        node.param("sustain").unwrap_or(0.75),
+                        node.param("release").unwrap_or(0.18),
+                    ));
+                },
+                "audio.plugin" => {
+                    if let Some(config) = node.plugin() {
+                        plugin = Some(config.clone());
+                    }
+                },
+                _ => {},
+            }
+        }
+        let mut indices = BTreeMap::<aurtrack_graph::NodeId, usize>::new();
+        let mut nodes = Vec::new();
+        let mut output = None;
+        for id in self.graph.topological_order()? {
+            let node = self
+                .graph
+                .node(&id)
+                .ok_or_else(|| GraphError::UnknownNode(id.clone()))?;
+            let inputs = self.audio_inputs(node, &indices, &mut nodes)?;
+            let op = match node.type_id.as_str() {
+                "audio.group" | "audio.instrument.sine" | "audio.instrument.silence" => {
+                    GraphOp::Voice
+                },
+                "audio.gain" => GraphOp::Gain(node.param("gain").unwrap_or(1.0)),
+                "audio.mix" => GraphOp::Mix,
+                "audio.filter.lowpass" => GraphOp::Filter(FilterPlan::new(FilterSettings::new(
+                    node.param("cutoff").unwrap_or(1200.0),
+                    node.param("resonance").unwrap_or(0.2),
+                ))),
+                "audio.adsr" | "audio.delay" => GraphOp::Gain(1.0),
+                "audio.plugin" => GraphOp::Plugin,
+                "audio.output" => {
+                    output = Some(nodes.len());
+                    GraphOp::Output
+                },
+                "audio.filter.highpass" | "audio.drive" | "audio.value" => {
+                    return Err(GraphError::UnknownAudioNodeType(node.type_id.clone()));
+                },
+                other => return Err(GraphError::UnknownAudioNodeType(other.to_string())),
+            };
+            indices.insert(id, nodes.len());
+            nodes.push(GraphNodePlan { op, inputs });
+        }
+        let output = output.ok_or(GraphError::AudioOutputCount(0))?;
         if nodes.len() > aurtrack_engine::MAX_GRAPH_NODES {
             return Err(GraphError::TooManyNodes(nodes.len()));
         }
-        let piano = if let Some(group_id) = compiled.group.as_ref() {
+        let piano = if let Some(group_id) = group_id.as_ref() {
             let group = groups
                 .get(group_id)
                 .ok_or_else(|| GraphError::GroupMissing(group_id.clone()))?;
@@ -209,17 +247,48 @@ impl Track {
             None
         };
         Ok((
-            compiled.source_frequency,
-            compiled.adsr,
+            source_frequency,
+            adsr,
             GraphPlan {
                 nodes,
-                output: compiled.output,
-                plugin: compiled
-                    .plugin
-                    .map(|plugin| PluginPlan::new(plugin.path, plugin.id, plugin.state)),
+                output,
+                plugin: plugin.map(|plugin| PluginPlan::new(plugin.path, plugin.id, plugin.state)),
                 piano,
             },
         ))
+    }
+
+    fn audio_inputs(
+        &self,
+        node: &aurtrack_graph::AudioNode,
+        indices: &BTreeMap<aurtrack_graph::NodeId, usize>,
+        nodes: &mut Vec<GraphNodePlan>,
+    ) -> Result<Vec<usize>, GraphError> {
+        let ports = aurtrack_graph::AudioGraph::inputs(node)?;
+        let mut inputs = Vec::new();
+        for port in ports
+            .iter()
+            .filter(|port| port.ty == aurtrack_graph::SocketType::Audio)
+        {
+            let Some(connection) = self.graph.connections.iter().find(|connection| {
+                connection.to.node() == &node.id && connection.to.port() == port.id
+            }) else {
+                let index = nodes.len();
+                nodes.push(GraphNodePlan {
+                    op: GraphOp::Gain(0.0),
+                    inputs: Vec::new(),
+                });
+                inputs.push(index);
+                continue;
+            };
+            inputs.push(
+                indices
+                    .get(connection.from.node())
+                    .copied()
+                    .ok_or(GraphError::NotConnected)?,
+            );
+        }
+        Ok(inputs)
     }
 }
 
@@ -407,7 +476,6 @@ const MAX_BATCH_NOTES: usize = 512;
 const MIN_BPM: f64 = 20.0;
 const MAX_BPM: f64 = 300.0;
 const MAX_LENGTH_BARS: u32 = 512;
-const ADSR_PARAMS: [&str; 4] = ["attack", "decay", "sustain", "release"];
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -639,8 +707,8 @@ impl Session {
             .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?
             .sample_rate;
         let (instrument, frequency) = match args.source.as_deref().unwrap_or("silence") {
-            "silence" => (NodeKind::InstrumentSilence, None),
-            "piano" => (NodeKind::VoiceGroup, None),
+            "silence" => ("audio.instrument.silence", None),
+            "piano" => ("audio.group", None),
             "sine" => {
                 let frequency = args.frequency.unwrap_or(440.0);
                 if !frequency.is_finite() || !(20.0..=20_000.0).contains(&frequency) {
@@ -651,7 +719,7 @@ impl Session {
                 if frequency >= f64::from(sample_rate) / 2.0 {
                     return Err(CommandError::invalid_args("frequency 必须小于采样率的一半"));
                 }
-                (NodeKind::InstrumentSine, Some(frequency))
+                ("audio.instrument.sine", Some(frequency))
             },
             other => {
                 return Err(CommandError::invalid_args(format!(
@@ -659,10 +727,10 @@ impl Session {
                 )));
             },
         };
-        let mut graph = if instrument == NodeKind::VoiceGroup {
-            Graph::group_track("piano.voice").map_err(graph_error)?
+        let mut graph = if instrument == "audio.group" {
+            aurtrack_graph::AudioGraph::empty_track("piano.voice")
         } else {
-            Graph::empty_track(instrument).map_err(graph_error)?
+            aurtrack_graph::AudioGraph::track(instrument)
         };
         if let Some(frequency) = frequency {
             graph
@@ -706,12 +774,16 @@ impl Session {
         segment: &str,
     ) -> Result<CommandResponse, CommandError> {
         let args: DeviceAddArgs = parse_args(args)?;
-        let kind = match args.kind.as_str() {
-            "gain" => NodeKind::Gain,
-            "amp.adsr" => NodeKind::AmpAdsr,
-            "filter.lowpass" => NodeKind::FilterLowpass,
-            "mix" => NodeKind::Mix,
-            "plugin" => NodeKind::Plugin,
+        let type_id = match args.kind.as_str() {
+            "gain" => "audio.gain",
+            "amp.adsr" => "audio.adsr",
+            "filter.lowpass" => "audio.filter.lowpass",
+            "filter.highpass" => "audio.filter.highpass",
+            "drive" => "audio.drive",
+            "delay" => "audio.delay",
+            "mix" => "audio.mix",
+            "plugin" => "audio.plugin",
+            "value" => "audio.value",
             other => {
                 return Err(CommandError::invalid_args(format!(
                     "不支持的 kind：{other}"
@@ -734,12 +806,12 @@ impl Session {
                 args.track_id
             )));
         };
-        if kind == NodeKind::AmpAdsr
+        if type_id == "audio.adsr"
             && track_graph
                 .device_nodes()
                 .map_err(graph_error)?
                 .iter()
-                .any(|node| node.kind() == NodeKind::AmpAdsr)
+                .any(|node| node.type_id == "audio.adsr")
         {
             return Err(CommandError::invalid_args("一条轨道暂时只能有一个 ADSR"));
         }
@@ -748,14 +820,17 @@ impl Session {
         let number = self.next_device;
         let device_id = format!("device-{number}");
         let path = format!("/tracks/{}/{segment}/{device_id}", args.track_id);
-        let mut node = Node::new(NodeId::new(device_id.clone()).map_err(graph_error)?, kind);
+        let mut node = aurtrack_graph::AudioNode::new(
+            NodeId::new(device_id.clone()).map_err(graph_error)?,
+            type_id,
+        );
         for (name, value) in args.params.unwrap_or_default() {
             node.set_param(&name, value).map_err(graph_error)?;
         }
         if let Some([x, y]) = args.position {
             node.set_position(x, y).map_err(graph_error)?;
         }
-        if kind == NodeKind::Plugin {
+        if type_id == "audio.plugin" {
             let path = args.plugin_path.unwrap_or_default();
             let id = args.plugin_id.unwrap_or_default();
             if path.trim().is_empty() || id.trim().is_empty() {
@@ -807,21 +882,11 @@ impl Session {
             .and_then(|project| project.tracks.iter().find(|track| track.id == track_id))
             .and_then(|track| track.graph.node(&node_id))
             .ok_or_else(|| CommandError::not_found(format!("找不到参数：{path}")))?;
-        if !node.kind().is_device() {
+        if !node.is_device() {
             return Err(CommandError::not_found(format!("找不到参数：{path}")));
         }
-        match node.kind() {
-            NodeKind::Gain if name == "gain" => validate_gain(args.value)?,
-            NodeKind::AmpAdsr if ADSR_PARAMS.contains(&name) => {
-                validate_adsr_param(name, args.value)?;
-            },
-            NodeKind::FilterLowpass if name == "cutoff" || name == "resonance" => {
-                validate_filter_param(name, args.value)?;
-            },
-            _ => {
-                return Err(CommandError::invalid_args(format!("不支持的参数：{name}")));
-            },
-        }
+        let mut probe = aurtrack_graph::AudioNode::clone(node);
+        probe.set_param(name, args.value).map_err(graph_error)?;
         let token = self.snapshot("param.set");
         let project = self
             .project
@@ -1088,7 +1153,7 @@ impl Session {
             .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
         let referenced = project.tracks.iter().any(|track| {
             track.graph.nodes().any(|node| {
-                node.kind() == NodeKind::VoiceGroup && node.group() == Some(args.group_id.as_str())
+                node.type_id == "audio.group" && node.group() == Some(args.group_id.as_str())
             })
         });
         if referenced {
@@ -2137,14 +2202,14 @@ impl Session {
         let path = args.path;
         let (track_id, device_id) = parse_node_path(&path)?;
         let node_id = NodeId::new(device_id).map_err(graph_error)?;
-        let node_kind = self
+        let node_type = self
             .project
             .as_ref()
             .and_then(|project| project.tracks.iter().find(|track| track.id == track_id))
             .and_then(|track| track.graph.node(&node_id))
-            .filter(|node| node.kind().is_device())
-            .map(Node::kind);
-        let Some(node_kind) = node_kind else {
+            .filter(|node| node.is_device())
+            .map(|node| node.type_id.clone());
+        let Some(node_type) = node_type else {
             return Err(CommandError::not_found(format!("找不到设备：{path}")));
         };
         let token = self.snapshot(command);
@@ -2157,7 +2222,7 @@ impl Session {
             .iter_mut()
             .find(|track| track.id == track_id)
             .ok_or_else(|| CommandError::not_found(format!("找不到节点：{path}")))?;
-        if node_kind == NodeKind::Mix {
+        if node_type == "audio.mix" {
             track.graph.remove_node(&node_id).map_err(graph_error)?;
         } else {
             track
@@ -2186,14 +2251,18 @@ impl Session {
             .graph
             .node(&node_id)
             .ok_or_else(|| CommandError::not_found(format!("找不到节点：{}", args.path)))?;
-        if !node.kind().is_device() {
+        if !node.is_device() {
             return Err(CommandError::invalid_args("只有设备节点可以移动"));
         }
         let target = track
             .graph
             .node(&before_id)
             .ok_or_else(|| CommandError::not_found(format!("找不到节点：{}", args.before)))?;
-        if !target.kind().has_input(PORT_IN) {
+        if !aurtrack_graph::AudioGraph::inputs(target)
+            .map_err(graph_error)?
+            .iter()
+            .any(|port| port.id == "in")
+        {
             return Err(CommandError::invalid_args("目标节点没有输入端口"));
         }
         let token = self.snapshot("node.move");
@@ -2361,10 +2430,10 @@ impl Session {
                 .find(|track| track.id == track_id)
                 .and_then(|track| track.graph.node(&old_id))
                 .ok_or_else(|| CommandError::not_found(format!("找不到节点：{path}")))?;
-            if !node.kind().is_device()
-                || node.kind().is_instrument()
-                || node.kind() == NodeKind::AmpAdsr
-                || node.kind() == NodeKind::Output
+            if !node.is_device()
+                || node.is_instrument()
+                || node.type_id == "audio.adsr"
+                || node.type_id == "audio.output"
             {
                 return Err(CommandError::invalid_args("这个节点不能复制"));
             }
@@ -2425,24 +2494,23 @@ impl Session {
         for path in &args.paths {
             let (track_id, node) = parse_node_path(path)?;
             let node_id = NodeId::new(node).map_err(graph_error)?;
-            let node_kind = project
+            let node = project
                 .tracks
                 .iter()
                 .find(|track| track.id == track_id)
                 .and_then(|track| track.graph.node(&node_id))
-                .map(Node::kind)
                 .ok_or_else(|| CommandError::not_found(format!("找不到节点：{path}")))?;
-            if !node_kind.is_device() {
+            if !node.is_device() {
                 return Err(CommandError::invalid_args("只能删除设备节点"));
             }
-            parsed.push((track_id.to_string(), node_id, node_kind));
+            parsed.push((track_id.to_string(), node_id));
         }
         let token = self.snapshot("node.remove_many");
         let project = self
             .project
             .as_mut()
             .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
-        for (track_id, node_id, _) in parsed {
+        for (track_id, node_id) in parsed {
             let track = project
                 .tracks
                 .iter_mut()
@@ -2523,9 +2591,52 @@ fn project_view(project: &Project) -> Value {
             "name": &track.name,
             "source": track.source(),
             "devices": track.devices(),
-            "graph": &track.graph,
+            "graph": graph_view(&track.graph),
             "clips": track.clips.iter().map(|clip| clip_view(project, clip)).collect::<Vec<_>>(),
         })).collect::<Vec<_>>(),
+    })
+}
+
+fn legacy_audio_kind(type_id: &str) -> &'static str {
+    match type_id {
+        "audio.instrument.sine" => "instrument.sine",
+        "audio.instrument.silence" => "instrument.silence",
+        "audio.group" => "voice.group",
+        "audio.adsr" => "amp.adsr",
+        "audio.gain" | "audio.drive" | "audio.delay" | "audio.value" => "gain",
+        "audio.mix" => "mix",
+        "audio.filter.lowpass" | "audio.filter.highpass" => "filter.lowpass",
+        "audio.plugin" => "plugin",
+        _ => "output",
+    }
+}
+
+fn graph_view(graph: &aurtrack_graph::AudioGraph) -> Value {
+    let nodes: serde_json::Map<String, Value> = graph
+        .nodes
+        .iter()
+        .map(|(id, node)| {
+            let mut view = json!({
+                "id": id,
+                "type_id": &node.type_id,
+                "kind": legacy_audio_kind(&node.type_id),
+                "params": &node.params,
+            });
+            if let Some(position) = node.position {
+                view["position"] = json!(position);
+            }
+            if let Some(group) = &node.group {
+                view["group"] = json!(group);
+            }
+            if let Some(plugin) = &node.plugin {
+                view["plugin"] = json!(plugin);
+            }
+            (id.to_string(), view)
+        })
+        .collect();
+    json!({
+        "nodes": nodes,
+        "connections": graph.connections,
     })
 }
 
@@ -2742,7 +2853,10 @@ fn validate_project(project: &Project) -> Result<(u64, u64, u64, u64), CommandEr
                 track.id
             )));
         }
-        track.graph.validate().map_err(graph_error)?;
+        track
+            .graph
+            .validate(&project.node_groups)
+            .map_err(graph_error)?;
         if let Source::Sine { frequency } = track.source() {
             if !frequency.is_finite()
                 || frequency <= 0.0
@@ -2858,46 +2972,6 @@ fn validate_loop_range(start: u64, end: u64, length: u64) -> Result<(), CommandE
     }
     if end > length {
         return Err(CommandError::invalid_args("循环区间不能超过工程长度"));
-    }
-    Ok(())
-}
-
-fn validate_adsr_param(name: &str, value: f64) -> Result<(), CommandError> {
-    if !value.is_finite() {
-        return Err(CommandError::invalid_args(format!("{name} 必须是有限数")));
-    }
-    let valid = match name {
-        "attack" | "release" => (0.001..=10.0).contains(&value),
-        "decay" => (0.0..=10.0).contains(&value),
-        "sustain" => (0.0..=1.0).contains(&value),
-        _ => false,
-    };
-    if !valid {
-        return Err(CommandError::invalid_args(format!("{name} 超出允许范围")));
-    }
-    Ok(())
-}
-
-fn validate_filter_param(name: &str, value: f64) -> Result<(), CommandError> {
-    if !value.is_finite() {
-        return Err(CommandError::invalid_args(format!("{name} 必须是有限数")));
-    }
-    let valid = match name {
-        "cutoff" => (20.0..=20_000.0).contains(&value),
-        "resonance" => (0.0..=0.95).contains(&value),
-        _ => false,
-    };
-    if !valid {
-        return Err(CommandError::invalid_args(format!("{name} 超出允许范围")));
-    }
-    Ok(())
-}
-
-fn validate_gain(value: f64) -> Result<(), CommandError> {
-    if !value.is_finite() || !(0.0..=4.0).contains(&value) {
-        return Err(CommandError::invalid_args(
-            "gain 必须是 0 到 4 之间的有限数",
-        ));
     }
     Ok(())
 }

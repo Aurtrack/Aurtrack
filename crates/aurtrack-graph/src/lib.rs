@@ -1268,6 +1268,17 @@ pub struct AdsrSettings {
     pub release: f64,
 }
 
+impl AdsrSettings {
+    pub fn new(attack: f64, decay: f64, sustain: f64, release: f64) -> Self {
+        Self {
+            attack,
+            decay,
+            sustain,
+            release,
+        }
+    }
+}
+
 /// 加法钢琴音色参数。
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq)]

@@ -836,7 +836,7 @@ fn duplicate_nodes_copies_params_and_position() {
     assert_ne!(new_id, filter_id);
     let state = run(&mut session, "project.state", json!({}));
     let node = &state["project"]["tracks"][0]["graph"]["nodes"][new_id];
-    assert_eq!(node["kind"], "filter.lowpass");
+    assert_eq!(node["type_id"], "audio.filter.lowpass");
     assert_eq!(node["params"]["cutoff"], 640.0);
     assert_eq!(node["position"], json!([130.0, 100.0]));
 }
@@ -1087,11 +1087,9 @@ fn plugin_node_reaches_engine_plan() {
     );
     let project = run(&mut session, "project.state", json!({}));
     let nodes = &project["project"]["tracks"][0]["graph"]["nodes"];
-    assert!(
-        nodes.as_object().unwrap().values().any(|node| {
-            node["kind"] == "plugin" && node["plugin"]["id"] == "com.example.effect"
-        })
-    );
+    assert!(nodes.as_object().unwrap().values().any(|node| {
+        node["type_id"] == "audio.plugin" && node["plugin"]["id"] == "com.example.effect"
+    }));
     let project = session.project().unwrap().clone();
     let track = &project.tracks[0];
     let (_, _, plan) = track.playback_graph(&project.node_groups).unwrap();
@@ -1151,10 +1149,9 @@ fn piano_tracks_share_one_node_group() {
             track
                 .graph
                 .nodes()
-                .find(|node| node.kind() == aurtrack_graph::NodeKind::VoiceGroup)
-                .and_then(aurtrack_graph::Node::group)
+                .find(|node| node.type_id == "audio.group")
+                .and_then(|node| node.group().map(str::to_string))
                 .unwrap()
-                .to_string()
         })
         .collect();
     assert_eq!(group_ids, ["piano.voice", "piano.voice"]);
