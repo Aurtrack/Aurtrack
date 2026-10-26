@@ -974,7 +974,7 @@ button.number-step:hover:not(:disabled) {
 
 .graph-node-kind {
   flex: 1;
-  color: var(--blue);
+  color: inherit;
   font-family: var(--mono);
   font-size: 9px;
   letter-spacing: 0.12em;
@@ -2030,7 +2030,7 @@ button:disabled {
   border-bottom: 1px solid var(--line);
   padding: 6px 8px;
   background: #eef0ef;
-  color: var(--blue);
+  color: var(--ink);
   font-family: var(--mono);
   font-size: 9px;
   letter-spacing: 0.12em;
@@ -2839,10 +2839,14 @@ button:disabled {
   background: #e4e4e4;
   color: #333;
 }
+.graph-node[data-category] .graph-node-head,
+.voice-node[data-category] .voice-node-head {
+  color: var(--ink);
+}
 .graph-node.selected .graph-node-head,
 .voice-node.selected .voice-node-head {
   background: #e4ecf5;
-  color: var(--blue);
+  color: var(--ink);
 }
 .voice-port,
 .graph-port {
