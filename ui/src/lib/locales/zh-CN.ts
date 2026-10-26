@@ -511,6 +511,9 @@ export const zhCN = {
   "graph.typeFloat": "浮点",
   "graph.typeGate": "门",
   "graph.typeAudio": "音频",
+
+  "transport.total": "总时长",
+  "transport.seconds": (params) => `${params.value} 秒`,
 } satisfies Record<string, Message>;
 
 export type MessageKey = keyof typeof zhCN;

@@ -1,6 +1,6 @@
 <script lang="ts">
   import type { TimeSignature } from "../api";
-  import { t } from "../i18n.svelte";
+  import { formatNumber, t } from "../i18n.svelte";
   import NumberField from "./NumberField.svelte";
 
   interface Props {
@@ -60,6 +60,7 @@
     barSeconds > 0 ? loopStart / barSeconds + 1 : 1,
   );
   let loopEndBar = $derived(barSeconds > 0 ? loopEnd / barSeconds + 1 : 1);
+  let totalSeconds = $derived(lengthBars * barSeconds);
 
   function changeSignature(event: Event) {
     const value = (event.currentTarget as HTMLSelectElement).value;
@@ -131,6 +132,14 @@
         onchange={(value) => onTimebaseChange({ length_bars: value })}
       />
     </label>
+    <div class="field narrow">
+      <span>{t("transport.total")}</span>
+      <span class="field-static">
+        {t("transport.seconds", {
+          value: formatNumber(totalSeconds, 2),
+        })}
+      </span>
+    </div>
     <label class="field narrow">
       <span>{t("transport.loopStart")}</span>
       <NumberField

@@ -3019,3 +3019,14 @@ button:disabled {
   background: rgb(47 107 160 / 5%);
   pointer-events: none;
 }
+.field-static {
+  display: flex;
+  min-height: 26px;
+  align-items: center;
+  padding: 0 8px;
+  border: 1px solid var(--line);
+  background: #f6f7f6;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 11px;
+}

@@ -175,7 +175,6 @@ export class SessionStore {
   private unlistenClose: (() => void) | null = null;
 
   tracks = $derived(this.project?.tracks ?? []);
-  duration = $derived(this.project?.length_seconds ?? 5);
   tempo = $derived(this.project?.tempo_bpm ?? 120);
   timeSignature = $derived(
     this.project?.time_signature ?? { numerator: 4, denominator: 4 },
@@ -183,6 +182,9 @@ export class SessionStore {
   barSeconds = $derived(this.project?.bar_seconds ?? 2);
   secondsPerBeat = $derived(60 / Math.max(1, this.tempo));
   lengthBars = $derived(this.project?.length_bars ?? 4);
+  duration = $derived(
+    this.project?.length_seconds ?? this.lengthBars * this.barSeconds,
+  );
   loopStart = $derived(this.project?.loop_start ?? 0);
   loopEnd = $derived(this.project?.loop_end ?? this.duration);
   projectFile = $derived(fileName(this.projectPath));

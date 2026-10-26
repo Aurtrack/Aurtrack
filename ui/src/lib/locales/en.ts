@@ -542,4 +542,7 @@ export const en: Record<MessageKey, Message> = {
   "graph.typeGate": "Gate",
   "graph.typeAudio": "Audio",
 
+  "transport.total": "Total",
+  "transport.seconds": (params) => `${params.value} s`,
+
 };
