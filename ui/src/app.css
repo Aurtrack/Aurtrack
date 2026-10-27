@@ -3087,3 +3087,13 @@ button:disabled {
 .node-sidebar .voice-interface-extra {
   margin-left: 45px;
 }
+.voice-socket-panel {
+  margin-left: auto;
+  padding: 0 3px;
+  border: 1px solid var(--line);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 7px;
+  line-height: 12px;
+  white-space: nowrap;
+}

@@ -82,7 +82,12 @@
     gate: "#cca6d6",
     audio: "#63c763",
   };
-  type PortInfo = { id: string; name: string; ty: PortType };
+  type PortInfo = {
+    id: string;
+    name: string;
+    ty: PortType;
+    panel?: string;
+  };
 
   let typeById = $derived(
     new Map(nodeTypes.map((nodeType) => [nodeType.id, nodeType])),
@@ -119,6 +124,7 @@
       id: socket.id,
       name: socket.name,
       ty: socket.type,
+      panel: socket.panel,
     }));
   }
 
@@ -2073,6 +2079,9 @@
                 onmousedown={(event) => startWire(event, node, port, "in")}
               ></button>
               <span class="voice-socket-name in">{socketLabel(port.name)}</span>
+              {#if port.panel}
+                <span class="voice-socket-panel">{port.panel}</span>
+              {/if}
               {#if param && !linked}
                 <div class="voice-socket-value">
                   <NumberField
@@ -2241,6 +2250,9 @@
         </div>
         <div class="voice-interface-head">
           <strong>{t("voice.interface")}</strong>
+          <button class="ghost small" onclick={() => (libraryOpen = true)}>
+            {t("voice.library")}
+          </button>
           <button class="ghost small" onclick={() => (interfaceOpen = false)}>
             {t("voice.close")}
           </button>
