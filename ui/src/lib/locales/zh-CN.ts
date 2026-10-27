@@ -516,6 +516,14 @@ export const zhCN = {
   "transport.seconds": (params) => `${params.value} 秒`,
 
   "graph.noteDriven": "由钢琴卷帘的音符驱动",
+
+  "voice.socketDefault": "默认",
+  "voice.socketMinimum": "最小",
+  "voice.socketMaximum": "最大",
+  "voice.socketStep": "步进",
+  "voice.socketPanel": "面板",
+  "voice.socketPanelHint": "例如 Envelope",
+  "voice.socketDescription": "说明",
 } satisfies Record<string, Message>;
 
 export type MessageKey = keyof typeof zhCN;

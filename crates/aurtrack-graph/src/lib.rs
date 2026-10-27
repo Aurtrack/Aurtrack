@@ -355,6 +355,7 @@ impl NodeGroup {
             if socket.id.trim().is_empty() || !ids.insert(socket.id.as_str()) {
                 return Err(GraphError::DuplicateGroupSocket(socket.id.clone()));
             }
+            validate_group_socket(socket)?;
         }
         if self
             .interface
@@ -460,9 +461,18 @@ impl NodeGroupInterface {
     pub fn piano() -> Self {
         Self {
             inputs: vec![
-                NodeGroupSocket::new("pitch", "Pitch", NodeGroupSocketType::Float),
-                NodeGroupSocket::new("velocity", "Velocity", NodeGroupSocketType::Float),
-                NodeGroupSocket::new("gate", "Gate", NodeGroupSocketType::Gate),
+                NodeGroupSocket::new("pitch", "Pitch", NodeGroupSocketType::Float)
+                    .with_default(261.63)
+                    .with_range(20.0, 20_000.0)
+                    .with_step(0.01),
+                NodeGroupSocket::new("velocity", "Velocity", NodeGroupSocketType::Float)
+                    .with_default(0.8)
+                    .with_range(0.0, 1.0)
+                    .with_step(0.01),
+                NodeGroupSocket::new("gate", "Gate", NodeGroupSocketType::Gate)
+                    .with_default(1.0)
+                    .with_range(0.0, 1.0)
+                    .with_step(1.0),
             ],
             outputs: vec![NodeGroupSocket::new(
                 "audio",
@@ -481,6 +491,18 @@ pub struct NodeGroupSocket {
     pub name: String,
     #[serde(rename = "type")]
     pub ty: NodeGroupSocketType,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub default: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub minimum: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maximum: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub step: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub panel: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
 }
 
 impl NodeGroupSocket {
@@ -489,8 +511,97 @@ impl NodeGroupSocket {
             id: id.to_string(),
             name: name.to_string(),
             ty,
+            default: None,
+            minimum: None,
+            maximum: None,
+            step: None,
+            panel: None,
+            description: None,
         }
     }
+
+    #[must_use]
+    pub fn with_default(mut self, default: f64) -> Self {
+        self.default = Some(default);
+        self
+    }
+
+    #[must_use]
+    pub fn with_range(mut self, minimum: f64, maximum: f64) -> Self {
+        self.minimum = Some(minimum);
+        self.maximum = Some(maximum);
+        self
+    }
+
+    #[must_use]
+    pub fn with_step(mut self, step: f64) -> Self {
+        self.step = Some(step);
+        self
+    }
+
+    #[must_use]
+    pub fn with_panel(mut self, panel: impl Into<String>) -> Self {
+        self.panel = Some(panel.into());
+        self
+    }
+
+    #[must_use]
+    pub fn with_description(mut self, description: impl Into<String>) -> Self {
+        self.description = Some(description.into());
+        self
+    }
+
+    /// 未连接时使用的数值。Audio socket 没有默认值。
+    pub fn effective_default(&self) -> Option<f64> {
+        if self.ty == NodeGroupSocketType::Audio {
+            return None;
+        }
+        self.default.or(match self.ty {
+            NodeGroupSocketType::Float | NodeGroupSocketType::Gate => Some(0.0),
+            NodeGroupSocketType::Audio => None,
+        })
+    }
+}
+
+fn validate_group_socket(socket: &NodeGroupSocket) -> Result<(), GraphError> {
+    let invalid = |reason: &str| GraphError::InvalidGroupSocket {
+        socket: socket.id.clone(),
+        reason: reason.to_string(),
+    };
+    if socket.ty == NodeGroupSocketType::Audio
+        && (socket.default.is_some()
+            || socket.minimum.is_some()
+            || socket.maximum.is_some()
+            || socket.step.is_some())
+    {
+        return Err(invalid("audio socket 不能有数值默认值或范围"));
+    }
+    for value in [socket.default, socket.minimum, socket.maximum, socket.step]
+        .into_iter()
+        .flatten()
+    {
+        if !value.is_finite() {
+            return Err(invalid("数值必须是有限数"));
+        }
+    }
+    if let (Some(minimum), Some(maximum)) = (socket.minimum, socket.maximum) {
+        if minimum > maximum {
+            return Err(invalid("最小值不能大于最大值"));
+        }
+    }
+    if let Some(step) = socket.step {
+        if step <= 0.0 {
+            return Err(invalid("步进必须大于 0"));
+        }
+    }
+    if let Some(default) = socket.default {
+        if socket.minimum.is_some_and(|minimum| default < minimum)
+            || socket.maximum.is_some_and(|maximum| default > maximum)
+        {
+            return Err(invalid("默认值超出范围"));
+        }
+    }
+    Ok(())
 }
 
 /// 组接口 socket 类型。
@@ -2228,6 +2339,8 @@ pub enum GraphError {
     GroupMissing(String),
     #[error("组接口 socket 重复：{0}")]
     DuplicateGroupSocket(String),
+    #[error("组接口 socket 无效：{socket}，{reason}")]
+    InvalidGroupSocket { socket: String, reason: String },
     #[error("节点组必须有一个 audio 输出")]
     GroupAudioOutput,
     #[error("节点组循环引用：{0}")]

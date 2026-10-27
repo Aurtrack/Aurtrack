@@ -1659,6 +1659,54 @@ fn audio_group_node_can_reference_existing_group() {
 }
 
 #[test]
+fn group_interface_defaults_and_panels_persist() {
+    let mut session = Session::default();
+    run(
+        &mut session,
+        "project.create",
+        json!({ "name": "interface" }),
+    );
+    run(
+        &mut session,
+        "group.create",
+        json!({ "name": "Aux", "group_id": "aux.voice" }),
+    );
+    run(
+        &mut session,
+        "group.interface",
+        json!({
+            "group_id": "aux.voice",
+            "interface": {
+                "inputs": [{
+                    "id": "gain",
+                    "name": "Gain",
+                    "type": "float",
+                    "default": 0.5,
+                    "minimum": 0.0,
+                    "maximum": 1.0,
+                    "step": 0.01,
+                    "panel": "Main",
+                    "description": "输入增益"
+                }],
+                "outputs": [{
+                    "id": "audio",
+                    "name": "Audio",
+                    "type": "audio"
+                }]
+            }
+        }),
+    );
+    let state = run(&mut session, "project.state", json!({}));
+    let socket = &state["project"]["node_groups"]["aux.voice"]["interface"]["inputs"][0];
+    assert_eq!(socket["default"], 0.5);
+    assert_eq!(socket["minimum"], 0.0);
+    assert_eq!(socket["maximum"], 1.0);
+    assert_eq!(socket["step"], 0.01);
+    assert_eq!(socket["panel"], "Main");
+    assert_eq!(socket["description"], "输入增益");
+}
+
+#[test]
 fn piano_track_renders_audible_wav() {
     let mut session = Session::default();
     run(&mut session, "project.create", json!({ "name": "piano" }));

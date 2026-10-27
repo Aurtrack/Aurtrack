@@ -259,9 +259,22 @@
   }
 
   function matchingParam(node: VoiceNode, portId: string) {
-    return typeById
+    const declared = typeById
       .get(node.type_id)
       ?.params.find((param) => param.name === portId);
+    if (declared) return declared;
+    if (node.type_id !== "voice.group") return undefined;
+    const socket = nodeGroup(node)?.interface.inputs.find(
+      (candidate) => candidate.id === portId,
+    );
+    if (!socket || socket.type === "audio") return undefined;
+    return {
+      name: socket.id,
+      default: socket.default ?? 0,
+      minimum: socket.minimum ?? -Infinity,
+      maximum: socket.maximum ?? Infinity,
+      step: socket.step ?? 0.01,
+    };
   }
 
   function isLinked(node: VoiceNode, portId: string): boolean {
@@ -1153,6 +1166,9 @@
       id: `${prefix}-${number}`,
       name: `${tLoose(`socket.${prefix}`, prefix.toUpperCase())} ${number}`,
       type: side === "outputs" ? "audio" : "float",
+      ...(side === "outputs"
+        ? {}
+        : { default: 0, step: 0.01 }),
     });
     queueInterfaceSave();
   }
@@ -1517,9 +1533,15 @@
   }
 
   function sidebarParams(node: VoiceNode) {
-    return (typeById.get(node.type_id)?.params ?? []).filter(
-      (param) => !isLinked(node, param.name),
-    );
+    const params = [...(typeById.get(node.type_id)?.params ?? [])];
+    if (node.type_id === "voice.group") {
+      for (const socket of nodeGroup(node)?.interface.inputs ?? []) {
+        if (socket.type === "audio") continue;
+        const param = matchingParam(node, socket.id);
+        if (param) params.push(param);
+      }
+    }
+    return params.filter((param) => !isLinked(node, param.name));
   }
 
   function reloadFromSession() {
@@ -2057,7 +2079,7 @@
                     value={node.params[param.name] ?? param.default}
                     min={param.minimum}
                     max={param.maximum}
-                    step={0.01}
+                    step={param.step ?? 0.01}
                     precision={2}
                     onchange={(value) => setParam(node, param.name, value)}
                   />
@@ -2104,7 +2126,7 @@
                   value={node.params[param.name] ?? param.default}
                   min={param.minimum}
                   max={param.maximum}
-                  step={0.01}
+                  step={param.step ?? 0.01}
                   precision={2}
                   onchange={(value) => setParam(node, param.name, value)}
                 />
@@ -2252,6 +2274,15 @@
                   onchange={(event) => {
                     socket.type = event.currentTarget
                       .value as NodeGroupInterface["inputs"][number]["type"];
+                    if (socket.type === "audio") {
+                      socket.default = undefined;
+                      socket.minimum = undefined;
+                      socket.maximum = undefined;
+                      socket.step = undefined;
+                    } else {
+                      socket.default ??= 0;
+                      socket.step ??= socket.type === "gate" ? 1 : 0.01;
+                    }
                     queueInterfaceSave();
                   }}
                 >
@@ -2265,6 +2296,85 @@
                 >
                   ×
                 </button>
+              </div>
+              <div class="voice-interface-extra">
+                {#if socket.type !== "audio"}
+                  <label title={t("voice.socketDefault")}>
+                    <span>{t("voice.socketDefault")}</span>
+                    <NumberField
+                      value={socket.default ?? 0}
+                      min={socket.minimum}
+                      max={socket.maximum}
+                      step={socket.step ?? (socket.type === "gate" ? 1 : 0.01)}
+                      precision={2}
+                      onchange={(value) => {
+                        socket.default = value;
+                        queueInterfaceSave();
+                      }}
+                    />
+                  </label>
+                  <label title={t("voice.socketMinimum")}>
+                    <span>{t("voice.socketMinimum")}</span>
+                    <NumberField
+                      value={socket.minimum ?? 0}
+                      step={0.01}
+                      precision={2}
+                      onchange={(value) => {
+                        socket.minimum = value;
+                        queueInterfaceSave();
+                      }}
+                    />
+                  </label>
+                  <label title={t("voice.socketMaximum")}>
+                    <span>{t("voice.socketMaximum")}</span>
+                    <NumberField
+                      value={socket.maximum ?? 1}
+                      step={0.01}
+                      precision={2}
+                      onchange={(value) => {
+                        socket.maximum = value;
+                        queueInterfaceSave();
+                      }}
+                    />
+                  </label>
+                  <label title={t("voice.socketStep")}>
+                    <span>{t("voice.socketStep")}</span>
+                    <NumberField
+                      value={socket.step ?? 0.01}
+                      step={0.001}
+                      precision={3}
+                      onchange={(value) => {
+                        socket.step = value;
+                        queueInterfaceSave();
+                      }}
+                    />
+                  </label>
+                {/if}
+                <label class="wide" title={t("voice.socketPanel")}>
+                  <span>{t("voice.socketPanel")}</span>
+                  <input
+                    class="voice-interface-name"
+                    placeholder={t("voice.socketPanelHint")}
+                    value={socket.panel ?? ""}
+                    oninput={(event) => {
+                      const value = event.currentTarget.value.trim();
+                      socket.panel = value || undefined;
+                      queueInterfaceSave();
+                    }}
+                  />
+                </label>
+                <label class="wide" title={t("voice.socketDescription")}>
+                  <span>{t("voice.socketDescription")}</span>
+                  <input
+                    class="voice-interface-name"
+                    value={socket.description ?? ""}
+                    oninput={(event) => {
+                      const value = event.currentTarget.value.trim();
+                      socket.description = value || undefined;
+                      queueInterfaceSave();
+                    }}
+                  />
+                </label>
               </div>
             {/each}
           </div>
@@ -2298,7 +2408,7 @@
                   value={node.params[param.name] ?? param.default}
                   min={param.minimum}
                   max={param.maximum}
-                  step={0.01}
+                  step={param.step ?? 0.01}
                   precision={2}
                   onchange={(value) => setParam(node, param.name, value)}
                 />

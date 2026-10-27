@@ -492,6 +492,20 @@ fn compile_voice_inner(
                     .ok_or(GraphError::VoiceUnknownNode)?;
                 bindings.insert(connection.to.port().to_string(), input);
             }
+            for socket in &group.interface.inputs {
+                if bindings.contains_key(&socket.id) {
+                    continue;
+                }
+                let value = node
+                    .params
+                    .get(&socket.id)
+                    .copied()
+                    .or_else(|| socket.effective_default())
+                    .unwrap_or(0.0);
+                let index = nodes.len();
+                nodes.push(VoiceNodePlan::new(VoiceOp::Constant(value), Vec::new()));
+                bindings.insert(socket.id.clone(), index);
+            }
             stack.push(group_id.to_string());
             let child = compile_voice_inner(
                 &group.graph,

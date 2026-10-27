@@ -3063,3 +3063,27 @@ button:disabled {
 .graph-group-arrow {
   color: #8a929c;
 }
+.voice-interface-extra {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 3px 5px;
+  margin: 3px 0 7px 52px;
+}
+.voice-interface-extra label {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 1px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 8px;
+}
+.voice-interface-extra label.wide {
+  grid-column: 1 / -1;
+}
+.voice-interface-extra .number-field {
+  width: 100%;
+}
+.node-sidebar .voice-interface-extra {
+  margin-left: 45px;
+}

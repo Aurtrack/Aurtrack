@@ -547,4 +547,12 @@ export const en: Record<MessageKey, Message> = {
 
   "graph.noteDriven": "Driven by piano-roll notes",
 
+  "voice.socketDefault": "Default",
+  "voice.socketMinimum": "Min",
+  "voice.socketMaximum": "Max",
+  "voice.socketStep": "Step",
+  "voice.socketPanel": "Panel",
+  "voice.socketPanelHint": "e.g. Envelope",
+  "voice.socketDescription": "Description",
+
 };

@@ -92,6 +92,12 @@ export type NodeGroupSocket = {
   id: string;
   name: string;
   type: "float" | "gate" | "audio";
+  default?: number;
+  minimum?: number;
+  maximum?: number;
+  step?: number;
+  panel?: string;
+  description?: string;
 };
 
 export type NodeGroupInterface = {
@@ -111,6 +117,7 @@ export type NodeTypeParam = {
   default: number;
   minimum: number;
   maximum: number;
+  step?: number;
 };
 
 export type NodeTypeInfo = {
