@@ -495,6 +495,126 @@ fn compile_audio_graph(
     Ok(compiled)
 }
 
+fn ungroup_audio_instance(
+    graph: &mut AudioGraph,
+    instance_id: &NodeId,
+    audio_groups: &BTreeMap<String, AudioGroup>,
+) -> Result<Vec<NodeId>, GraphError> {
+    let instance = graph
+        .nodes
+        .get(instance_id)
+        .cloned()
+        .ok_or_else(|| GraphError::UnknownNode(instance_id.clone()))?;
+    let group_id = instance.group.as_deref().ok_or(GraphError::EmptyGroupId)?;
+    let group = audio_groups
+        .get(group_id)
+        .ok_or_else(|| GraphError::GroupMissing(group_id.to_string()))?;
+
+    let mut mapping = BTreeMap::new();
+    let mut counter = 1;
+    for (id, node) in &group.graph.nodes {
+        if matches!(
+            node.type_id.as_str(),
+            "audio.group.input" | "audio.group.output"
+        ) {
+            continue;
+        }
+        let mut new_id = id.clone();
+        while graph.nodes.contains_key(&new_id) || &new_id == instance_id {
+            new_id = NodeId::new(format!("ungroup-{counter}"))?;
+            counter += 1;
+        }
+        mapping.insert(id.clone(), new_id);
+    }
+
+    let mut node_ids = Vec::new();
+    for (id, new_id) in &mapping {
+        if let Some(mut node) = group.graph.nodes.get(id).cloned() {
+            node.id = new_id.clone();
+            node.frame = None;
+            graph.nodes.insert(new_id.clone(), node);
+            node_ids.push(new_id.clone());
+        }
+    }
+
+    let mut new_connections = Vec::new();
+    for connection in &group.graph.connections {
+        let Some(source_node) = group.graph.nodes.get(connection.from.node()) else {
+            continue;
+        };
+        let Some(target_node) = group.graph.nodes.get(connection.to.node()) else {
+            continue;
+        };
+        if source_node.type_id == "audio.group.input" && target_node.type_id == "audio.group.output"
+        {
+            let external_in = graph.connections.iter().find(|candidate| {
+                candidate.to.node() == instance_id && candidate.to.port() == connection.from.port()
+            });
+            let external_out = graph.connections.iter().find(|candidate| {
+                candidate.from.node() == instance_id
+                    && candidate.from.port() == connection.to.port()
+            });
+            if let (Some(external_in), Some(external_out)) = (external_in, external_out) {
+                new_connections.push(AudioConnection::new(
+                    external_in.from.clone(),
+                    external_out.to.clone(),
+                ));
+            }
+            continue;
+        }
+        if source_node.type_id == "audio.group.input" {
+            let external = graph.connections.iter().find(|candidate| {
+                candidate.to.node() == instance_id && candidate.to.port() == connection.from.port()
+            });
+            let Some(external) = external else {
+                continue;
+            };
+            let Some(target_id) = mapping.get(connection.to.node()) else {
+                continue;
+            };
+            new_connections.push(AudioConnection::new(
+                external.from.clone(),
+                PortRef::new(target_id.clone(), connection.to.port().to_string()),
+            ));
+            continue;
+        }
+        if target_node.type_id == "audio.group.output" {
+            let external = graph.connections.iter().find(|candidate| {
+                candidate.from.node() == instance_id
+                    && candidate.from.port() == connection.to.port()
+            });
+            let Some(external) = external else {
+                continue;
+            };
+            let Some(source_id) = mapping.get(connection.from.node()) else {
+                continue;
+            };
+            new_connections.push(AudioConnection::new(
+                PortRef::new(source_id.clone(), connection.from.port().to_string()),
+                external.to.clone(),
+            ));
+            continue;
+        }
+        let (Some(source_id), Some(target_id)) = (
+            mapping.get(connection.from.node()),
+            mapping.get(connection.to.node()),
+        ) else {
+            continue;
+        };
+        new_connections.push(AudioConnection::new(
+            PortRef::new(source_id.clone(), connection.from.port().to_string()),
+            PortRef::new(target_id.clone(), connection.to.port().to_string()),
+        ));
+    }
+
+    graph.nodes.remove(instance_id);
+    graph.connections.retain(|connection| {
+        connection.from.node() != instance_id && connection.to.node() != instance_id
+    });
+    graph.connections.extend(new_connections);
+    Ok(node_ids)
+}
+
 impl Track {
     pub fn source(&self) -> Source {
         let instrument = self.graph.nodes().find(|node| node.is_instrument());
@@ -870,6 +990,9 @@ impl Session {
             "audio_group.create" => self.cmd_audio_group_create(&request.args),
             "audio_group.from_nodes" => self.cmd_audio_group_from_nodes(&request.args),
             "audio_group.ungroup" => self.cmd_audio_group_ungroup(&request.args),
+            "audio_group.ungroup_from_group" => {
+                self.cmd_audio_group_ungroup_from_group(&request.args)
+            },
             "audio_group.delete" => self.cmd_audio_group_delete(&request.args),
             "audio_group.rename" => self.cmd_audio_group_rename(&request.args),
             "audio_group.interface" => self.cmd_audio_group_interface(&request.args),
@@ -2574,6 +2697,55 @@ impl Session {
             "node_ids": node_ids,
         }))
         .with_undo(token))
+    }
+
+    fn cmd_audio_group_ungroup_from_group(
+        &mut self,
+        args: &Value,
+    ) -> Result<CommandResponse, CommandError> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct UngroupArgs {
+            source_group_id: String,
+            node_id: String,
+        }
+        let args: UngroupArgs = parse_args(args)?;
+        let token = self.snapshot("audio_group.ungroup_from_group");
+        let project = self
+            .project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let source = project
+            .audio_groups
+            .get(&args.source_group_id)
+            .cloned()
+            .ok_or_else(|| {
+                CommandError::not_found(format!("找不到 Audio 组：{}", args.source_group_id))
+            })?;
+        let instance_id = NodeId::new(args.node_id.clone()).map_err(graph_error)?;
+        let mut graph = source.graph.clone();
+        let instance = graph
+            .nodes
+            .get(&instance_id)
+            .ok_or_else(|| CommandError::not_found(format!("找不到节点：{}", args.node_id)))?;
+        if instance.type_id != "audio.group.instance" {
+            return Err(CommandError::invalid_args("只有 Audio 组实例可以解组"));
+        }
+        let node_ids = ungroup_audio_instance(&mut graph, &instance_id, &project.audio_groups)
+            .map_err(graph_error)?;
+        graph
+            .validate_with_audio_interface(
+                &project.node_groups,
+                &project.audio_groups,
+                &source.interface,
+            )
+            .map_err(graph_error)?;
+        project
+            .audio_groups
+            .get_mut(&args.source_group_id)
+            .ok_or_else(|| CommandError::not_found("源 Audio 组不存在"))?
+            .graph = graph;
+        Ok(CommandResponse::ok(json!({ "node_ids": node_ids })).with_undo(token))
     }
 
     fn cmd_audio_group_delete(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {

@@ -19,10 +19,12 @@
     path: { id: string; name: string }[];
     onClose: () => void;
     onNavigate: (id: string, name: string) => void;
+    onNavigateTo: (index: number) => void;
     onExit: () => void;
   }
 
-  let { groupId, path, onClose, onNavigate, onExit }: Props = $props();
+  let { groupId, path, onClose, onNavigate, onNavigateTo, onExit }: Props =
+    $props();
 
   const EMPTY_GRAPH: TrackGraph = { nodes: {}, connections: [], frames: {} };
 
@@ -344,6 +346,11 @@
     }
   }
 
+  async function ungroupNested(_trackId: string, nodeId: string): Promise<void> {
+    await session.ungroupAudioGroupNode(groupId, nodeId);
+    graph = groupGraph(groupId);
+  }
+
   function openNested(node: GraphNode): void {
     if (!node.group) return;
     const nested = session.audioGroups[node.group];
@@ -353,19 +360,27 @@
 </script>
 
 <div class="audio-group-editor">
-  <header class="audio-group-editor-head">
-    <div class="audio-group-breadcrumb">
-      <button class="audio-group-root" onclick={onClose}>
-        {t("graph.nodeGraph")}
-      </button>
-      {#each path as item (item.id)}
-        <span class="audio-group-sep">/</span>
-        <span class="audio-group-crumb">{item.name}</span>
-      {/each}
+  <header class="voice-editor-head">
+    <div>
+      <div class="voice-editor-path">
+        <button class="voice-editor-crumb" onclick={onClose}>
+          {t("voice.trackPath")}
+        </button>
+        {#each path as item, index (item.id)}
+          <b>/</b>
+          <button
+            class="voice-editor-crumb"
+            class:current={index === path.length - 1}
+            onclick={() => onNavigateTo(index)}
+          >
+            {item.name}
+          </button>
+        {/each}
+      </div>
     </div>
-    <div class="audio-group-head-actions">
+    <div class="voice-editor-actions">
       <button
-        class="audio-group-interface-toggle"
+        class="ghost small"
         class:active={interfaceOpen}
         onclick={() => {
           if (interfaceOpen) interfaceOpen = false;
@@ -374,12 +389,8 @@
       >
         {t("voice.interface")}
       </button>
-      <button
-        class="audio-group-close"
-        title={t("graph.closeGroup")}
-        onclick={onClose}
-      >
-        ×
+      <button class="ghost small" onclick={onClose}>
+        {t("voice.close")}
       </button>
     </div>
   </header>
@@ -542,6 +553,8 @@
         onFrames={(trackId, frames, assignments) =>
           setFrames(trackId, frames, assignments)}
         onOpenAudioGroup={openNested}
+        onUngroupAudioGroup={(trackId, nodeId) =>
+          ungroupNested(trackId, nodeId)}
         isNodeLocked={(node) =>
           node.type_id === "audio.group.input" ||
           node.type_id === "audio.group.output"}

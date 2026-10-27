@@ -173,6 +173,8 @@
         path={audioGroupPath}
         onClose={() => (audioGroupPath = [])}
         onNavigate={navigateAudioGroup}
+        onNavigateTo={(index) =>
+          (audioGroupPath = audioGroupPath.slice(0, index + 1))}
         onExit={closeAudioGroup}
       />
     </div>

@@ -1868,6 +1868,14 @@
           {/each}
         </div>
       </div>
+      <div class="voice-editor-actions">
+        <button class="ghost small" onclick={openInterface}>
+          {t("voice.interface")}
+        </button>
+        <button class="ghost small" onclick={onClose}>
+          {t("voice.close")}
+        </button>
+      </div>
     </header>
 
     {#if libraryOpen}

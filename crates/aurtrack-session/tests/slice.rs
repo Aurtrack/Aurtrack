@@ -333,7 +333,7 @@ fn batch_note_edits_and_cross_track_clip_move_share_snapshots() {
 fn describe_lists_all_commands() {
     let mut session = Session::default();
     let out = run(&mut session, "describe", json!({}));
-    assert_eq!(out["commands"].as_array().unwrap().len(), 70);
+    assert_eq!(out["commands"].as_array().unwrap().len(), 71);
     assert!(out["project"].is_null());
 }
 
@@ -1843,6 +1843,60 @@ fn audio_group_from_nodes_packs_effect_chain() {
             .values()
             .any(|node| node.type_id == "audio.gain")
     );
+}
+
+#[test]
+fn nested_audio_group_instance_can_be_ungrouped() {
+    let mut session = Session::default();
+    run(
+        &mut session,
+        "project.create",
+        json!({ "name": "nested-ungroup" }),
+    );
+    run(
+        &mut session,
+        "audio_group.create",
+        json!({ "name": "Inner", "group_id": "inner.audio" }),
+    );
+    run(
+        &mut session,
+        "audio_group.create",
+        json!({ "name": "Outer", "group_id": "outer.audio" }),
+    );
+    run(
+        &mut session,
+        "audio_group.graph",
+        json!({
+            "group_id": "outer.audio",
+            "graph": {
+                "nodes": {
+                    "group-input": { "id": "group-input", "type_id": "audio.group.input" },
+                    "inner": {
+                        "id": "inner",
+                        "type_id": "audio.group.instance",
+                        "group": "inner.audio"
+                    },
+                    "group-output": { "id": "group-output", "type_id": "audio.group.output" }
+                },
+                "connections": [
+                    { "from": { "node": "group-input", "port": "in" }, "to": { "node": "inner", "port": "in" } },
+                    { "from": { "node": "inner", "port": "out" }, "to": { "node": "group-output", "port": "out" } }
+                ]
+            }
+        }),
+    );
+    run(
+        &mut session,
+        "audio_group.ungroup_from_group",
+        json!({ "source_group_id": "outer.audio", "node_id": "inner" }),
+    );
+    let project = session.project().unwrap();
+    let graph = &project.audio_groups["outer.audio"].graph;
+    assert!(!graph.nodes.values().any(|node| node.id.as_str() == "inner"));
+    assert!(graph.connections.iter().any(|connection| {
+        connection.from.node().as_str() == "group-input"
+            && connection.to.node().as_str() == "group-output"
+    }));
 }
 
 #[test]
