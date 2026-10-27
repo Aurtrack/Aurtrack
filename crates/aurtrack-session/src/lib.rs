@@ -989,6 +989,7 @@ impl Session {
             "group.ungroup" => self.cmd_group_ungroup(&request.args),
             "audio_group.create" => self.cmd_audio_group_create(&request.args),
             "audio_group.from_nodes" => self.cmd_audio_group_from_nodes(&request.args),
+            "audio_group.from_group_nodes" => self.cmd_audio_group_from_group_nodes(&request.args),
             "audio_group.ungroup" => self.cmd_audio_group_ungroup(&request.args),
             "audio_group.ungroup_from_group" => {
                 self.cmd_audio_group_ungroup_from_group(&request.args)
@@ -2533,6 +2534,280 @@ impl Session {
         let parent_graph = parent.graph.clone();
         parent_graph
             .validate_with_audio_groups(&project.node_groups, &audio_groups)
+            .map_err(graph_error)?;
+        project.audio_groups = audio_groups;
+
+        Ok(CommandResponse::ok(json!({
+            "group_id": group_id,
+            "node_id": group_node_id,
+            "name": name,
+        }))
+        .with_undo(token))
+    }
+
+    fn cmd_audio_group_from_group_nodes(
+        &mut self,
+        args: &Value,
+    ) -> Result<CommandResponse, CommandError> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct FromNodesArgs {
+            source_group_id: String,
+            node_ids: Vec<String>,
+            #[serde(default)]
+            name: Option<String>,
+            #[serde(default)]
+            group_id: Option<String>,
+        }
+        struct InputBoundary {
+            socket: NodeGroupSocket,
+            target: PortRef,
+            external: PortRef,
+        }
+        struct OutputBoundary {
+            socket: NodeGroupSocket,
+            source: PortRef,
+            external: PortRef,
+        }
+
+        let args: FromNodesArgs = parse_args(args)?;
+        if args.node_ids.is_empty() {
+            return Err(CommandError::invalid_args("node_ids 不能为空"));
+        }
+        let token = self.snapshot("audio_group.from_group_nodes");
+        let project = self
+            .project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let mut audio_groups = project.audio_groups.clone();
+        let source_group = audio_groups
+            .get(&args.source_group_id)
+            .cloned()
+            .ok_or_else(|| {
+                CommandError::not_found(format!("找不到 Audio 组：{}", args.source_group_id))
+            })?;
+        let source = source_group.graph.clone();
+        let source_interface = source_group.interface.clone();
+
+        let mut selected = BTreeSet::new();
+        for raw in &args.node_ids {
+            let id = NodeId::new(raw.clone()).map_err(graph_error)?;
+            let node = source
+                .nodes
+                .get(&id)
+                .ok_or_else(|| CommandError::not_found(format!("找不到节点：{id}")))?;
+            let node_type = audio_node_type(&node.type_id)
+                .ok_or_else(|| GraphError::UnknownAudioNodeType(node.type_id.clone()))
+                .map_err(graph_error)?;
+            if matches!(
+                node_type.category,
+                "Instrument" | "Output" | "Group" | "Interface"
+            ) {
+                return Err(CommandError::invalid_args(
+                    "只能把 Audio 效果或控制节点打包成 Audio 组",
+                ));
+            }
+            selected.insert(id);
+        }
+
+        let group_id = if let Some(id) = args.group_id {
+            NodeId::new(id.clone()).map_err(graph_error)?;
+            if audio_groups.contains_key(&id) || project.node_groups.contains_key(&id) {
+                return Err(CommandError::invalid_args(format!("节点组已存在：{id}")));
+            }
+            id
+        } else {
+            let mut number = audio_groups.len() + 1;
+            loop {
+                let id = format!("audio-group-{number}");
+                if !audio_groups.contains_key(&id) && !project.node_groups.contains_key(&id) {
+                    break id;
+                }
+                number += 1;
+            }
+        };
+        let name = args
+            .name
+            .unwrap_or_else(|| format!("Audio Group {group_id}"))
+            .trim()
+            .to_string();
+        if name.is_empty() {
+            return Err(CommandError::invalid_args("name 不能为空"));
+        }
+
+        let mut inputs = Vec::new();
+        let mut outputs = Vec::new();
+        for connection in &source.connections {
+            let from_selected = selected.contains(connection.from.node());
+            let to_selected = selected.contains(connection.to.node());
+            if from_selected == to_selected {
+                continue;
+            }
+            if to_selected {
+                let target_node = source
+                    .nodes
+                    .get(connection.to.node())
+                    .ok_or_else(|| CommandError::not_found("连线目标节点不存在"))?;
+                let ports = AudioGraph::inputs_with_groups(
+                    target_node,
+                    &audio_groups,
+                    Some(&source_interface),
+                )
+                .map_err(graph_error)?;
+                let port = ports
+                    .iter()
+                    .find(|port| port.id == connection.to.port())
+                    .ok_or_else(|| CommandError::invalid_args("连线目标端口不存在"))?;
+                let mut socket =
+                    NodeGroupSocket::new(&format!("in-{}", inputs.len() + 1), &port.name, port.ty);
+                if port.ty != NodeGroupSocketType::Audio {
+                    socket.default = Some(port.default);
+                }
+                inputs.push(InputBoundary {
+                    socket,
+                    target: connection.to.clone(),
+                    external: connection.from.clone(),
+                });
+            } else {
+                let source_node = source
+                    .nodes
+                    .get(connection.from.node())
+                    .ok_or_else(|| CommandError::not_found("连线来源节点不存在"))?;
+                let ports = AudioGraph::outputs_with_groups(
+                    source_node,
+                    &audio_groups,
+                    Some(&source_interface),
+                )
+                .map_err(graph_error)?;
+                let port = ports
+                    .iter()
+                    .find(|port| port.id == connection.from.port())
+                    .ok_or_else(|| CommandError::invalid_args("连线来源端口不存在"))?;
+                outputs.push(OutputBoundary {
+                    socket: NodeGroupSocket::new(
+                        &format!("out-{}", outputs.len() + 1),
+                        &port.name,
+                        port.ty,
+                    ),
+                    source: connection.from.clone(),
+                    external: connection.to.clone(),
+                });
+            }
+        }
+        if outputs.is_empty() {
+            return Err(CommandError::invalid_args(
+                "选中的节点没有连到组外，无法确定 Audio 组输出",
+            ));
+        }
+
+        let mut interface = NodeGroupInterface::empty();
+        interface.inputs = inputs
+            .iter()
+            .map(|boundary| boundary.socket.clone())
+            .collect();
+        interface.outputs = outputs
+            .iter()
+            .map(|boundary| boundary.socket.clone())
+            .collect();
+        let mut child_nodes = BTreeMap::new();
+        for id in &selected {
+            if let Some(node) = source.nodes.get(id) {
+                let mut node = node.clone();
+                node.frame = None;
+                child_nodes.insert(id.clone(), node);
+            }
+        }
+        let input_id = NodeId::new("group-input").map_err(graph_error)?;
+        let output_id = NodeId::new("group-output").map_err(graph_error)?;
+        child_nodes.insert(
+            input_id.clone(),
+            AudioNode::new(input_id.clone(), "audio.group.input"),
+        );
+        child_nodes.insert(
+            output_id.clone(),
+            AudioNode::new(output_id.clone(), "audio.group.output"),
+        );
+        let mut child_connections = Vec::new();
+        for connection in &source.connections {
+            if selected.contains(connection.from.node()) && selected.contains(connection.to.node())
+            {
+                child_connections.push(connection.clone());
+            }
+        }
+        for boundary in &inputs {
+            child_connections.push(AudioConnection::new(
+                PortRef::new(input_id.clone(), boundary.socket.id.clone()),
+                boundary.target.clone(),
+            ));
+        }
+        for boundary in &outputs {
+            child_connections.push(AudioConnection::new(
+                boundary.source.clone(),
+                PortRef::new(output_id.clone(), boundary.socket.id.clone()),
+            ));
+        }
+        let child = AudioGroup::new(
+            group_id.clone(),
+            name.clone(),
+            interface.clone(),
+            AudioGraph::new(child_nodes, child_connections, BTreeMap::new()),
+        );
+        child
+            .graph
+            .validate_with_audio_interface(&project.node_groups, &audio_groups, &interface)
+            .map_err(graph_error)?;
+        audio_groups.insert(group_id.clone(), child);
+
+        let parent = audio_groups
+            .get_mut(&args.source_group_id)
+            .ok_or_else(|| CommandError::not_found("源 Audio 组不存在"))?;
+        for id in &selected {
+            parent.graph.nodes.remove(id);
+        }
+        parent.graph.connections.retain(|connection| {
+            !selected.contains(connection.from.node()) && !selected.contains(connection.to.node())
+        });
+        let mut number = 1;
+        let group_node_id = loop {
+            let candidate = NodeId::new(format!("audio-group-{number}")).map_err(graph_error)?;
+            if !parent.graph.nodes.contains_key(&candidate) {
+                break candidate;
+            }
+            number += 1;
+        };
+        let positions: Vec<[f64; 2]> = selected
+            .iter()
+            .filter_map(|id| source.nodes.get(id)?.position)
+            .collect();
+        let position = if positions.is_empty() {
+            [80.0, 80.0]
+        } else {
+            let count = positions.len() as f64;
+            [
+                positions.iter().map(|position| position[0]).sum::<f64>() / count,
+                positions.iter().map(|position| position[1]).sum::<f64>() / count,
+            ]
+        };
+        let mut group_node = AudioNode::new(group_node_id.clone(), "audio.group.instance");
+        group_node.position = Some(position);
+        group_node.group = Some(group_id.clone());
+        parent.graph.nodes.insert(group_node_id.clone(), group_node);
+        for boundary in &inputs {
+            parent.graph.connections.push(AudioConnection::new(
+                boundary.external.clone(),
+                PortRef::new(group_node_id.clone(), boundary.socket.id.clone()),
+            ));
+        }
+        for boundary in &outputs {
+            parent.graph.connections.push(AudioConnection::new(
+                PortRef::new(group_node_id.clone(), boundary.socket.id.clone()),
+                boundary.external.clone(),
+            ));
+        }
+        let parent_graph = parent.graph.clone();
+        let parent_interface = parent.interface.clone();
+        parent_graph
+            .validate_with_audio_interface(&project.node_groups, &audio_groups, &parent_interface)
             .map_err(graph_error)?;
         project.audio_groups = audio_groups;
 

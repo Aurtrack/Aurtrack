@@ -318,6 +318,18 @@ fn audio_group_from_nodes_schema() -> Value {
     )
 }
 
+fn audio_group_from_group_nodes_schema() -> Value {
+    object_schema(
+        json!({
+            "source_group_id": { "type": "string" },
+            "node_ids": { "type": "array", "items": { "type": "string" } },
+            "name": { "type": "string" },
+            "group_id": { "type": "string" }
+        }),
+        &["source_group_id", "node_ids"],
+    )
+}
+
 fn audio_group_create_schema() -> Value {
     object_schema(
         json!({
@@ -937,7 +949,7 @@ fn transport_metronome_schema() -> Value {
     )
 }
 
-static COMMANDS: [CommandSpec; 71] = [
+static COMMANDS: [CommandSpec; 72] = [
     CommandSpec {
         id: "project.create",
         summary: "创建或替换当前工程",
@@ -1135,6 +1147,12 @@ static COMMANDS: [CommandSpec; 71] = [
         summary: "创建一个 Audio 节点组",
         undo: UndoKind::Snapshot,
         input_schema: audio_group_create_schema,
+    },
+    CommandSpec {
+        id: "audio_group.from_group_nodes",
+        summary: "把 Audio 组图里的效果节点打包成嵌套 Audio 组",
+        undo: UndoKind::Snapshot,
+        input_schema: audio_group_from_group_nodes_schema,
     },
     CommandSpec {
         id: "audio_group.ungroup",

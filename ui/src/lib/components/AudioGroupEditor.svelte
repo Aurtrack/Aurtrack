@@ -346,6 +346,11 @@
     }
   }
 
+  async function packNested(_trackId: string, nodeIds: string[]): Promise<void> {
+    await session.audioGroupFromGroupNodes(groupId, nodeIds);
+    graph = groupGraph(groupId);
+  }
+
   async function ungroupNested(_trackId: string, nodeId: string): Promise<void> {
     await session.ungroupAudioGroupNode(groupId, nodeId);
     graph = groupGraph(groupId);
@@ -553,6 +558,7 @@
         onFrames={(trackId, frames, assignments) =>
           setFrames(trackId, frames, assignments)}
         onOpenAudioGroup={openNested}
+        onMakeAudioGroup={(trackId, nodeIds) => packNested(trackId, nodeIds)}
         onUngroupAudioGroup={(trackId, nodeId) =>
           ungroupNested(trackId, nodeId)}
         isNodeLocked={(node) =>

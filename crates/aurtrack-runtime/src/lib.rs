@@ -757,7 +757,7 @@ mod tests {
         let mut runtime = Runtime::new();
         let response = run(&mut runtime, "describe", json!({})).unwrap();
         let commands = response.data["commands"].as_array().unwrap();
-        assert_eq!(commands.len(), 71);
+        assert_eq!(commands.len(), 72);
         assert!(
             commands
                 .iter()
