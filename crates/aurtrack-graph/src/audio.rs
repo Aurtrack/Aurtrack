@@ -6,13 +6,13 @@
 //! - 依赖 IO、宿主或 UI
 //! - 把节点行为写成固定枚举分支
 
-use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    GraphError, NodeGroupInterface, NodeId, NodeKind, ParamSpec, PluginConfig, PortRef, SocketType,
-    VoiceFrame,
+    GraphError, NodeGroupData, NodeGroupInterface, NodeId, NodeKind, NodeTree, ParamSpec,
+    PluginConfig, PortRef, SocketType, VoiceFrame,
 };
 
 /// Audio 节点端口声明。
@@ -677,40 +677,12 @@ impl AudioConnection {
 }
 
 /// 类型化 Audio 图。
-#[non_exhaustive]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AudioGraph {
-    pub nodes: BTreeMap<NodeId, AudioNode>,
-    pub connections: Vec<AudioConnection>,
-    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
-    pub frames: BTreeMap<String, VoiceFrame>,
-}
+pub type AudioGraph = NodeTree<AudioNode, AudioConnection>;
 
 /// 工程级 Audio 节点组。接口和 Audio 图分开存放。
-#[non_exhaustive]
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct AudioGroup {
-    pub id: String,
-    pub name: String,
-    pub interface: NodeGroupInterface,
-    pub graph: AudioGraph,
-}
+pub type AudioGroup = NodeGroupData<AudioGraph>;
 
 impl AudioGroup {
-    pub fn new(
-        id: impl Into<String>,
-        name: impl Into<String>,
-        interface: NodeGroupInterface,
-        graph: AudioGraph,
-    ) -> Self {
-        Self {
-            id: id.into(),
-            name: name.into(),
-            interface,
-            graph,
-        }
-    }
-
     /// 空 Audio 组：只有组输入/输出边界，接口默认是单音频直通。
     pub fn empty(id: impl Into<String>, name: impl Into<String>) -> Self {
         let interface = NodeGroupInterface {
@@ -810,10 +782,6 @@ impl AudioGraph {
             .and_then(|node| node.plugin())
     }
 
-    pub fn node(&self, id: &NodeId) -> Option<&AudioNode> {
-        self.nodes.get(id)
-    }
-
     /// 替换节点框，并按需更新节点归属。
     pub fn set_frames(
         &mut self,
@@ -882,10 +850,6 @@ impl AudioGraph {
             node.collapsed = collapsed;
         }
         Ok(())
-    }
-
-    pub fn nodes(&self) -> impl Iterator<Item = &AudioNode> {
-        self.nodes.values()
     }
 
     pub fn device_nodes(&self) -> Result<Vec<&AudioNode>, GraphError> {
@@ -1302,45 +1266,6 @@ impl AudioGraph {
         }
         self.topological_order()?;
         Ok(())
-    }
-
-    pub fn topological_order(&self) -> Result<Vec<NodeId>, GraphError> {
-        let mut incoming = BTreeMap::<NodeId, usize>::new();
-        let mut outgoing = BTreeMap::<NodeId, Vec<NodeId>>::new();
-        for id in self.nodes.keys() {
-            incoming.insert(id.clone(), 0);
-        }
-        for connection in &self.connections {
-            *incoming
-                .get_mut(&connection.to.node)
-                .ok_or_else(|| GraphError::UnknownNode(connection.to.node.clone()))? += 1;
-            outgoing
-                .entry(connection.from.node.clone())
-                .or_default()
-                .push(connection.to.node.clone());
-        }
-        let mut queue: VecDeque<NodeId> = incoming
-            .iter()
-            .filter(|(_, count)| **count == 0)
-            .map(|(id, _)| id.clone())
-            .collect();
-        let mut order = Vec::new();
-        while let Some(id) = queue.pop_front() {
-            order.push(id.clone());
-            for next in outgoing.get(&id).into_iter().flatten() {
-                let count = incoming
-                    .get_mut(next)
-                    .ok_or_else(|| GraphError::UnknownNode(next.clone()))?;
-                *count -= 1;
-                if *count == 0 {
-                    queue.push_back(next.clone());
-                }
-            }
-        }
-        if order.len() != self.nodes.len() {
-            return Err(GraphError::Cycle);
-        }
-        Ok(order)
     }
 }
 

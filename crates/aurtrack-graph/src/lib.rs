@@ -295,22 +295,22 @@ pub struct Node {
     group: Option<String>,
 }
 
-/// 工程级节点组。组树和接口分开存放，组节点只引用 `id`。
+/// 通用节点组数据块。具体域只替换 `graph` 的类型。
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct NodeGroup {
+pub struct NodeGroupData<G> {
     pub id: String,
     pub name: String,
     pub interface: NodeGroupInterface,
-    pub graph: VoiceGraph,
+    pub graph: G,
 }
 
-impl NodeGroup {
+impl<G> NodeGroupData<G> {
     pub fn new(
         id: impl Into<String>,
         name: impl Into<String>,
         interface: NodeGroupInterface,
-        graph: VoiceGraph,
+        graph: G,
     ) -> Self {
         Self {
             id: id.into(),
@@ -319,7 +319,12 @@ impl NodeGroup {
             graph,
         }
     }
+}
 
+/// 工程级 Voice 节点组。
+pub type NodeGroup = NodeGroupData<VoiceGraph>;
+
+impl NodeGroup {
     pub fn piano_default() -> Self {
         Self {
             id: "piano.voice".to_string(),
@@ -952,14 +957,102 @@ pub fn voice_node_type(id: &str) -> Option<&'static VoiceNodeType> {
     VOICE_NODE_TYPES.iter().find(|node_type| node_type.id == id)
 }
 
-/// 钢琴内部的 Voice 子图。每条连接表示一个音频或控制值。
+/// 通用节点树存储。域图只决定节点和连接类型，不复制容器结构。
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct VoiceGraph {
-    pub nodes: BTreeMap<NodeId, VoiceNode>,
-    pub connections: Vec<VoiceConnection>,
+pub struct NodeTree<N, C> {
+    pub nodes: BTreeMap<NodeId, N>,
+    pub connections: Vec<C>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub frames: BTreeMap<String, VoiceFrame>,
+}
+
+/// 钢琴内部的 Voice 子图。每条连接表示一个音频或控制值。
+pub type VoiceGraph = NodeTree<VoiceNode, VoiceConnection>;
+
+/// 通用节点树连接必须暴露起点和终点，供拓扑排序和编辑器共用。
+pub trait TreeConnection {
+    fn from(&self) -> &PortRef;
+    fn to(&self) -> &PortRef;
+}
+
+impl TreeConnection for VoiceConnection {
+    fn from(&self) -> &PortRef {
+        self.from()
+    }
+
+    fn to(&self) -> &PortRef {
+        self.to()
+    }
+}
+
+impl TreeConnection for AudioConnection {
+    fn from(&self) -> &PortRef {
+        &self.from
+    }
+
+    fn to(&self) -> &PortRef {
+        &self.to
+    }
+}
+
+impl<N, C> NodeTree<N, C> {
+    pub fn node(&self, id: &NodeId) -> Option<&N> {
+        self.nodes.get(id)
+    }
+
+    pub fn nodes(&self) -> impl Iterator<Item = &N> {
+        self.nodes.values()
+    }
+
+    pub fn connections(&self) -> &[C] {
+        &self.connections
+    }
+
+    pub fn connections_mut(&mut self) -> &mut Vec<C> {
+        &mut self.connections
+    }
+}
+
+impl<N, C: TreeConnection> NodeTree<N, C> {
+    pub fn topological_order(&self) -> Result<Vec<NodeId>, GraphError> {
+        let mut incoming = BTreeMap::<NodeId, usize>::new();
+        let mut outgoing = BTreeMap::<NodeId, Vec<NodeId>>::new();
+        for id in self.nodes.keys() {
+            incoming.insert(id.clone(), 0);
+        }
+        for connection in &self.connections {
+            *incoming
+                .get_mut(connection.to().node())
+                .ok_or_else(|| GraphError::UnknownNode(connection.to().node().clone()))? += 1;
+            outgoing
+                .entry(connection.from().node().clone())
+                .or_default()
+                .push(connection.to().node().clone());
+        }
+        let mut queue: VecDeque<NodeId> = incoming
+            .iter()
+            .filter(|(_, count)| **count == 0)
+            .map(|(id, _)| id.clone())
+            .collect();
+        let mut order = Vec::new();
+        while let Some(id) = queue.pop_front() {
+            order.push(id.clone());
+            for next in outgoing.get(&id).into_iter().flatten() {
+                let count = incoming
+                    .get_mut(next)
+                    .ok_or_else(|| GraphError::UnknownNode(next.clone()))?;
+                *count = count.saturating_sub(1);
+                if *count == 0 {
+                    queue.push_back(next.clone());
+                }
+            }
+        }
+        if order.len() != self.nodes.len() {
+            return Err(GraphError::Cycle);
+        }
+        Ok(order)
+    }
 }
 
 /// Voice 图里的背景框，只影响编辑器的组织方式。
@@ -1140,47 +1233,6 @@ impl VoiceGraph {
         }
         self.topological_order()?;
         Ok(())
-    }
-
-    pub fn topological_order(&self) -> Result<Vec<NodeId>, GraphError> {
-        let mut incoming = BTreeMap::<NodeId, usize>::new();
-        let mut outgoing = BTreeMap::<NodeId, Vec<NodeId>>::new();
-        for id in self.nodes.keys() {
-            incoming.insert(id.clone(), 0);
-        }
-        for connection in &self.connections {
-            *incoming
-                .get_mut(&connection.to.node)
-                .ok_or(GraphError::VoiceUnknownNode)? += 1;
-            outgoing
-                .entry(connection.from.node.clone())
-                .or_default()
-                .push(connection.to.node.clone());
-        }
-        let mut queue: VecDeque<NodeId> = incoming
-            .iter()
-            .filter(|(_, count)| **count == 0)
-            .map(|(id, _)| id.clone())
-            .collect();
-        let mut order = Vec::new();
-        while let Some(id) = queue.pop_front() {
-            order.push(id.clone());
-            for next in outgoing.get(&id).into_iter().flatten() {
-                let count = incoming.get_mut(next).ok_or(GraphError::VoiceUnknownNode)?;
-                *count -= 1;
-                if *count == 0 {
-                    queue.push_back(next.clone());
-                }
-            }
-        }
-        if order.len() != self.nodes.len() {
-            return Err(GraphError::Cycle);
-        }
-        Ok(order)
-    }
-
-    pub fn node(&self, id: &NodeId) -> Option<&VoiceNode> {
-        self.nodes.get(id)
     }
 }
 
