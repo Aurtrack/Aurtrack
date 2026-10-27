@@ -185,10 +185,10 @@
   let newGroupName = $state("");
   let autoSaveReady = false;
   let autoSaveTimer: ReturnType<typeof setTimeout> | null = null;
-  const interfaceSides = [
-    { key: "inputs" as const, label: "INPUTS" },
-    { key: "outputs" as const, label: "OUTPUTS" },
-  ];
+  const interfaceSides = $derived([
+    { key: "inputs" as const, label: t("graph.inputs") },
+    { key: "outputs" as const, label: t("graph.outputs") },
+  ]);
   let selected = $state<Set<string>>(new Set());
   let active = $state("");
   let view = $state({ x: 0, y: 0, scale: 1 });
