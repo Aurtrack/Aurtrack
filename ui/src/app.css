@@ -537,6 +537,7 @@ body {
 }
 
 .pane-body {
+  position: relative;
   flex: 1;
   min-height: 0;
   overflow: auto;
@@ -877,11 +878,17 @@ button.number-step:hover:not(:disabled) {
 }
 
 .audio-group-overlay {
-  position: fixed;
+  position: absolute;
   inset: 0;
   z-index: 40;
   display: flex;
-  background: var(--bg);
+  background: var(--paper);
+}
+
+.audio-group-editor-body > .graph-section {
+  flex: 1 1 auto;
+  width: 100%;
+  min-width: 0;
 }
 
 .audio-group-editor {

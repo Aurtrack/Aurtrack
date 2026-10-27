@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { tick } from "svelte";
   import type {
     GraphConnection,
     GraphNode,
@@ -90,6 +91,7 @@
     canExitGroup?: boolean;
     compact?: boolean;
     inactive?: boolean;
+    autoFrame?: boolean;
     isNodeLocked?: (node: GraphNode) => boolean;
   }
 
@@ -113,6 +115,7 @@
     canExitGroup = false,
     compact = false,
     inactive = false,
+    autoFrame = false,
     isNodeLocked,
   }: Props = $props();
 
@@ -273,6 +276,17 @@
     addMenu = null;
     nodeMenu = null;
     view = { x: 20, y: 30, scale: 0.8 };
+  });
+
+  let autoFramedFor = "";
+
+  $effect(() => {
+    const id = track?.id ?? "";
+    if (!autoFrame || !id || id === autoFramedFor || nodes.length === 0) return;
+    autoFramedFor = id;
+    void tick().then(() => {
+      requestAnimationFrame(() => frameAll());
+    });
   });
 
   let canvasSize = $derived.by(() => {

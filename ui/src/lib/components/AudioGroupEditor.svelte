@@ -539,6 +539,7 @@
         track={fakeTrack}
         busy={session.busy}
         compact
+        autoFrame
         canExitGroup
         onExitGroup={onExit}
         onAddNode={(trackId, kind, x, y, group) =>
