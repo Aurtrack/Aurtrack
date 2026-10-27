@@ -92,6 +92,7 @@
     compact?: boolean;
     inactive?: boolean;
     autoFrame?: boolean;
+    tidyOnOpen?: boolean;
     isNodeLocked?: (node: GraphNode) => boolean;
   }
 
@@ -116,6 +117,7 @@
     compact = false,
     inactive = false,
     autoFrame = false,
+    tidyOnOpen = false,
     isNodeLocked,
   }: Props = $props();
 
@@ -289,6 +291,43 @@
     });
   });
 
+  let tidiedFor = "";
+
+  $effect(() => {
+    const owner = track;
+    if (!tidyOnOpen || !owner || owner.id === tidiedFor || nodes.length < 2) {
+      return;
+    }
+    tidiedFor = owner.id;
+    const positions = Object.values(nodePositions);
+    const overlapping = positions.some((left, index) =>
+      positions
+        .slice(index + 1)
+        .some(
+          (right) =>
+            left.x < right.x + right.w - 2 &&
+            left.x + left.w - 2 > right.x &&
+            left.y < right.y + right.h - 2 &&
+            left.y + left.h - 2 > right.y,
+        ),
+    );
+    if (!overlapping) return;
+    const layout = buildLayout(nodes, connections, true);
+    const placed = nodes.map((node) => {
+      const position = layout.positions[node.id];
+      return {
+        id: node.id,
+        x: position?.x ?? 30,
+        y: position?.y ?? 30,
+      };
+    });
+    void Promise.resolve(onPlace(owner.id, placed)).then(() =>
+      tick().then(() => {
+        requestAnimationFrame(() => frameAll());
+      }),
+    );
+  });
+
   let canvasSize = $derived.by(() => {
     let width = 1600;
     let height = 900;
@@ -425,8 +464,11 @@
   function buildLayout(
     nodeList: GraphNode[],
     edges: GraphConnection[],
+    force = false,
   ): Layout {
-    const layoutNodes = nodeList.filter((node) => !node.position);
+    const layoutNodes = force
+      ? nodeList
+      : nodeList.filter((node) => !node.position);
     if (layoutNodes.length === 0) {
       return { positions: {}, width: 0, height: 0 };
     }
@@ -1039,7 +1081,7 @@
     event.stopPropagation();
     event.preventDefault();
     selectNode(node, event);
-    if (!selected.has(node.id) || isNodeLocked?.(node)) return;
+    if (!selected.has(node.id)) return;
     const ids = [...selected].filter((id) => Boolean(graph?.nodes[id]));
     const origins: Record<string, Point> = {};
     for (const id of ids) {

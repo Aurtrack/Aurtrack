@@ -1843,6 +1843,14 @@ fn audio_group_from_nodes_packs_effect_chain() {
             .values()
             .any(|node| node.type_id == "audio.gain")
     );
+    let (_, _, plan) = project.tracks[0]
+        .playback_graph(&project.node_groups, &project.audio_groups)
+        .unwrap();
+    assert!(
+        plan.nodes
+            .iter()
+            .any(|node| matches!(node.op, aurtrack_engine::GraphOp::Gain))
+    );
 }
 
 #[test]

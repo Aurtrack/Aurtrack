@@ -540,6 +540,7 @@
         busy={session.busy}
         compact
         autoFrame
+        tidyOnOpen
         canExitGroup
         onExitGroup={onExit}
         onAddNode={(trackId, kind, x, y, group) =>
