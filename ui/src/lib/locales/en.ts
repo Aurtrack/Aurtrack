@@ -560,6 +560,7 @@ export const en: Record<MessageKey, Message> = {
 
   "graph.audioGroups": "Audio Groups",
 
+  "graph.ungroupAudioGroup": "Ungroup Audio Group",
   "graph.packAudioGroup": "Pack into Audio Group",
   "graph.nodeGraph": "Node Graph",
   "graph.closeGroup": "Close Group",

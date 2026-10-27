@@ -19,9 +19,10 @@
     path: { id: string; name: string }[];
     onClose: () => void;
     onNavigate: (id: string, name: string) => void;
+    onExit: () => void;
   }
 
-  let { groupId, path, onClose, onNavigate }: Props = $props();
+  let { groupId, path, onClose, onNavigate, onExit }: Props = $props();
 
   const EMPTY_GRAPH: TrackGraph = { nodes: {}, connections: [], frames: {} };
 
@@ -522,6 +523,8 @@
         track={fakeTrack}
         busy={session.busy}
         compact
+        canExitGroup
+        onExitGroup={onExit}
         onAddNode={(trackId, kind, x, y, group) =>
           addNode(trackId, kind, x, y, group)}
         onConnect={(trackId, fromNodeId, fromPort, toNodeId, toPort) =>

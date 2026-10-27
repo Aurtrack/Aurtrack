@@ -74,6 +74,7 @@ const MUTATING_COMMANDS = new Set([
   "track.remove",
   "group.voice",
   "audio_group.from_nodes",
+  "audio_group.ungroup",
   "audio_group.create",
   "audio_group.delete",
   "audio_group.rename",
@@ -901,6 +902,18 @@ export class SessionStore {
       node_ids: nodeIds,
       ...(name ? { name } : {}),
     });
+    await this.refreshProject();
+    return data;
+  }
+
+  async ungroupAudioNode(
+    trackId: string,
+    nodeId: string,
+  ): Promise<{ node_ids: string[] }> {
+    const data = await this.run<{ node_ids: string[] }>(
+      "audio_group.ungroup",
+      { track_id: trackId, node_id: nodeId },
+    );
     await this.refreshProject();
     return data;
   }

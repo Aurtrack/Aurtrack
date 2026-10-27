@@ -82,6 +82,12 @@
       trackId: string,
       nodeIds: string[],
     ) => void | Promise<unknown>;
+    onUngroupAudioGroup?: (
+      trackId: string,
+      nodeId: string,
+    ) => void | Promise<unknown>;
+    onExitGroup?: () => void;
+    canExitGroup?: boolean;
     compact?: boolean;
     inactive?: boolean;
     isNodeLocked?: (node: GraphNode) => boolean;
@@ -102,6 +108,9 @@
     onFrames,
     onOpenAudioGroup,
     onMakeAudioGroup,
+    onUngroupAudioGroup,
+    onExitGroup,
+    canExitGroup = false,
     compact = false,
     inactive = false,
     isNodeLocked,
@@ -1590,6 +1599,18 @@
     selected = new Set();
   }
 
+  async function ungroupAudioGroup() {
+    if (!track || !onUngroupAudioGroup) return;
+    const node = nodes.find(
+      (candidate) =>
+        selected.has(candidate.id) &&
+        nodeTypeId(candidate) === "audio.group.instance",
+    );
+    if (!node) return;
+    await onUngroupAudioGroup(track.id, node.id);
+    selected = new Set();
+  }
+
   function deleteSelected() {
     const paths = selectedPaths().filter((path) => {
       const id = path.split("/").at(-1) ?? "";
@@ -1658,6 +1679,33 @@
         openVoiceGroup(groupNode);
         return;
       }
+      const audioGroupNode = nodes.find(
+        (node) =>
+          selected.has(node.id) &&
+          nodeTypeId(node) === "audio.group.instance" &&
+          Boolean(node.group),
+      );
+      if (audioGroupNode && onOpenAudioGroup) {
+        event.preventDefault();
+        onOpenAudioGroup(audioGroupNode);
+        return;
+      }
+      if (canExitGroup && onExitGroup) {
+        event.preventDefault();
+        onExitGroup();
+        return;
+      }
+    }
+    if (
+      event.key === "Tab" &&
+      event.ctrlKey &&
+      !event.shiftKey &&
+      !event.altKey &&
+      onExitGroup
+    ) {
+      event.preventDefault();
+      onExitGroup();
+      return;
     }
     if (event.ctrlKey && event.key.toLowerCase() === "p" && track) {
       event.preventDefault();
@@ -1713,6 +1761,15 @@
     ) {
       event.preventDefault();
       toggleNodeFlag("muted");
+      return;
+    }
+    if (
+      (event.ctrlKey || event.metaKey) &&
+      event.altKey &&
+      event.key.toLowerCase() === "g"
+    ) {
+      event.preventDefault();
+      void ungroupAudioGroup();
       return;
     }
     if (
@@ -2317,6 +2374,18 @@
               }}
             >
               {t("graph.packAudioGroup")}
+            </button>
+          {/if}
+          {#if onUngroupAudioGroup && nodeMenu && graph?.nodes[nodeMenu.nodeId]?.type_id === "audio.group.instance"}
+            <button
+              role="menuitem"
+              disabled={busy}
+              onclick={() => {
+                nodeMenu = null;
+                void ungroupAudioGroup();
+              }}
+            >
+              {t("graph.ungroupAudioGroup")}
             </button>
           {/if}
           <button role="menuitem" disabled={busy} onclick={duplicateFromMenu}>

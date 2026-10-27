@@ -529,6 +529,7 @@ export const zhCN = {
   "voice.socketDescription": "说明",
 
   "graph.audioGroups": "Audio 组",
+  "graph.ungroupAudioGroup": "解组 Audio 组",
   "graph.packAudioGroup": "打包为 Audio 组",
   "graph.nodeGraph": "节点图",
   "graph.closeGroup": "关闭组",

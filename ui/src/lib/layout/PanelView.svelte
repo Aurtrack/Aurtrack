@@ -162,6 +162,8 @@
     onOpenAudioGroup={openAudioGroup}
     onMakeAudioGroup={(trackId, nodeIds) =>
       session.audioGroupFromNodes(trackId, nodeIds)}
+    onUngroupAudioGroup={(trackId, nodeId) =>
+      session.ungroupAudioNode(trackId, nodeId)}
     inactive={Boolean(currentAudioGroup)}
   />
   {#if currentAudioGroup}
@@ -171,6 +173,7 @@
         path={audioGroupPath}
         onClose={() => (audioGroupPath = [])}
         onNavigate={navigateAudioGroup}
+        onExit={closeAudioGroup}
       />
     </div>
   {/if}

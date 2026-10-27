@@ -332,6 +332,16 @@ fn audio_group_id_schema() -> Value {
     object_schema(json!({ "group_id": { "type": "string" } }), &["group_id"])
 }
 
+fn audio_group_ungroup_schema() -> Value {
+    object_schema(
+        json!({
+            "track_id": { "type": "string" },
+            "node_id": { "type": "string" }
+        }),
+        &["track_id", "node_id"],
+    )
+}
+
 fn audio_group_rename_schema() -> Value {
     object_schema(
         json!({
@@ -917,7 +927,7 @@ fn transport_metronome_schema() -> Value {
     )
 }
 
-static COMMANDS: [CommandSpec; 69] = [
+static COMMANDS: [CommandSpec; 70] = [
     CommandSpec {
         id: "project.create",
         summary: "创建或替换当前工程",
@@ -1115,6 +1125,12 @@ static COMMANDS: [CommandSpec; 69] = [
         summary: "创建一个 Audio 节点组",
         undo: UndoKind::Snapshot,
         input_schema: audio_group_create_schema,
+    },
+    CommandSpec {
+        id: "audio_group.ungroup",
+        summary: "把轨道中的 Audio 组实例展开回父图",
+        undo: UndoKind::Snapshot,
+        input_schema: audio_group_ungroup_schema,
     },
     CommandSpec {
         id: "audio_group.delete",

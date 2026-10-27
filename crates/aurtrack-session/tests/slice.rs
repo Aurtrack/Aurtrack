@@ -333,7 +333,7 @@ fn batch_note_edits_and_cross_track_clip_move_share_snapshots() {
 fn describe_lists_all_commands() {
     let mut session = Session::default();
     let out = run(&mut session, "describe", json!({}));
-    assert_eq!(out["commands"].as_array().unwrap().len(), 69);
+    assert_eq!(out["commands"].as_array().unwrap().len(), 70);
     assert!(out["project"].is_null());
 }
 
@@ -1820,6 +1820,28 @@ fn audio_group_from_nodes_packs_effect_chain() {
         plan.nodes
             .iter()
             .any(|node| matches!(node.op, aurtrack_engine::GraphOp::Gain))
+    );
+
+    let instance = packed["node_id"].as_str().unwrap();
+    run(
+        &mut session,
+        "audio_group.ungroup",
+        json!({ "track_id": "track-1", "node_id": instance }),
+    );
+    let project = session.project().unwrap();
+    assert!(
+        project.tracks[0]
+            .graph
+            .nodes
+            .values()
+            .all(|node| node.id.as_str() != instance)
+    );
+    assert!(
+        project.tracks[0]
+            .graph
+            .nodes
+            .values()
+            .any(|node| node.type_id == "audio.gain")
     );
 }
 
