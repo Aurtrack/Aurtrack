@@ -1298,7 +1298,9 @@ fn plugin_node_reaches_engine_plan() {
     }));
     let project = session.project().unwrap().clone();
     let track = &project.tracks[0];
-    let (_, _, plan) = track.playback_graph(&project.node_groups).unwrap();
+    let (_, _, plan) = track
+        .playback_graph(&project.node_groups, &project.audio_groups)
+        .unwrap();
     assert_eq!(plan.plugin.as_ref().unwrap().id, "com.example.effect");
 }
 
@@ -1477,7 +1479,7 @@ fn nested_group_compiles_into_voice_plan() {
     );
     let project = session.project().unwrap().clone();
     let plan = project.tracks[0]
-        .playback_graph(&project.node_groups)
+        .playback_graph(&project.node_groups, &project.audio_groups)
         .unwrap()
         .2;
     assert!(plan.piano.unwrap().voice.unwrap().nodes.len() > 6);
@@ -1526,7 +1528,7 @@ fn group_from_nodes_rewires_boundaries() {
     assert!(child.graph.nodes.keys().any(|id| id.to_string() == "osc"));
     assert!(child.graph.nodes.keys().any(|id| id.to_string() == "env"));
     let plan = project.tracks[0]
-        .playback_graph(&project.node_groups)
+        .playback_graph(&project.node_groups, &project.audio_groups)
         .unwrap()
         .2;
     assert!(plan.piano.unwrap().voice.unwrap().nodes.len() > 6);
@@ -1548,7 +1550,7 @@ fn group_from_nodes_rewires_boundaries() {
     assert!(parent.graph.nodes.keys().any(|id| id.to_string() == "osc"));
     assert!(parent.graph.nodes.keys().any(|id| id.to_string() == "env"));
     let plan = project.tracks[0]
-        .playback_graph(&project.node_groups)
+        .playback_graph(&project.node_groups, &project.audio_groups)
         .unwrap()
         .2;
     assert!(plan.piano.unwrap().voice.unwrap().nodes.len() > 6);
@@ -1743,6 +1745,161 @@ fn audio_groups_create_persist_and_delete() {
 }
 
 #[test]
+fn audio_group_instance_expands_into_track_plan() {
+    let mut session = Session::default();
+    run(
+        &mut session,
+        "project.create",
+        json!({ "name": "audio-group-plan" }),
+    );
+    run(
+        &mut session,
+        "track.create",
+        json!({ "name": "sine", "source": "sine" }),
+    );
+    run(
+        &mut session,
+        "audio_group.create",
+        json!({ "name": "Aux", "group_id": "aux.audio" }),
+    );
+    let added = run(
+        &mut session,
+        "node.add",
+        json!({
+            "track_id": "track-1",
+            "kind": "audio.group.instance",
+            "group": "aux.audio",
+            "position": [300.0, 300.0]
+        }),
+    );
+    let group_node = added["node_id"].as_str().unwrap();
+    run(
+        &mut session,
+        "node.disconnect",
+        json!({
+            "from": "/tracks/track-1/nodes/instrument",
+            "from_port": "out",
+            "to": "/tracks/track-1/nodes/output",
+            "to_port": "in"
+        }),
+    );
+    run(
+        &mut session,
+        "node.connect",
+        json!({
+            "from": "/tracks/track-1/nodes/instrument",
+            "from_port": "out",
+            "to": format!("/tracks/track-1/nodes/{group_node}"),
+            "to_port": "in"
+        }),
+    );
+    run(
+        &mut session,
+        "node.connect",
+        json!({
+            "from": format!("/tracks/track-1/nodes/{group_node}"),
+            "from_port": "out",
+            "to": "/tracks/track-1/nodes/output",
+            "to_port": "in"
+        }),
+    );
+    let project = session.project().unwrap();
+    let (_, _, plan) = project.tracks[0]
+        .playback_graph(&project.node_groups, &project.audio_groups)
+        .unwrap();
+    assert!(plan.nodes.len() >= 2);
+}
+
+#[test]
+fn audio_group_instance_expands_effect_nodes() {
+    let mut session = Session::default();
+    run(
+        &mut session,
+        "project.create",
+        json!({ "name": "audio-group-effect" }),
+    );
+    run(
+        &mut session,
+        "track.create",
+        json!({ "name": "sine", "source": "sine" }),
+    );
+    run(
+        &mut session,
+        "audio_group.create",
+        json!({ "name": "Aux", "group_id": "aux.audio" }),
+    );
+    run(
+        &mut session,
+        "audio_group.graph",
+        json!({
+            "group_id": "aux.audio",
+            "graph": {
+                "nodes": {
+                    "group-input": { "id": "group-input", "type_id": "audio.group.input" },
+                    "gain": { "id": "gain", "type_id": "audio.gain", "params": { "gain": 2.0 } },
+                    "group-output": { "id": "group-output", "type_id": "audio.group.output" }
+                },
+                "connections": [
+                    { "from": { "node": "group-input", "port": "in" }, "to": { "node": "gain", "port": "in" } },
+                    { "from": { "node": "gain", "port": "out" }, "to": { "node": "group-output", "port": "out" } }
+                ]
+            }
+        }),
+    );
+    let added = run(
+        &mut session,
+        "node.add",
+        json!({
+            "track_id": "track-1",
+            "kind": "audio.group.instance",
+            "group": "aux.audio",
+            "position": [300.0, 300.0]
+        }),
+    );
+    let group_node = added["node_id"].as_str().unwrap();
+    run(
+        &mut session,
+        "node.disconnect",
+        json!({
+            "from": "/tracks/track-1/nodes/instrument",
+            "from_port": "out",
+            "to": "/tracks/track-1/nodes/output",
+            "to_port": "in"
+        }),
+    );
+    run(
+        &mut session,
+        "node.connect",
+        json!({
+            "from": "/tracks/track-1/nodes/instrument",
+            "from_port": "out",
+            "to": format!("/tracks/track-1/nodes/{group_node}"),
+            "to_port": "in"
+        }),
+    );
+    run(
+        &mut session,
+        "node.connect",
+        json!({
+            "from": format!("/tracks/track-1/nodes/{group_node}"),
+            "from_port": "out",
+            "to": "/tracks/track-1/nodes/output",
+            "to_port": "in"
+        }),
+    );
+    let project = session.project().unwrap();
+    let (_, _, plan) = project.tracks[0]
+        .playback_graph(&project.node_groups, &project.audio_groups)
+        .unwrap();
+    assert_eq!(plan.nodes.len(), 4);
+    assert!(
+        plan.nodes
+            .iter()
+            .any(|node| matches!(node.op, aurtrack_engine::GraphOp::Gain))
+    );
+}
+
+#[test]
 fn piano_track_renders_audible_wav() {
     let mut session = Session::default();
     run(&mut session, "project.create", json!({ "name": "piano" }));
@@ -1769,7 +1926,7 @@ fn piano_track_renders_audible_wav() {
     );
     let project = session.project().unwrap().clone();
     let plan = project.tracks[0]
-        .playback_graph(&project.node_groups)
+        .playback_graph(&project.node_groups, &project.audio_groups)
         .unwrap()
         .2;
     assert!(plan.piano.as_ref().unwrap().voice.is_some());

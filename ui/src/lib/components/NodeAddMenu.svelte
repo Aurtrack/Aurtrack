@@ -1,5 +1,5 @@
 <script lang="ts">
-  import type { NodeGroup, NodeTypeInfo } from "../api";
+  import type { AudioGroup, NodeGroup, NodeTypeInfo } from "../api";
   import { t } from "../i18n.svelte";
   import { nodeCategoryLabel, nodeTypeLabel } from "../nodeLabels";
 
@@ -9,8 +9,11 @@
     nodeTypes: NodeTypeInfo[];
     groups?: NodeGroup[];
     groupLabel?: string;
+    audioGroups?: AudioGroup[];
+    audioGroupLabel?: string;
     onPickType: (typeId: string) => void;
     onPickGroup?: (groupId: string) => void;
+    onPickAudioGroup?: (groupId: string) => void;
     onClose: () => void;
   }
 
@@ -20,8 +23,11 @@
     nodeTypes,
     groups = [],
     groupLabel = t("graph.groups"),
+    audioGroups = [],
+    audioGroupLabel = t("graph.audioGroups"),
     onPickType,
     onPickGroup,
+    onPickAudioGroup,
     onClose,
   }: Props = $props();
 
@@ -62,11 +68,25 @@
     );
   });
 
+  const audioGroupResults = $derived.by(() => {
+    const needle = query.trim().toLowerCase();
+    if (!needle) return [];
+    return audioGroups.filter(
+      (group) =>
+        group.name.toLowerCase().includes(needle) ||
+        group.id.toLowerCase().includes(needle),
+    );
+  });
+
   const flat = $derived.by(() => {
     if (!query.trim()) return [];
     return [
       ...results.map((nodeType) => ({ kind: "type" as const, nodeType })),
       ...groupResults.map((group) => ({ kind: "group" as const, group })),
+      ...audioGroupResults.map((group) => ({
+        kind: "audio-group" as const,
+        group,
+      })),
     ];
   });
 
@@ -82,7 +102,8 @@
     const item = flat[index];
     if (!item) return;
     if (item.kind === "type") onPickType(item.nodeType.id);
-    else onPickGroup?.(item.group.id);
+    else if (item.kind === "group") onPickGroup?.(item.group.id);
+    else onPickAudioGroup?.(item.group.id);
   }
 
   function handleKey(event: KeyboardEvent) {
@@ -147,7 +168,9 @@
           <small>
             {item.kind === "type"
               ? nodeCategoryLabel(item.nodeType.category)
-              : groupLabel}
+              : item.kind === "group"
+                ? groupLabel
+                : audioGroupLabel}
           </small>
         </button>
       {/each}
@@ -168,6 +191,15 @@
         <div class="node-add-label">{groupLabel}</div>
         {#each groups as group (group.id)}
           <button role="menuitem" onclick={() => onPickGroup?.(group.id)}>
+            <span>{group.name}</span>
+            <small>{group.id}</small>
+          </button>
+        {/each}
+      {/if}
+      {#if audioGroups.length > 0}
+        <div class="node-add-label">{audioGroupLabel}</div>
+        {#each audioGroups as group (group.id)}
+          <button role="menuitem" onclick={() => onPickAudioGroup?.(group.id)}>
             <span>{group.name}</span>
             <small>{group.id}</small>
           </button>

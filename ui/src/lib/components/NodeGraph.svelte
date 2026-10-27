@@ -90,7 +90,10 @@
       (nodeType) =>
         nodeType.category !== "Instrument" &&
         nodeType.category !== "Output" &&
+        nodeType.category !== "Group" &&
+        nodeType.category !== "Interface" &&
         nodeType.id !== "audio.group" &&
+        nodeType.id !== "audio.group.instance" &&
         !(nodeType.id === "audio.adsr" && hasAdsr),
     ),
   );
@@ -249,20 +252,51 @@
   });
 
   function groupHeaderHeight(node: GraphNode): number {
+    if (nodeTypeId(node) === "audio.group.instance") return 18;
     if (nodeTypeId(node) !== "audio.group") return 0;
     return groupFor(node) ? 42 : 18;
   }
 
+  function groupPorts(node: GraphNode, side: "inputs" | "outputs") {
+    if (nodeTypeId(node) !== "audio.group.instance") return undefined;
+    const group = node.group ? session.audioGroups[node.group] : undefined;
+    if (!group) return [];
+    return (side === "inputs" ? group.interface.inputs : group.interface.outputs).map(
+      (socket) => ({
+        id: socket.id,
+        name: socket.name,
+        type: socket.type,
+        default: socket.default,
+      }),
+    );
+  }
+
   function nodeInputs(node: GraphNode) {
-    return nodeType(node)?.inputs ?? [];
+    return groupPorts(node, "inputs") ?? nodeType(node)?.inputs ?? [];
   }
 
   function nodeOutputs(node: GraphNode) {
-    return nodeType(node)?.outputs ?? [];
+    return groupPorts(node, "outputs") ?? nodeType(node)?.outputs ?? [];
   }
 
   function matchingParam(node: GraphNode, portId: string) {
-    return nodeType(node)?.params.find((param) => param.name === portId);
+    const declared = nodeType(node)?.params.find(
+      (param) => param.name === portId,
+    );
+    if (declared) return declared;
+    if (nodeTypeId(node) !== "audio.group.instance") return undefined;
+    const group = node.group ? session.audioGroups[node.group] : undefined;
+    const socket = group?.interface.inputs.find(
+      (candidate) => candidate.id === portId,
+    );
+    if (!socket || socket.type === "audio") return undefined;
+    return {
+      name: socket.id,
+      default: socket.default ?? 0,
+      minimum: socket.minimum ?? -Infinity,
+      maximum: socket.maximum ?? Infinity,
+      step: socket.step ?? 0.01,
+    };
   }
 
   function isLinked(node: GraphNode, portId: string): boolean {
@@ -380,6 +414,13 @@
     if (nodeTypeId(node) === "audio.group") {
       return groupFor(node)?.name ?? node.group ?? t("graph.group");
     }
+    if (nodeTypeId(node) === "audio.group.instance") {
+      return (
+        (node.group ? session.audioGroups[node.group]?.name : undefined) ??
+        node.group ??
+        t("graph.group")
+      );
+    }
     const info = nodeType(node);
     if (info) return nodeTypeLabel(info).toUpperCase();
     if (node.kind === "instrument.silence") return t("graph.silence");
@@ -468,9 +509,16 @@
   }
 
   function sidebarParams(node: GraphNode) {
-    return (nodeType(node)?.params ?? []).filter(
-      (param) => !isLinked(node, param.name),
-    );
+    const params = [...(nodeType(node)?.params ?? [])];
+    if (nodeTypeId(node) === "audio.group.instance") {
+      const group = node.group ? session.audioGroups[node.group] : undefined;
+      for (const socket of group?.interface.inputs ?? []) {
+        if (socket.type === "audio") continue;
+        const param = matchingParam(node, socket.id);
+        if (param) params.push(param);
+      }
+    }
+    return params.filter((param) => !isLinked(node, param.name));
   }
 
   function inputPorts(node: GraphNode): InputPort[] {
@@ -1945,17 +1993,19 @@
             </div>
 
             {#if !node.collapsed}
-            {#if nodeTypeId(node) === "audio.group"}
+            {#if nodeTypeId(node) === "audio.group" || nodeTypeId(node) === "audio.group.instance"}
               <div class="graph-node-group-line">
                 <code>{node.group ?? "—"}</code>
-                <button
-                  class="graph-node-enter"
-                  title={t("graph.editGroup")}
-                  disabled={!groupFor(node)}
-                  onclick={() => openVoiceGroup(node)}
-                >
-                  ↗
-                </button>
+                {#if nodeTypeId(node) === "audio.group"}
+                  <button
+                    class="graph-node-enter"
+                    title={t("graph.editGroup")}
+                    disabled={!groupFor(node)}
+                    onclick={() => openVoiceGroup(node)}
+                  >
+                    ↗
+                  </button>
+                {/if}
               </div>
               {#if groupFor(node)}
                 <div class="graph-group-interface">
@@ -2013,7 +2063,7 @@
                       value={paramOf(node, param.name, param.default)}
                       min={param.minimum}
                       max={param.maximum}
-                      step={0.01}
+                      step={param.step ?? 0.01}
                       precision={2}
                       disabled={busy}
                       onchange={(value) =>
@@ -2062,7 +2112,7 @@
                     value={paramOf(node, param.name, param.default)}
                     min={param.minimum}
                     max={param.maximum}
-                    step={0.01}
+                    step={param.step ?? 0.01}
                     precision={2}
                     disabled={busy}
                     onchange={(value) =>
@@ -2230,9 +2280,13 @@
           nodeTypes={addNodeTypes}
           groups={Object.values(session.nodeGroups)}
           groupLabel={t("voice.groupNode")}
+          audioGroups={Object.values(session.audioGroups)}
+          audioGroupLabel={t("graph.audioGroups")}
           onPickType={(typeId) => void addNode(typeId)}
           onPickGroup={(groupId) =>
             void addNode("audio.group", undefined, groupId)}
+          onPickAudioGroup={(groupId) =>
+            void addNode("audio.group.instance", undefined, groupId)}
           onClose={() => {
             addMenu = null;
             pendingWire = null;

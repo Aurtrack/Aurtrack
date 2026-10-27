@@ -555,4 +555,6 @@ export const en: Record<MessageKey, Message> = {
   "voice.socketPanelHint": "e.g. Envelope",
   "voice.socketDescription": "Description",
 
+  "graph.audioGroups": "Audio Groups",
+
 };

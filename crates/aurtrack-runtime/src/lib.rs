@@ -523,7 +523,7 @@ fn build_plan(
         .iter()
         .map(|track| {
             let (frequency, adsr_settings, graph) = track
-                .playback_graph(&project.node_groups)
+                .playback_graph(&project.node_groups, &project.audio_groups)
                 .map_err(|error| CommandError::invalid_args(format!("节点图错误：{error}")))?;
             let adsr = adsr_settings.map(|settings| AdsrPlan {
                 attack: settings.attack,

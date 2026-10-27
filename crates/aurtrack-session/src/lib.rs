@@ -34,8 +34,9 @@ use aurtrack_engine::{
     midi_to_hz, note_envelope,
 };
 use aurtrack_graph::{
-    AudioGroup, GraphError, NodeGroup, NodeGroupInterface, NodeGroupSocket, NodeGroupSocketType,
-    NodeId, PortRef, VoiceConnection, VoiceFrame, VoiceGraph, VoiceNode, node_inputs, node_outputs,
+    AudioGraph, AudioGroup, AudioNode, GraphError, NodeGroup, NodeGroupInterface, NodeGroupSocket,
+    NodeGroupSocketType, NodeId, PortRef, VoiceConnection, VoiceFrame, VoiceGraph, VoiceNode,
+    node_inputs, node_outputs,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -140,6 +141,360 @@ pub struct Track {
     pub clips: Vec<Clip>,
 }
 
+#[derive(Clone, Copy, Debug)]
+enum AudioOutputRef {
+    /// 引用父图已有的计划索引，不需要偏移。
+    Parent(usize),
+    /// 引用本图层新增节点的索引，合并时需要加偏移。
+    Local(usize),
+}
+
+#[derive(Default)]
+struct CompiledAudio {
+    nodes: Vec<GraphNodePlan>,
+    output: Option<usize>,
+    outputs: BTreeMap<String, AudioOutputRef>,
+}
+
+fn constant_index(nodes: &mut Vec<GraphNodePlan>, value: f64) -> usize {
+    let index = nodes.len();
+    nodes.push(GraphNodePlan {
+        op: GraphOp::Constant(value),
+        inputs: Vec::new(),
+        controls: Vec::new(),
+    });
+    index
+}
+
+fn incoming_index(
+    graph: &AudioGraph,
+    indices: &BTreeMap<(NodeId, String), usize>,
+    node: &NodeId,
+    port: &str,
+) -> Option<usize> {
+    graph
+        .connections
+        .iter()
+        .find(|connection| connection.to.node() == node && connection.to.port() == port)
+        .and_then(|connection| {
+            indices
+                .get(&(
+                    connection.from.node().clone(),
+                    connection.from.port().to_string(),
+                ))
+                .copied()
+        })
+}
+
+fn incoming_ref(
+    graph: &AudioGraph,
+    origins: &BTreeMap<(NodeId, String), AudioOutputRef>,
+    node: &NodeId,
+    port: &str,
+) -> Option<AudioOutputRef> {
+    graph
+        .connections
+        .iter()
+        .find(|connection| connection.to.node() == node && connection.to.port() == port)
+        .and_then(|connection| {
+            origins
+                .get(&(
+                    connection.from.node().clone(),
+                    connection.from.port().to_string(),
+                ))
+                .copied()
+        })
+}
+
+fn compile_audio_inputs(
+    graph: &AudioGraph,
+    node: &AudioNode,
+    audio_groups: &BTreeMap<String, AudioGroup>,
+    interface: Option<&NodeGroupInterface>,
+    indices: &BTreeMap<(NodeId, String), usize>,
+    nodes: &mut Vec<GraphNodePlan>,
+) -> Result<Vec<usize>, GraphError> {
+    let ports = AudioGraph::inputs_with_groups(node, audio_groups, interface)?;
+    let mut inputs = Vec::new();
+    for port in ports
+        .iter()
+        .filter(|port| port.ty == NodeGroupSocketType::Audio)
+    {
+        let connections: Vec<_> = graph
+            .connections
+            .iter()
+            .filter(|connection| {
+                connection.to.node() == &node.id && connection.to.port() == port.id
+            })
+            .collect();
+        if connections.is_empty() {
+            inputs.push(constant_index(nodes, 0.0));
+            continue;
+        }
+        for connection in connections {
+            inputs.push(
+                indices
+                    .get(&(
+                        connection.from.node().clone(),
+                        connection.from.port().to_string(),
+                    ))
+                    .copied()
+                    .ok_or(GraphError::NotConnected)?,
+            );
+        }
+    }
+    Ok(inputs)
+}
+
+fn compile_audio_controls(
+    graph: &AudioGraph,
+    node: &AudioNode,
+    audio_groups: &BTreeMap<String, AudioGroup>,
+    interface: Option<&NodeGroupInterface>,
+    indices: &BTreeMap<(NodeId, String), usize>,
+    nodes: &mut Vec<GraphNodePlan>,
+) -> Result<Vec<usize>, GraphError> {
+    let ports = AudioGraph::inputs_with_groups(node, audio_groups, interface)?;
+    let mut controls = Vec::new();
+    for port in ports
+        .iter()
+        .filter(|port| port.ty == NodeGroupSocketType::Float)
+    {
+        let Some(connection) = graph
+            .connections
+            .iter()
+            .find(|connection| connection.to.node() == &node.id && connection.to.port() == port.id)
+        else {
+            let value = node.param(&port.id).unwrap_or(port.default);
+            controls.push(constant_index(nodes, value));
+            continue;
+        };
+        controls.push(
+            indices
+                .get(&(
+                    connection.from.node().clone(),
+                    connection.from.port().to_string(),
+                ))
+                .copied()
+                .ok_or(GraphError::NotConnected)?,
+        );
+    }
+    Ok(controls)
+}
+
+fn compile_audio_graph(
+    graph: &AudioGraph,
+    audio_groups: &BTreeMap<String, AudioGroup>,
+    interface: Option<&NodeGroupInterface>,
+    input_bindings: Option<&BTreeMap<String, usize>>,
+    stack: &mut Vec<String>,
+) -> Result<CompiledAudio, GraphError> {
+    let mut indices = BTreeMap::<(NodeId, String), usize>::new();
+    let mut origins = BTreeMap::<(NodeId, String), AudioOutputRef>::new();
+    let mut nodes = Vec::new();
+    let mut compiled = CompiledAudio::default();
+    for id in graph.topological_order()? {
+        let node = graph
+            .node(&id)
+            .ok_or_else(|| GraphError::UnknownNode(id.clone()))?;
+        match node.type_id.as_str() {
+            "audio.group.input" => {
+                if interface.is_none() {
+                    return Err(GraphError::GroupBoundaryOutsideGroup);
+                }
+                let ports = AudioGraph::outputs_with_groups(node, audio_groups, interface)?;
+                for port in ports {
+                    let index = input_bindings
+                        .and_then(|bindings| bindings.get(&port.id))
+                        .copied()
+                        .unwrap_or_else(|| constant_index(&mut nodes, port.default));
+                    indices.insert((id.clone(), port.id.clone()), index);
+                    origins.insert((id.clone(), port.id), AudioOutputRef::Parent(index));
+                }
+            },
+            "audio.group.output" => {
+                if interface.is_none() {
+                    return Err(GraphError::GroupBoundaryOutsideGroup);
+                }
+                let ports = AudioGraph::inputs_with_groups(node, audio_groups, interface)?;
+                for port in ports {
+                    if let Some(reference) = incoming_ref(graph, &origins, &id, &port.id) {
+                        compiled.outputs.insert(port.id, reference);
+                    }
+                }
+            },
+            "audio.group.instance" => {
+                let group_id = node.group.as_deref().ok_or(GraphError::EmptyGroupId)?;
+                if stack.iter().any(|item| item == group_id) {
+                    return Err(GraphError::GroupCycle(group_id.to_string()));
+                }
+                let group = audio_groups
+                    .get(group_id)
+                    .ok_or_else(|| GraphError::GroupMissing(group_id.to_string()))?;
+                if node.muted {
+                    for socket in &group.interface.outputs {
+                        let index = constant_index(&mut nodes, 0.0);
+                        indices.insert((id.clone(), socket.id.clone()), index);
+                        origins.insert(
+                            (id.clone(), socket.id.clone()),
+                            AudioOutputRef::Local(index),
+                        );
+                    }
+                    continue;
+                }
+                let mut bindings = BTreeMap::new();
+                let ports = AudioGraph::inputs_with_groups(node, audio_groups, interface)?;
+                for port in ports {
+                    let index =
+                        incoming_index(graph, &indices, &id, &port.id).unwrap_or_else(|| {
+                            constant_index(&mut nodes, node.param(&port.id).unwrap_or(port.default))
+                        });
+                    bindings.insert(port.id, index);
+                }
+                stack.push(group_id.to_string());
+                let child = compile_audio_graph(
+                    &group.graph,
+                    audio_groups,
+                    Some(&group.interface),
+                    Some(&bindings),
+                    stack,
+                );
+                stack.pop();
+                let child = child?;
+                let mut child_outputs = BTreeMap::new();
+                for socket in &group.interface.outputs {
+                    child_outputs.insert(
+                        socket.id.clone(),
+                        *child
+                            .outputs
+                            .get(&socket.id)
+                            .ok_or(GraphError::NotConnected)?,
+                    );
+                }
+                let offset = nodes.len();
+                nodes.extend(child.nodes);
+                for (socket_id, reference) in child_outputs {
+                    let mapped = match reference {
+                        AudioOutputRef::Parent(index) => AudioOutputRef::Parent(index),
+                        AudioOutputRef::Local(index) => AudioOutputRef::Local(offset + index),
+                    };
+                    indices.insert(
+                        (id.clone(), socket_id.clone()),
+                        match mapped {
+                            AudioOutputRef::Parent(index) | AudioOutputRef::Local(index) => index,
+                        },
+                    );
+                    origins.insert((id.clone(), socket_id), mapped);
+                }
+            },
+            "audio.output" => {
+                let inputs = compile_audio_inputs(
+                    graph,
+                    node,
+                    audio_groups,
+                    interface,
+                    &indices,
+                    &mut nodes,
+                )?;
+                let input = inputs
+                    .first()
+                    .copied()
+                    .unwrap_or_else(|| constant_index(&mut nodes, 0.0));
+                compiled.output = Some(nodes.len());
+                nodes.push(GraphNodePlan {
+                    op: GraphOp::Output,
+                    inputs: vec![input],
+                    controls: Vec::new(),
+                });
+            },
+            _ => {
+                let inputs = compile_audio_inputs(
+                    graph,
+                    node,
+                    audio_groups,
+                    interface,
+                    &indices,
+                    &mut nodes,
+                )?;
+                if node.muted {
+                    let ports = AudioGraph::inputs_with_groups(node, audio_groups, interface)?;
+                    let reference = ports
+                        .iter()
+                        .find(|port| port.ty == NodeGroupSocketType::Audio)
+                        .and_then(|port| incoming_ref(graph, &origins, &id, &port.id))
+                        .unwrap_or_else(|| AudioOutputRef::Local(constant_index(&mut nodes, 0.0)));
+                    let target = match reference {
+                        AudioOutputRef::Parent(index) | AudioOutputRef::Local(index) => index,
+                    };
+                    let outputs = AudioGraph::outputs_with_groups(node, audio_groups, interface)?;
+                    for port in outputs {
+                        indices.insert((id.clone(), port.id.clone()), target);
+                        origins.insert((id.clone(), port.id), reference);
+                    }
+                    continue;
+                }
+                let controls = compile_audio_controls(
+                    graph,
+                    node,
+                    audio_groups,
+                    interface,
+                    &indices,
+                    &mut nodes,
+                )?;
+                let op = match node.type_id.as_str() {
+                    "audio.group" | "audio.instrument.sine" | "audio.instrument.silence" => {
+                        GraphOp::Voice
+                    },
+                    "audio.value" => GraphOp::Constant(node.param("value").unwrap_or(0.0)),
+                    "audio.lfo" => GraphOp::Lfo(LfoPlan::new(
+                        node.param("rate").unwrap_or(1.0),
+                        node.param("depth").unwrap_or(0.5),
+                        node.param("offset").unwrap_or(0.0),
+                    )),
+                    "audio.math.add" => GraphOp::Add,
+                    "audio.math.multiply" => GraphOp::Multiply,
+                    "audio.math.map_range" => GraphOp::MapRange,
+                    "audio.math.clamp" => GraphOp::Clamp,
+                    "audio.gain" | "audio.adsr" => GraphOp::Gain,
+                    "audio.mix" => GraphOp::Mix,
+                    "audio.filter.lowpass" => {
+                        GraphOp::Filter(FilterPlan::new(FilterSettings::new(
+                            node.param("cutoff").unwrap_or(1200.0),
+                            node.param("resonance").unwrap_or(0.2),
+                        )))
+                    },
+                    "audio.filter.highpass" => GraphOp::Highpass(HighpassPlan::new(
+                        node.param("cutoff").unwrap_or(1200.0),
+                        node.param("resonance").unwrap_or(0.2),
+                    )),
+                    "audio.drive" => GraphOp::Drive,
+                    "audio.delay" => GraphOp::Delay(DelayPlan::new(
+                        node.param("time").unwrap_or(0.25),
+                        node.param("feedback").unwrap_or(0.2),
+                    )),
+                    "audio.plugin" => GraphOp::Plugin,
+                    other => {
+                        return Err(GraphError::UnknownAudioNodeType(other.to_string()));
+                    },
+                };
+                let index = nodes.len();
+                let outputs = AudioGraph::outputs_with_groups(node, audio_groups, interface)?;
+                for port in outputs {
+                    indices.insert((id.clone(), port.id.clone()), index);
+                    origins.insert((id.clone(), port.id), AudioOutputRef::Local(index));
+                }
+                nodes.push(GraphNodePlan {
+                    op,
+                    inputs,
+                    controls,
+                });
+            },
+        }
+    }
+    compiled.nodes = nodes;
+    Ok(compiled)
+}
+
 impl Track {
     pub fn source(&self) -> Source {
         let instrument = self.graph.nodes().find(|node| node.is_instrument());
@@ -170,8 +525,10 @@ impl Track {
     pub fn playback_graph(
         &self,
         groups: &BTreeMap<String, NodeGroup>,
+        audio_groups: &BTreeMap<String, AudioGroup>,
     ) -> Result<(Option<f64>, Option<aurtrack_graph::AdsrSettings>, GraphPlan), GraphError> {
-        self.graph.validate(groups)?;
+        self.graph
+            .validate_with_audio_groups(groups, audio_groups)?;
         let mut group_id = None;
         let mut source_frequency = None;
         let mut adsr = None;
@@ -202,90 +559,9 @@ impl Track {
                 _ => {},
             }
         }
-        let mut indices = BTreeMap::<aurtrack_graph::NodeId, usize>::new();
-        let mut nodes = Vec::new();
-        let mut output = None;
-        for id in self.graph.topological_order()? {
-            let node = self
-                .graph
-                .node(&id)
-                .ok_or_else(|| GraphError::UnknownNode(id.clone()))?;
-            let mut inputs = self.audio_inputs(node, &indices, &mut nodes)?;
-            if node.muted && node.type_id != "audio.output" {
-                let target = if let Some(index) = inputs.first().copied() {
-                    index
-                } else {
-                    let index = nodes.len();
-                    nodes.push(GraphNodePlan {
-                        op: GraphOp::Constant(0.0),
-                        inputs: Vec::new(),
-                        controls: Vec::new(),
-                    });
-                    index
-                };
-                indices.insert(id, target);
-                continue;
-            }
-            if node.muted {
-                let index = nodes.len();
-                nodes.push(GraphNodePlan {
-                    op: GraphOp::Constant(0.0),
-                    inputs: Vec::new(),
-                    controls: Vec::new(),
-                });
-                inputs = vec![index];
-            }
-            let controls = self.audio_controls(node, &indices, &mut nodes)?;
-            let op = match node.type_id.as_str() {
-                "audio.group" | "audio.instrument.sine" | "audio.instrument.silence" => {
-                    GraphOp::Voice
-                },
-                "audio.value" => GraphOp::Constant(node.param("value").unwrap_or(0.0)),
-                "audio.lfo" => GraphOp::Lfo(LfoPlan::new(
-                    node.param("rate").unwrap_or(1.0),
-                    node.param("depth").unwrap_or(0.5),
-                    node.param("offset").unwrap_or(0.0),
-                )),
-                "audio.math.add" => GraphOp::Add,
-                "audio.math.multiply" => GraphOp::Multiply,
-                "audio.math.map_range" => GraphOp::MapRange,
-                "audio.math.clamp" => GraphOp::Clamp,
-                "audio.gain" => GraphOp::Gain,
-                "audio.mix" => GraphOp::Mix,
-                "audio.filter.lowpass" => GraphOp::Filter(FilterPlan::new(FilterSettings::new(
-                    node.param("cutoff").unwrap_or(1200.0),
-                    node.param("resonance").unwrap_or(0.2),
-                ))),
-                "audio.filter.highpass" => GraphOp::Highpass(HighpassPlan::new(
-                    node.param("cutoff").unwrap_or(1200.0),
-                    node.param("resonance").unwrap_or(0.2),
-                )),
-                "audio.drive" => GraphOp::Drive,
-                "audio.delay" => GraphOp::Delay(DelayPlan::new(
-                    node.param("time").unwrap_or(0.25),
-                    node.param("feedback").unwrap_or(0.2),
-                )),
-                "audio.adsr" | "audio.plugin" => {
-                    if node.type_id == "audio.plugin" {
-                        GraphOp::Plugin
-                    } else {
-                        GraphOp::Gain
-                    }
-                },
-                "audio.output" => {
-                    output = Some(nodes.len());
-                    GraphOp::Output
-                },
-                other => return Err(GraphError::UnknownAudioNodeType(other.to_string())),
-            };
-            indices.insert(id, nodes.len());
-            nodes.push(GraphNodePlan {
-                op,
-                inputs,
-                controls,
-            });
-        }
-        let output = output.ok_or(GraphError::AudioOutputCount(0))?;
+        let compiled = compile_audio_graph(&self.graph, audio_groups, None, None, &mut Vec::new())?;
+        let nodes = compiled.nodes;
+        let output = compiled.output.ok_or(GraphError::AudioOutputCount(0))?;
         if nodes.len() > aurtrack_engine::MAX_GRAPH_NODES {
             return Err(GraphError::TooManyNodes(nodes.len()));
         }
@@ -310,82 +586,6 @@ impl Track {
                 piano,
             },
         ))
-    }
-
-    fn audio_inputs(
-        &self,
-        node: &aurtrack_graph::AudioNode,
-        indices: &BTreeMap<aurtrack_graph::NodeId, usize>,
-        nodes: &mut Vec<GraphNodePlan>,
-    ) -> Result<Vec<usize>, GraphError> {
-        let ports = aurtrack_graph::AudioGraph::inputs(node)?;
-        let mut inputs = Vec::new();
-        for port in ports
-            .iter()
-            .filter(|port| port.ty == aurtrack_graph::SocketType::Audio)
-        {
-            let connections: Vec<_> = self
-                .graph
-                .connections
-                .iter()
-                .filter(|connection| {
-                    connection.to.node() == &node.id && connection.to.port() == port.id
-                })
-                .collect();
-            if connections.is_empty() {
-                let index = nodes.len();
-                nodes.push(GraphNodePlan {
-                    op: GraphOp::Constant(0.0),
-                    inputs: Vec::new(),
-                    controls: Vec::new(),
-                });
-                inputs.push(index);
-                continue;
-            }
-            for connection in connections {
-                inputs.push(
-                    indices
-                        .get(connection.from.node())
-                        .copied()
-                        .ok_or(GraphError::NotConnected)?,
-                );
-            }
-        }
-        Ok(inputs)
-    }
-
-    fn audio_controls(
-        &self,
-        node: &aurtrack_graph::AudioNode,
-        indices: &BTreeMap<aurtrack_graph::NodeId, usize>,
-        nodes: &mut Vec<GraphNodePlan>,
-    ) -> Result<Vec<usize>, GraphError> {
-        let ports = aurtrack_graph::AudioGraph::inputs(node)?;
-        let mut controls = Vec::new();
-        for port in ports
-            .iter()
-            .filter(|port| port.ty == aurtrack_graph::SocketType::Float)
-        {
-            let Some(connection) = self.graph.connections.iter().find(|connection| {
-                connection.to.node() == &node.id && connection.to.port() == port.id
-            }) else {
-                let index = nodes.len();
-                nodes.push(GraphNodePlan {
-                    op: GraphOp::Constant(node.param(&port.id).unwrap_or(port.default)),
-                    inputs: Vec::new(),
-                    controls: Vec::new(),
-                });
-                controls.push(index);
-                continue;
-            };
-            controls.push(
-                indices
-                    .get(connection.from.node())
-                    .copied()
-                    .ok_or(GraphError::NotConnected)?,
-            );
-        }
-        Ok(controls)
     }
 }
 
@@ -3916,7 +4116,7 @@ fn render_project(
     let mut mix = vec![0.0_f32; frames];
     for track in &project.tracks {
         let (source_frequency, adsr_settings, graph) = track
-            .playback_graph(&project.node_groups)
+            .playback_graph(&project.node_groups, &project.audio_groups)
             .map_err(graph_error)?;
         let adsr = adsr_settings.map(|settings| AdsrPlan {
             attack: settings.attack,

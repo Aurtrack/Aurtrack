@@ -524,6 +524,8 @@ export const zhCN = {
   "voice.socketPanel": "面板",
   "voice.socketPanelHint": "例如 Envelope",
   "voice.socketDescription": "说明",
+
+  "graph.audioGroups": "Audio 组",
 } satisfies Record<string, Message>;
 
 export type MessageKey = keyof typeof zhCN;
