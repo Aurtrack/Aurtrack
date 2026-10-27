@@ -441,6 +441,9 @@ export const en: Record<MessageKey, Message> = {
   "node.reroute.gate": "Reroute Gate",
   "node.reroute.audio": "Reroute Audio",
   "node.audio.group": "Group",
+  "node.audio.group.input": "Group Input",
+  "node.audio.group.output": "Group Output",
+  "node.audio.group.instance": "Audio Group",
   "node.audio.instrument.sine": "Sine",
   "node.audio.instrument.silence": "Silence",
   "node.audio.instrument.piano": "Piano",
@@ -556,5 +559,8 @@ export const en: Record<MessageKey, Message> = {
   "voice.socketDescription": "Description",
 
   "graph.audioGroups": "Audio Groups",
+
+  "graph.nodeGraph": "Node Graph",
+  "graph.closeGroup": "Close Group",
 
 };

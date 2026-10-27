@@ -1,4 +1,5 @@
 <script lang="ts">
+  import AudioGroupEditor from "../components/AudioGroupEditor.svelte";
   import ClipEditor from "../components/ClipEditor.svelte";
   import CommandLog from "../components/CommandLog.svelte";
   import NodeGraph from "../components/NodeGraph.svelte";
@@ -7,10 +8,39 @@
   import TrackInspector from "../components/TrackInspector.svelte";
   import TrackList from "../components/TrackList.svelte";
   import TransportPanel from "../components/TransportPanel.svelte";
+  import type { GraphNode } from "../api";
   import type { PanelKind } from "../layout.svelte";
   import { session } from "../session.svelte";
 
   let { kind }: { kind: PanelKind } = $props();
+
+  let audioGroupPath = $state<{ id: string; name: string }[]>([]);
+  let lastTrackId = $state("");
+  let currentAudioGroup = $derived(
+    audioGroupPath[audioGroupPath.length - 1],
+  );
+
+  $effect(() => {
+    const trackId = session.selectedTrack?.id ?? "";
+    if (trackId === lastTrackId) return;
+    lastTrackId = trackId;
+    audioGroupPath = [];
+  });
+
+  function openAudioGroup(node: GraphNode): void {
+    if (!node.group) return;
+    const group = session.audioGroups[node.group];
+    if (!group) return;
+    audioGroupPath = [{ id: group.id, name: group.name }];
+  }
+
+  function navigateAudioGroup(id: string, name: string): void {
+    audioGroupPath = [...audioGroupPath, { id, name }];
+  }
+
+  function closeAudioGroup(): void {
+    audioGroupPath = audioGroupPath.slice(0, -1);
+  }
 </script>
 
 {#if kind === "timeline"}
@@ -129,7 +159,19 @@
     onRemoveMany={(paths) => void session.deleteNodes(paths)}
     onParamChange={(trackId, nodeId, name, value) =>
       void session.changeDeviceParam(trackId, nodeId, name, value)}
+    onOpenAudioGroup={openAudioGroup}
+    inactive={Boolean(currentAudioGroup)}
   />
+  {#if currentAudioGroup}
+    <div class="audio-group-overlay">
+      <AudioGroupEditor
+        groupId={currentAudioGroup.id}
+        path={audioGroupPath}
+        onClose={() => (audioGroupPath = [])}
+        onNavigate={navigateAudioGroup}
+      />
+    </div>
+  {/if}
 {:else if kind === "transport"}
   <TransportPanel
     playing={session.playing}

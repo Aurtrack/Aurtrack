@@ -67,6 +67,20 @@
       name: string,
       value: number,
     ) => void;
+    onFlags?: (
+      trackId: string,
+      nodeId: string,
+      patch: { muted?: boolean; collapsed?: boolean },
+    ) => void | Promise<unknown>;
+    onFrames?: (
+      trackId: string,
+      frames: Record<string, VoiceFrame>,
+      assignments: Record<string, string | null>,
+    ) => void | Promise<unknown>;
+    onOpenAudioGroup?: (node: GraphNode) => void;
+    compact?: boolean;
+    inactive?: boolean;
+    isNodeLocked?: (node: GraphNode) => boolean;
   }
 
   let {
@@ -80,6 +94,12 @@
     onRemove,
     onRemoveMany,
     onParamChange,
+    onFlags,
+    onFrames,
+    onOpenAudioGroup,
+    compact = false,
+    inactive = false,
+    isNodeLocked,
   }: Props = $props();
 
   let audioTypeById = $derived(
@@ -955,7 +975,7 @@
     event.stopPropagation();
     event.preventDefault();
     selectNode(node, event);
-    if (!selected.has(node.id)) return;
+    if (!selected.has(node.id) || isNodeLocked?.(node)) return;
     const ids = [...selected].filter((id) => Boolean(graph?.nodes[id]));
     const origins: Record<string, Point> = {};
     for (const id of ids) {
@@ -971,10 +991,21 @@
   function toggleNodeFlag(flag: "muted" | "collapsed") {
     if (!track) return;
     for (const node of nodes) {
-      if (!selected.has(node.id)) continue;
+      if (!selected.has(node.id) || isNodeLocked?.(node)) continue;
       const current = Boolean(node[flag]);
-      void session.setNodeFlags(track.id, node.id, { [flag]: !current });
+      const patch = { [flag]: !current };
+      if (onFlags) void onFlags(track.id, node.id, patch);
+      else void session.setNodeFlags(track.id, node.id, patch);
     }
+  }
+
+  function saveFrames(
+    frames: Record<string, VoiceFrame>,
+    assignments: Record<string, string | null> = {},
+  ) {
+    if (!track) return;
+    if (onFrames) void onFrames(track.id, frames, assignments);
+    else void session.setNodeFrames(track.id, frames, assignments);
   }
 
   function createFrame() {
@@ -1013,8 +1044,7 @@
     };
     const assignments: Record<string, string | null> = {};
     for (const node of members) assignments[node.id] = frame.id;
-    void session.setNodeFrames(
-      track.id,
+    saveFrames(
       { ...(graph?.frames ?? {}), [frame.id]: frame },
       assignments,
     );
@@ -1028,7 +1058,7 @@
     for (const node of nodes) {
       if (node.frame === frame.id) assignments[node.id] = null;
     }
-    void session.setNodeFrames(track.id, next, assignments);
+    saveFrames(next, assignments);
   }
 
   function frameMouseDown(event: MouseEvent, frame: VoiceFrame) {
@@ -1354,7 +1384,7 @@
       frameResize = null;
       frameDraft = null;
       if (track && frames) {
-        void session.setNodeFrames(track.id, frames);
+        saveFrames(frames);
         const placed = Object.keys(children)
           .map((id) => {
             const point = draft[id];
@@ -1510,7 +1540,11 @@
   }
 
   function deleteSelected() {
-    const paths = selectedPaths();
+    const paths = selectedPaths().filter((path) => {
+      const id = path.split("/").at(-1) ?? "";
+      const node = graph?.nodes[id];
+      return node && !isNodeLocked?.(node);
+    });
     if (paths.length === 0) return;
     selected = new Set();
     onRemoveMany(paths);
@@ -1522,6 +1556,7 @@
       .filter(
         (node) =>
           selected.has(node.id) &&
+          !isNodeLocked?.(node) &&
           isDevice(node) &&
           node.kind !== "amp.adsr",
       )
@@ -1548,7 +1583,7 @@
   }
 
   function handleKeyDown(event: KeyboardEvent) {
-    if (editingGroup) return;
+    if (inactive || editingGroup) return;
     if ((event.code === "Space" || event.key === " ") && !isEditing()) {
       spaceHeld = true;
       event.preventDefault();
@@ -1584,7 +1619,7 @@
       for (const node of nodes) {
         if (selected.has(node.id)) assignments[node.id] = null;
       }
-      void session.setNodeFrames(track.id, graph?.frames ?? {}, assignments);
+      saveFrames(graph?.frames ?? {}, assignments);
       return;
     }
     if (
@@ -1789,7 +1824,7 @@
   onkeyup={handleKeyUp}
 />
 
-<section class="section graph-section">
+<section class="section graph-section" class:compact>
   <div class="section-head graph-head">
     <span class="index">08</span>
     <span class="title">{t("graph.title")}</span>
@@ -1985,6 +2020,11 @@
               aria-label={nodeLabel(node)}
               ondblclick={() => {
                 if (nodeTypeId(node) === "audio.group") openVoiceGroup(node);
+                else if (
+                  nodeTypeId(node) === "audio.group.instance" &&
+                  onOpenAudioGroup
+                )
+                  onOpenAudioGroup(node);
               }}
             >
               <span class="graph-node-kind">{nodeLabel(node)}</span>
@@ -2002,6 +2042,14 @@
                     title={t("graph.editGroup")}
                     disabled={!groupFor(node)}
                     onclick={() => openVoiceGroup(node)}
+                  >
+                    ↗
+                  </button>
+                {:else if onOpenAudioGroup}
+                  <button
+                    class="graph-node-enter"
+                    title={t("graph.editGroup")}
+                    onclick={() => onOpenAudioGroup?.(node)}
                   >
                     ↗
                   </button>

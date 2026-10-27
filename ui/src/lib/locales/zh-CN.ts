@@ -411,6 +411,9 @@ export const zhCN = {
   "node.reroute.gate": "转发（门）",
   "node.reroute.audio": "转发（音频）",
   "node.audio.group": "节点组",
+  "node.audio.group.input": "组输入",
+  "node.audio.group.output": "组输出",
+  "node.audio.group.instance": "Audio 组",
   "node.audio.instrument.sine": "正弦",
   "node.audio.instrument.silence": "静音",
   "node.audio.instrument.piano": "钢琴",
@@ -526,6 +529,8 @@ export const zhCN = {
   "voice.socketDescription": "说明",
 
   "graph.audioGroups": "Audio 组",
+  "graph.nodeGraph": "节点图",
+  "graph.closeGroup": "关闭组",
 } satisfies Record<string, Message>;
 
 export type MessageKey = keyof typeof zhCN;

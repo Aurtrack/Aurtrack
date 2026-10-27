@@ -1177,6 +1177,7 @@ impl AudioGraph {
         self.validate_inner(voice_groups, audio_groups, Some(interface), &mut Vec::new())
     }
 
+    #[allow(clippy::too_many_lines)]
     fn validate_inner(
         &self,
         voice_groups: &BTreeMap<String, crate::NodeGroup>,
@@ -1185,6 +1186,8 @@ impl AudioGraph {
         stack: &mut Vec<String>,
     ) -> Result<(), GraphError> {
         let mut outputs = 0;
+        let mut group_inputs = 0;
+        let mut group_outputs = 0;
         for node in self.nodes.values() {
             let node_type = audio_node_type(&node.type_id)
                 .ok_or_else(|| GraphError::UnknownAudioNodeType(node.type_id.clone()))?;
@@ -1218,6 +1221,11 @@ impl AudioGraph {
             {
                 return Err(GraphError::GroupBoundaryOutsideGroup);
             }
+            match node.type_id.as_str() {
+                "audio.group.input" => group_inputs += 1,
+                "audio.group.output" => group_outputs += 1,
+                _ => {},
+            }
             for param in node_type.params {
                 if let Some(value) = node.params.get(param.name) {
                     if !value.is_finite() || *value < param.minimum || *value > param.maximum {
@@ -1236,6 +1244,12 @@ impl AudioGraph {
         }
         if interface.is_none() && outputs != 1 {
             return Err(GraphError::AudioOutputCount(outputs));
+        }
+        if interface.is_some() && (group_inputs != 1 || group_outputs != 1) {
+            return Err(GraphError::GroupBoundaryCount {
+                inputs: group_inputs,
+                outputs: group_outputs,
+            });
         }
         let mut occupied = BTreeSet::new();
         for connection in &self.connections {

@@ -2347,6 +2347,8 @@ pub enum GraphError {
     GroupCycle(String),
     #[error("组输入/输出节点只能出现在组内部")]
     GroupBoundaryOutsideGroup,
+    #[error("Audio 组必须恰好有一个组输入和一个组输出，当前 {inputs} 个输入、{outputs} 个输出")]
+    GroupBoundaryCount { inputs: usize, outputs: usize },
     #[error("未知的 Audio 节点类型：{0}")]
     UnknownAudioNodeType(String),
     #[error("Audio 图必须恰好有一个 audio.output，当前 {0} 个")]
