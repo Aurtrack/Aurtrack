@@ -306,6 +306,50 @@ fn group_rename_schema() -> Value {
     )
 }
 
+fn audio_group_create_schema() -> Value {
+    object_schema(
+        json!({
+            "name": { "type": "string" },
+            "group_id": { "type": "string" }
+        }),
+        &["name"],
+    )
+}
+
+fn audio_group_id_schema() -> Value {
+    object_schema(json!({ "group_id": { "type": "string" } }), &["group_id"])
+}
+
+fn audio_group_rename_schema() -> Value {
+    object_schema(
+        json!({
+            "group_id": { "type": "string" },
+            "name": { "type": "string" }
+        }),
+        &["group_id", "name"],
+    )
+}
+
+fn audio_group_interface_schema() -> Value {
+    object_schema(
+        json!({
+            "group_id": { "type": "string" },
+            "interface": { "type": "object", "description": "NodeGroupInterface" }
+        }),
+        &["group_id", "interface"],
+    )
+}
+
+fn audio_group_graph_schema() -> Value {
+    object_schema(
+        json!({
+            "group_id": { "type": "string" },
+            "graph": { "type": "object", "description": "完整 AudioGraph" }
+        }),
+        &["group_id", "graph"],
+    )
+}
+
 fn group_interface_schema() -> Value {
     object_schema(
         json!({
@@ -320,7 +364,7 @@ fn device_add_schema() -> Value {
     object_schema(
         json!({
             "track_id": { "type": "string" },
-            "kind": { "type": "string", "enum": ["gain", "amp.adsr", "filter.lowpass", "mix", "plugin", "group", "audio.group"] },
+            "kind": { "type": "string", "enum": ["gain", "amp.adsr", "filter.lowpass", "mix", "plugin", "group", "audio.group", "audio.group.instance"] },
             "group": { "type": "string" },
             "plugin_path": { "type": "string" },
             "plugin_id": { "type": "string" },
@@ -861,7 +905,7 @@ fn transport_metronome_schema() -> Value {
     )
 }
 
-static COMMANDS: [CommandSpec; 63] = [
+static COMMANDS: [CommandSpec; 68] = [
     CommandSpec {
         id: "project.create",
         summary: "创建或替换当前工程",
@@ -1047,6 +1091,36 @@ static COMMANDS: [CommandSpec; 63] = [
         summary: "把组节点展开回父图",
         undo: UndoKind::Snapshot,
         input_schema: group_ungroup_schema,
+    },
+    CommandSpec {
+        id: "audio_group.create",
+        summary: "创建一个 Audio 节点组",
+        undo: UndoKind::Snapshot,
+        input_schema: audio_group_create_schema,
+    },
+    CommandSpec {
+        id: "audio_group.delete",
+        summary: "删除一个未被引用的 Audio 节点组",
+        undo: UndoKind::Snapshot,
+        input_schema: audio_group_id_schema,
+    },
+    CommandSpec {
+        id: "audio_group.rename",
+        summary: "重命名 Audio 节点组",
+        undo: UndoKind::Snapshot,
+        input_schema: audio_group_rename_schema,
+    },
+    CommandSpec {
+        id: "audio_group.interface",
+        summary: "替换 Audio 节点组接口",
+        undo: UndoKind::Snapshot,
+        input_schema: audio_group_interface_schema,
+    },
+    CommandSpec {
+        id: "audio_group.graph",
+        summary: "替换 Audio 节点组的图",
+        undo: UndoKind::Snapshot,
+        input_schema: audio_group_graph_schema,
     },
     CommandSpec {
         id: "node.frames",

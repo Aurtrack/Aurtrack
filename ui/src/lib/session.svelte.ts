@@ -17,6 +17,7 @@ import {
   transportSeek,
   transportState,
   transportStop,
+  type AudioGroup,
   type NodeGroup,
   type NodeTypeInfo,
   type Note,
@@ -72,6 +73,11 @@ const MUTATING_COMMANDS = new Set([
   "track.create",
   "track.remove",
   "group.voice",
+  "audio_group.create",
+  "audio_group.delete",
+  "audio_group.rename",
+  "audio_group.interface",
+  "audio_group.graph",
   "device.add",
   "device.remove",
   "param.set",
@@ -798,6 +804,10 @@ export class SessionStore {
     return this.project?.node_groups ?? {};
   }
 
+  get audioGroups(): Record<string, AudioGroup> {
+    return this.project?.audio_groups ?? {};
+  }
+
   get nodeTypes(): NodeTypeInfo[] {
     return this.nodeTypesState;
   }
@@ -872,6 +882,52 @@ export class SessionStore {
     },
   ): Promise<unknown> {
     const result = await this.run("group.voice", { group_id: groupId, voice });
+    await this.refreshProject();
+    return result;
+  }
+
+  async createAudioGroup(
+    name: string,
+    groupId?: string,
+  ): Promise<string> {
+    const data = await this.run<{ group_id: string }>("audio_group.create", {
+      name,
+      ...(groupId ? { group_id: groupId } : {}),
+    });
+    await this.refreshProject();
+    return data.group_id;
+  }
+
+  async renameAudioGroup(groupId: string, name: string): Promise<void> {
+    await this.run("audio_group.rename", { group_id: groupId, name });
+    await this.refreshProject();
+  }
+
+  async deleteAudioGroup(groupId: string): Promise<void> {
+    await this.run("audio_group.delete", { group_id: groupId });
+    await this.refreshProject();
+  }
+
+  async setAudioGroupInterface(
+    groupId: string,
+    groupInterface: AudioGroup["interface"],
+  ): Promise<unknown> {
+    const result = await this.run("audio_group.interface", {
+      group_id: groupId,
+      interface: groupInterface,
+    });
+    await this.refreshProject();
+    return result;
+  }
+
+  async setAudioGroupGraph(
+    groupId: string,
+    graph: AudioGroup["graph"],
+  ): Promise<unknown> {
+    const result = await this.run("audio_group.graph", {
+      group_id: groupId,
+      graph,
+    });
     await this.refreshProject();
     return result;
   }

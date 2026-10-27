@@ -11,7 +11,8 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    GraphError, NodeId, NodeKind, ParamSpec, PluginConfig, PortRef, SocketType, VoiceFrame,
+    GraphError, NodeGroupInterface, NodeId, NodeKind, ParamSpec, PluginConfig, PortRef, SocketType,
+    VoiceFrame,
 };
 
 /// Audio 节点端口声明。
@@ -21,6 +22,35 @@ pub struct AudioSocketSpec {
     pub name: &'static str,
     pub ty: SocketType,
     pub default: f64,
+}
+
+/// Audio 节点的运行时端口。静态节点从类型声明转换，组实例从接口生成。
+#[derive(Debug, Clone, PartialEq)]
+pub struct AudioPort {
+    pub id: String,
+    pub name: String,
+    pub ty: SocketType,
+    pub default: f64,
+}
+
+fn audio_port_from_socket(socket: &crate::NodeGroupSocket) -> AudioPort {
+    AudioPort {
+        id: socket.id.clone(),
+        name: socket.name.clone(),
+        ty: socket.ty,
+        default: socket.effective_default().unwrap_or(0.0),
+    }
+}
+
+impl From<AudioSocketSpec> for AudioPort {
+    fn from(spec: AudioSocketSpec) -> Self {
+        Self {
+            id: spec.id.to_string(),
+            name: spec.name.to_string(),
+            ty: spec.ty,
+            default: spec.default,
+        }
+    }
 }
 
 /// Audio 节点类型声明。
@@ -130,6 +160,30 @@ const MIX_INPUTS: [AudioSocketSpec; 1] = [AudioSocketSpec {
 
 /// Audio 域节点类型注册表。
 pub const AUDIO_NODE_TYPES: &[AudioNodeType] = &[
+    AudioNodeType {
+        id: "audio.group.instance",
+        name: "Group",
+        category: "Group",
+        inputs: &[],
+        outputs: &[],
+        params: &[],
+    },
+    AudioNodeType {
+        id: "audio.group.input",
+        name: "Group Input",
+        category: "Interface",
+        inputs: &[],
+        outputs: &[],
+        params: &[],
+    },
+    AudioNodeType {
+        id: "audio.group.output",
+        name: "Group Output",
+        category: "Interface",
+        inputs: &[],
+        outputs: &[],
+        params: &[],
+    },
     AudioNodeType {
         id: "audio.group",
         name: "Voice Group",
@@ -632,6 +686,73 @@ pub struct AudioGraph {
     pub frames: BTreeMap<String, VoiceFrame>,
 }
 
+/// 工程级 Audio 节点组。接口和 Audio 图分开存放。
+#[non_exhaustive]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct AudioGroup {
+    pub id: String,
+    pub name: String,
+    pub interface: NodeGroupInterface,
+    pub graph: AudioGraph,
+}
+
+impl AudioGroup {
+    pub fn new(
+        id: impl Into<String>,
+        name: impl Into<String>,
+        interface: NodeGroupInterface,
+        graph: AudioGraph,
+    ) -> Self {
+        Self {
+            id: id.into(),
+            name: name.into(),
+            interface,
+            graph,
+        }
+    }
+
+    /// 空 Audio 组：只有组输入/输出边界，接口默认是单音频直通。
+    pub fn empty(id: impl Into<String>, name: impl Into<String>) -> Self {
+        let interface = NodeGroupInterface {
+            inputs: vec![crate::NodeGroupSocket::new(
+                "in",
+                "Audio",
+                SocketType::Audio,
+            )],
+            outputs: vec![crate::NodeGroupSocket::new(
+                "out",
+                "Audio",
+                SocketType::Audio,
+            )],
+        };
+        let input = NodeId::fixed("group-input");
+        let output = NodeId::fixed("group-output");
+        let mut nodes = BTreeMap::new();
+        nodes.insert(
+            input.clone(),
+            AudioNode::new(input.clone(), "audio.group.input"),
+        );
+        nodes.insert(
+            output.clone(),
+            AudioNode::new(output.clone(), "audio.group.output"),
+        );
+        let graph = AudioGraph {
+            nodes,
+            connections: vec![AudioConnection::new(
+                PortRef::new(input, "in"),
+                PortRef::new(output, "out"),
+            )],
+            frames: BTreeMap::new(),
+        };
+        Self {
+            id: id.into(),
+            name: name.into(),
+            interface,
+            graph,
+        }
+    }
+}
+
 impl AudioGraph {
     pub fn empty_track(group: &str) -> Self {
         let mut instrument = AudioNode::new(NodeId::fixed("instrument"), "audio.group");
@@ -791,7 +912,7 @@ impl AudioGraph {
         if let Some(previous) = previous {
             self.connections.push(AudioConnection::new(
                 previous,
-                PortRef::fixed(node_id.clone(), input_port),
+                PortRef::new(node_id.clone(), input_port),
             ));
         }
         self.connections.push(AudioConnection::new(
@@ -947,28 +1068,155 @@ impl AudioGraph {
         Ok(())
     }
 
-    pub fn inputs(node: &AudioNode) -> Result<Vec<AudioSocketSpec>, GraphError> {
+    pub fn inputs(node: &AudioNode) -> Result<Vec<AudioPort>, GraphError> {
         audio_node_type(&node.type_id)
-            .map(|node_type| node_type.inputs.to_vec())
+            .map(|node_type| {
+                node_type
+                    .inputs
+                    .iter()
+                    .copied()
+                    .map(AudioPort::from)
+                    .collect()
+            })
             .ok_or_else(|| GraphError::UnknownAudioNodeType(node.type_id.clone()))
     }
 
-    pub fn outputs(node: &AudioNode) -> Result<Vec<AudioSocketSpec>, GraphError> {
+    pub fn outputs(node: &AudioNode) -> Result<Vec<AudioPort>, GraphError> {
         audio_node_type(&node.type_id)
-            .map(|node_type| node_type.outputs.to_vec())
+            .map(|node_type| {
+                node_type
+                    .outputs
+                    .iter()
+                    .copied()
+                    .map(AudioPort::from)
+                    .collect()
+            })
             .ok_or_else(|| GraphError::UnknownAudioNodeType(node.type_id.clone()))
+    }
+
+    /// 解析 Audio 端口，组实例和组边界按接口动态生成。
+    pub fn inputs_with_groups(
+        node: &AudioNode,
+        groups: &BTreeMap<String, AudioGroup>,
+        interface: Option<&NodeGroupInterface>,
+    ) -> Result<Vec<AudioPort>, GraphError> {
+        match node.type_id.as_str() {
+            "audio.group.instance" => {
+                let group = groups
+                    .get(node.group.as_deref().ok_or(GraphError::EmptyGroupId)?)
+                    .ok_or_else(|| {
+                        GraphError::GroupMissing(node.group.clone().unwrap_or_default())
+                    })?;
+                Ok(group
+                    .interface
+                    .inputs
+                    .iter()
+                    .map(audio_port_from_socket)
+                    .collect())
+            },
+            "audio.group.input" => Ok(Vec::new()),
+            "audio.group.output" => Ok(interface
+                .ok_or(GraphError::GroupAudioOutput)?
+                .outputs
+                .iter()
+                .map(audio_port_from_socket)
+                .collect()),
+            _ => Self::inputs(node),
+        }
+    }
+
+    /// 解析 Audio 输出端口，组实例和组边界按接口动态生成。
+    pub fn outputs_with_groups(
+        node: &AudioNode,
+        groups: &BTreeMap<String, AudioGroup>,
+        interface: Option<&NodeGroupInterface>,
+    ) -> Result<Vec<AudioPort>, GraphError> {
+        match node.type_id.as_str() {
+            "audio.group.instance" => {
+                let group = groups
+                    .get(node.group.as_deref().ok_or(GraphError::EmptyGroupId)?)
+                    .ok_or_else(|| {
+                        GraphError::GroupMissing(node.group.clone().unwrap_or_default())
+                    })?;
+                Ok(group
+                    .interface
+                    .outputs
+                    .iter()
+                    .map(audio_port_from_socket)
+                    .collect())
+            },
+            "audio.group.input" => Ok(interface
+                .ok_or(GraphError::GroupAudioOutput)?
+                .inputs
+                .iter()
+                .map(audio_port_from_socket)
+                .collect()),
+            "audio.group.output" => Ok(Vec::new()),
+            _ => Self::outputs(node),
+        }
     }
 
     pub fn validate(&self, groups: &BTreeMap<String, crate::NodeGroup>) -> Result<(), GraphError> {
+        self.validate_inner(groups, &BTreeMap::new(), None, &mut Vec::new())
+    }
+
+    pub fn validate_with_audio_groups(
+        &self,
+        voice_groups: &BTreeMap<String, crate::NodeGroup>,
+        audio_groups: &BTreeMap<String, AudioGroup>,
+    ) -> Result<(), GraphError> {
+        self.validate_inner(voice_groups, audio_groups, None, &mut Vec::new())
+    }
+
+    pub fn validate_with_audio_interface(
+        &self,
+        voice_groups: &BTreeMap<String, crate::NodeGroup>,
+        audio_groups: &BTreeMap<String, AudioGroup>,
+        interface: &NodeGroupInterface,
+    ) -> Result<(), GraphError> {
+        self.validate_inner(voice_groups, audio_groups, Some(interface), &mut Vec::new())
+    }
+
+    fn validate_inner(
+        &self,
+        voice_groups: &BTreeMap<String, crate::NodeGroup>,
+        audio_groups: &BTreeMap<String, AudioGroup>,
+        interface: Option<&NodeGroupInterface>,
+        stack: &mut Vec<String>,
+    ) -> Result<(), GraphError> {
         let mut outputs = 0;
         for node in self.nodes.values() {
             let node_type = audio_node_type(&node.type_id)
                 .ok_or_else(|| GraphError::UnknownAudioNodeType(node.type_id.clone()))?;
             if node.type_id == "audio.group" {
                 let group = node.group.as_deref().ok_or(GraphError::EmptyGroupId)?;
-                if !groups.contains_key(group) {
+                if !voice_groups.contains_key(group) {
                     return Err(GraphError::GroupMissing(group.to_string()));
                 }
+            }
+            if node.type_id == "audio.group.instance" {
+                let group_id = node.group.as_deref().ok_or(GraphError::EmptyGroupId)?;
+                if stack.iter().any(|item| item == group_id) {
+                    return Err(GraphError::GroupCycle(group_id.to_string()));
+                }
+                let group = audio_groups
+                    .get(group_id)
+                    .ok_or_else(|| GraphError::GroupMissing(group_id.to_string()))?;
+                stack.push(group_id.to_string());
+                group.graph.validate_inner(
+                    voice_groups,
+                    audio_groups,
+                    Some(&group.interface),
+                    stack,
+                )?;
+                stack.pop();
+            }
+            if matches!(
+                node.type_id.as_str(),
+                "audio.group.input" | "audio.group.output"
+            ) && interface.is_none()
+            {
+                return Err(GraphError::GroupBoundaryOutsideGroup);
             }
             for param in node_type.params {
                 if let Some(value) = node.params.get(param.name) {
@@ -986,7 +1234,7 @@ impl AudioGraph {
                 outputs += 1;
             }
         }
-        if outputs != 1 {
+        if interface.is_none() && outputs != 1 {
             return Err(GraphError::AudioOutputCount(outputs));
         }
         let mut occupied = BTreeSet::new();
@@ -999,8 +1247,8 @@ impl AudioGraph {
                 .nodes
                 .get(&connection.to.node)
                 .ok_or_else(|| GraphError::UnknownNode(connection.to.node.clone()))?;
-            let source_ports = Self::outputs(source)?;
-            let target_ports = Self::inputs(target)?;
+            let source_ports = Self::outputs_with_groups(source, audio_groups, interface)?;
+            let target_ports = Self::inputs_with_groups(target, audio_groups, interface)?;
             let Some(source_port) = source_ports
                 .iter()
                 .find(|port| port.id == connection.from.port)
@@ -1084,6 +1332,18 @@ mod tests {
         let graph = AudioGraph::empty_track("piano.voice");
         graph.validate(&groups()).unwrap();
         assert_eq!(graph.topological_order().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn empty_audio_group_validates_and_passes_audio_through() {
+        let group = AudioGroup::empty("aux.audio", "Aux");
+        let groups = BTreeMap::from([(group.id.clone(), group.clone())]);
+        group
+            .graph
+            .validate_with_audio_interface(&BTreeMap::new(), &groups, &group.interface)
+            .unwrap();
+        assert_eq!(group.interface.inputs[0].id, "in");
+        assert_eq!(group.interface.outputs[0].id, "out");
     }
 
     #[test]

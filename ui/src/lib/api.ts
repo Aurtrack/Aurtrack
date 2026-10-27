@@ -137,6 +137,13 @@ export type NodeGroup = {
   graph: VoiceGraph;
 };
 
+export type AudioGroup = {
+  id: string;
+  name: string;
+  interface: NodeGroupInterface;
+  graph: TrackGraph;
+};
+
 export type GraphConnection = {
   from: { node: string; port: string };
   to: { node: string; port: string };
@@ -171,6 +178,7 @@ export type Project = {
   loop_end_tick: number;
   tracks: Track[];
   node_groups: Record<string, NodeGroup>;
+  audio_groups?: Record<string, AudioGroup>;
 };
 
 export type ProjectState = {

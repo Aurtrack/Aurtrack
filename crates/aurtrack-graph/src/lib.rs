@@ -19,8 +19,8 @@
 
 mod audio;
 pub use audio::{
-    AUDIO_NODE_TYPES, AudioConnection, AudioGraph, AudioNode, AudioNodeType, AudioSocketSpec,
-    audio_multi_input, audio_node_type,
+    AUDIO_NODE_TYPES, AudioConnection, AudioGraph, AudioGroup, AudioNode, AudioNodeType, AudioPort,
+    AudioSocketSpec, audio_multi_input, audio_node_type,
 };
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
@@ -2345,6 +2345,8 @@ pub enum GraphError {
     GroupAudioOutput,
     #[error("节点组循环引用：{0}")]
     GroupCycle(String),
+    #[error("组输入/输出节点只能出现在组内部")]
+    GroupBoundaryOutsideGroup,
     #[error("未知的 Audio 节点类型：{0}")]
     UnknownAudioNodeType(String),
     #[error("Audio 图必须恰好有一个 audio.output，当前 {0} 个")]

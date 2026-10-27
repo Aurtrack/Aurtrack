@@ -333,7 +333,7 @@ fn batch_note_edits_and_cross_track_clip_move_share_snapshots() {
 fn describe_lists_all_commands() {
     let mut session = Session::default();
     let out = run(&mut session, "describe", json!({}));
-    assert_eq!(out["commands"].as_array().unwrap().len(), 63);
+    assert_eq!(out["commands"].as_array().unwrap().len(), 68);
     assert!(out["project"].is_null());
 }
 
@@ -1704,6 +1704,42 @@ fn group_interface_defaults_and_panels_persist() {
     assert_eq!(socket["step"], 0.01);
     assert_eq!(socket["panel"], "Main");
     assert_eq!(socket["description"], "输入增益");
+}
+
+#[test]
+fn audio_groups_create_persist_and_delete() {
+    let mut session = Session::default();
+    run(
+        &mut session,
+        "project.create",
+        json!({ "name": "audio-groups" }),
+    );
+    let created = run(
+        &mut session,
+        "audio_group.create",
+        json!({ "name": "Aux", "group_id": "aux.audio" }),
+    );
+    assert_eq!(created["group_id"], "aux.audio");
+    run(
+        &mut session,
+        "audio_group.rename",
+        json!({ "group_id": "aux.audio", "name": "Aux Bus" }),
+    );
+    let state = run(&mut session, "project.state", json!({}));
+    let group = &state["project"]["audio_groups"]["aux.audio"];
+    assert_eq!(group["name"], "Aux Bus");
+    assert_eq!(group["interface"]["inputs"][0]["id"], "in");
+    assert_eq!(
+        group["graph"]["nodes"]["group-input"]["type_id"],
+        "audio.group.input"
+    );
+    run(
+        &mut session,
+        "audio_group.delete",
+        json!({ "group_id": "aux.audio" }),
+    );
+    let state = run(&mut session, "project.state", json!({}));
+    assert!(state["project"]["audio_groups"].get("aux.audio").is_none());
 }
 
 #[test]

@@ -714,6 +714,7 @@ mod tests {
             loop_start_tick: 0,
             loop_end_tick: 8 * TICKS_PER_QUARTER,
             node_groups: std::collections::BTreeMap::new(),
+            audio_groups: std::collections::BTreeMap::new(),
             tracks: vec![Track {
                 id: "track-1".to_string(),
                 name: "lead".to_string(),
@@ -756,7 +757,7 @@ mod tests {
         let mut runtime = Runtime::new();
         let response = run(&mut runtime, "describe", json!({})).unwrap();
         let commands = response.data["commands"].as_array().unwrap();
-        assert_eq!(commands.len(), 63);
+        assert_eq!(commands.len(), 68);
         assert!(
             commands
                 .iter()

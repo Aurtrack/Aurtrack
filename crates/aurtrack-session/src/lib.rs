@@ -34,8 +34,8 @@ use aurtrack_engine::{
     midi_to_hz, note_envelope,
 };
 use aurtrack_graph::{
-    GraphError, NodeGroup, NodeGroupInterface, NodeGroupSocket, NodeGroupSocketType, NodeId,
-    PortRef, VoiceConnection, VoiceFrame, VoiceGraph, VoiceNode, node_inputs, node_outputs,
+    AudioGroup, GraphError, NodeGroup, NodeGroupInterface, NodeGroupSocket, NodeGroupSocketType,
+    NodeId, PortRef, VoiceConnection, VoiceFrame, VoiceGraph, VoiceNode, node_inputs, node_outputs,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -77,6 +77,8 @@ pub struct Project {
     pub tracks: Vec<Track>,
     #[serde(default)]
     pub node_groups: BTreeMap<String, NodeGroup>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub audio_groups: BTreeMap<String, aurtrack_graph::AudioGroup>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub master_plugin: Option<MasterPlugin>,
 }
@@ -369,7 +371,7 @@ impl Track {
             }) else {
                 let index = nodes.len();
                 nodes.push(GraphNodePlan {
-                    op: GraphOp::Constant(node.param(port.id).unwrap_or(port.default)),
+                    op: GraphOp::Constant(node.param(&port.id).unwrap_or(port.default)),
                     inputs: Vec::new(),
                     controls: Vec::new(),
                 });
@@ -665,6 +667,11 @@ impl Session {
             "group.voice" => self.cmd_group_voice(&request.args),
             "group.from_nodes" => self.cmd_group_from_nodes(&request.args),
             "group.ungroup" => self.cmd_group_ungroup(&request.args),
+            "audio_group.create" => self.cmd_audio_group_create(&request.args),
+            "audio_group.delete" => self.cmd_audio_group_delete(&request.args),
+            "audio_group.rename" => self.cmd_audio_group_rename(&request.args),
+            "audio_group.interface" => self.cmd_audio_group_interface(&request.args),
+            "audio_group.graph" => self.cmd_audio_group_graph(&request.args),
             "clip.create" => self.cmd_clip_create(&request.args),
             "clip.update" => self.cmd_clip_update(&request.args),
             "clip.remove" => self.cmd_clip_remove(&request.args),
@@ -739,6 +746,7 @@ impl Session {
             loop_end_tick: 0,
             tracks: Vec::new(),
             node_groups: BTreeMap::from([("piano.voice".to_string(), NodeGroup::piano_default())]),
+            audio_groups: BTreeMap::new(),
             master_plugin: None,
         };
         project.loop_end_tick = project.length_ticks();
@@ -908,6 +916,7 @@ impl Session {
             "audio.math.map_range" => "audio.math.map_range",
             "audio.math.clamp" => "audio.math.clamp",
             "group" | "audio.group" => "audio.group",
+            "audio.group.instance" => "audio.group.instance",
             other => {
                 return Err(CommandError::invalid_args(format!(
                     "不支持的 kind：{other}"
@@ -980,6 +989,20 @@ impl Session {
                 .is_some_and(|project| project.node_groups.contains_key(group));
             if !exists {
                 return Err(CommandError::not_found(format!("找不到节点组：{group}")));
+            }
+            node.group = Some(group.to_string());
+        }
+        if type_id == "audio.group.instance" {
+            let group = args
+                .group
+                .as_deref()
+                .ok_or_else(|| CommandError::invalid_args("组实例需要 group"))?;
+            let exists = self
+                .project
+                .as_ref()
+                .is_some_and(|project| project.audio_groups.contains_key(group));
+            if !exists {
+                return Err(CommandError::not_found(format!("找不到 Audio 组：{group}")));
             }
             node.group = Some(group.to_string());
         }
@@ -1833,6 +1856,196 @@ impl Session {
             .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
         project.tracks.retain(|track| track.id != track_id);
         Ok(CommandResponse::ok(json!({ "track_id": track_id })).with_undo(token))
+    }
+
+    fn cmd_audio_group_create(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct CreateArgs {
+            name: String,
+            #[serde(default)]
+            group_id: Option<String>,
+        }
+        let args: CreateArgs = parse_args(args)?;
+        let name = args.name.trim();
+        if name.is_empty() {
+            return Err(CommandError::invalid_args("组名不能为空"));
+        }
+        let project = self
+            .project
+            .as_ref()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let mut number = project.audio_groups.len() + 1;
+        let group_id = loop {
+            let candidate = args
+                .group_id
+                .clone()
+                .unwrap_or_else(|| format!("audio-group-{number}"));
+            if !project.node_groups.contains_key(&candidate)
+                && !project.audio_groups.contains_key(&candidate)
+            {
+                break candidate;
+            }
+            number += 1;
+        };
+        let group = AudioGroup::empty(group_id.clone(), name);
+        let mut groups = project.audio_groups.clone();
+        groups.insert(group_id.clone(), group.clone());
+        group
+            .graph
+            .validate_with_audio_interface(&project.node_groups, &groups, &group.interface)
+            .map_err(graph_error)?;
+        let token = self.snapshot("audio_group.create");
+        self.project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?
+            .audio_groups
+            .insert(group_id.clone(), group);
+        Ok(CommandResponse::ok(json!({ "group_id": group_id })).with_undo(token))
+    }
+
+    fn cmd_audio_group_delete(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct DeleteArgs {
+            group_id: String,
+        }
+        let args: DeleteArgs = parse_args(args)?;
+        let project = self
+            .project
+            .as_ref()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        if !project.audio_groups.contains_key(&args.group_id) {
+            return Err(CommandError::not_found(format!(
+                "找不到 Audio 组：{}",
+                args.group_id
+            )));
+        }
+        if project.audio_groups.values().any(|group| {
+            group.graph.nodes.values().any(|node| {
+                node.type_id == "audio.group.instance"
+                    && node.group.as_deref() == Some(args.group_id.as_str())
+            })
+        }) || project.tracks.iter().any(|track| {
+            track.graph.nodes.values().any(|node| {
+                node.type_id == "audio.group.instance"
+                    && node.group.as_deref() == Some(args.group_id.as_str())
+            })
+        }) {
+            return Err(CommandError::invalid_args("Audio 组仍被其他图引用"));
+        }
+        let token = self.snapshot("audio_group.delete");
+        self.project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?
+            .audio_groups
+            .remove(&args.group_id);
+        Ok(CommandResponse::ok(json!({ "group_id": args.group_id })).with_undo(token))
+    }
+
+    fn cmd_audio_group_rename(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct RenameArgs {
+            group_id: String,
+            name: String,
+        }
+        let args: RenameArgs = parse_args(args)?;
+        let name = args.name.trim();
+        if name.is_empty() {
+            return Err(CommandError::invalid_args("组名不能为空"));
+        }
+        let token = self.snapshot("audio_group.rename");
+        let project = self
+            .project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let group = project
+            .audio_groups
+            .get_mut(&args.group_id)
+            .ok_or_else(|| {
+                CommandError::not_found(format!("找不到 Audio 组：{}", args.group_id))
+            })?;
+        group.name = name.to_string();
+        Ok(
+            CommandResponse::ok(json!({ "group_id": args.group_id, "name": name }))
+                .with_undo(token),
+        )
+    }
+
+    fn cmd_audio_group_interface(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct InterfaceArgs {
+            group_id: String,
+            interface: NodeGroupInterface,
+        }
+        let args: InterfaceArgs = parse_args(args)?;
+        let project = self
+            .project
+            .as_ref()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let groups = project.audio_groups.clone();
+        let mut probe = project
+            .audio_groups
+            .get(&args.group_id)
+            .cloned()
+            .ok_or_else(|| {
+                CommandError::not_found(format!("找不到 Audio 组：{}", args.group_id))
+            })?;
+        probe.interface = args.interface.clone();
+        probe
+            .graph
+            .validate_with_audio_interface(&project.node_groups, &groups, &probe.interface)
+            .map_err(graph_error)?;
+        let token = self.snapshot("audio_group.interface");
+        self.project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?
+            .audio_groups
+            .get_mut(&args.group_id)
+            .ok_or_else(|| CommandError::not_found(format!("找不到 Audio 组：{}", args.group_id)))?
+            .interface = args.interface;
+        Ok(CommandResponse::ok(json!({ "group_id": args.group_id })).with_undo(token))
+    }
+
+    fn cmd_audio_group_graph(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct GraphArgs {
+            group_id: String,
+            graph: aurtrack_graph::AudioGraph,
+        }
+        let args: GraphArgs = parse_args(args)?;
+        {
+            let project = self
+                .project
+                .as_ref()
+                .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+            let interface = project
+                .audio_groups
+                .get(&args.group_id)
+                .map(|group| group.interface.clone())
+                .ok_or_else(|| {
+                    CommandError::not_found(format!("找不到 Audio 组：{}", args.group_id))
+                })?;
+            args.graph
+                .validate_with_audio_interface(
+                    &project.node_groups,
+                    &project.audio_groups,
+                    &interface,
+                )
+                .map_err(graph_error)?;
+        }
+        let token = self.snapshot("audio_group.graph");
+        self.project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?
+            .audio_groups
+            .get_mut(&args.group_id)
+            .ok_or_else(|| CommandError::not_found(format!("找不到 Audio 组：{}", args.group_id)))?
+            .graph = args.graph;
+        Ok(CommandResponse::ok(json!({ "group_id": args.group_id })).with_undo(token))
     }
 
     fn cmd_clip_create(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
@@ -3212,6 +3425,7 @@ fn project_view(project: &Project) -> Value {
         "loop_end_tick": project.loop_end_tick,
         "master_plugin": project.master_plugin,
         "node_groups": &project.node_groups,
+        "audio_groups": &project.audio_groups,
         "tracks": project.tracks.iter().map(|track| json!({
             "id": &track.id,
             "name": &track.name,
@@ -3526,6 +3740,17 @@ fn validate_project(project: &Project) -> Result<(u64, u64, u64, u64), CommandEr
     let length_ticks = project.length_ticks();
     validate_loop_range(project.loop_start_tick, project.loop_end_tick, length_ticks)?;
 
+    for group in project.audio_groups.values() {
+        group
+            .graph
+            .validate_with_audio_interface(
+                &project.node_groups,
+                &project.audio_groups,
+                &group.interface,
+            )
+            .map_err(graph_error)?;
+    }
+
     let mut track_ids = BTreeSet::new();
     let mut device_ids = BTreeSet::new();
     let mut clip_ids = BTreeSet::new();
@@ -3558,7 +3783,7 @@ fn validate_project(project: &Project) -> Result<(u64, u64, u64, u64), CommandEr
         }
         track
             .graph
-            .validate(&project.node_groups)
+            .validate_with_audio_groups(&project.node_groups, &project.audio_groups)
             .map_err(graph_error)?;
         if let Source::Sine { frequency } = track.source() {
             if !frequency.is_finite()
