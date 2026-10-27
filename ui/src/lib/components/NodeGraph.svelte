@@ -78,6 +78,10 @@
       assignments: Record<string, string | null>,
     ) => void | Promise<unknown>;
     onOpenAudioGroup?: (node: GraphNode) => void;
+    onMakeAudioGroup?: (
+      trackId: string,
+      nodeIds: string[],
+    ) => void | Promise<unknown>;
     compact?: boolean;
     inactive?: boolean;
     isNodeLocked?: (node: GraphNode) => boolean;
@@ -97,6 +101,7 @@
     onFlags,
     onFrames,
     onOpenAudioGroup,
+    onMakeAudioGroup,
     compact = false,
     inactive = false,
     isNodeLocked,
@@ -278,7 +283,30 @@
   }
 
   function groupPorts(node: GraphNode, side: "inputs" | "outputs") {
-    if (nodeTypeId(node) !== "audio.group.instance") return undefined;
+    const type = nodeTypeId(node);
+    if (type === "audio.group.input") {
+      const group = track ? session.audioGroups[track.id] : undefined;
+      if (side !== "outputs") return [];
+      return (group?.interface.inputs ?? []).map((socket) => ({
+        id: socket.id,
+        name: socket.name,
+        type: socket.type,
+        default: socket.default,
+        panel: socket.panel,
+      }));
+    }
+    if (type === "audio.group.output") {
+      const group = track ? session.audioGroups[track.id] : undefined;
+      if (side !== "inputs") return [];
+      return (group?.interface.outputs ?? []).map((socket) => ({
+        id: socket.id,
+        name: socket.name,
+        type: socket.type,
+        default: socket.default,
+        panel: socket.panel,
+      }));
+    }
+    if (type !== "audio.group.instance") return undefined;
     const group = node.group ? session.audioGroups[node.group] : undefined;
     if (!group) return [];
     return (side === "inputs" ? group.interface.inputs : group.interface.outputs).map(
@@ -287,6 +315,7 @@
         name: socket.name,
         type: socket.type,
         default: socket.default,
+        panel: socket.panel,
       }),
     );
   }
@@ -316,6 +345,7 @@
       minimum: socket.minimum ?? -Infinity,
       maximum: socket.maximum ?? Infinity,
       step: socket.step ?? 0.01,
+      panel: socket.panel,
     };
   }
 
@@ -539,6 +569,17 @@
       }
     }
     return params.filter((param) => !isLinked(node, param.name));
+  }
+
+  function sidebarSections(node: GraphNode) {
+    const sections = new Map<string, ReturnType<typeof sidebarParams>>();
+    for (const param of sidebarParams(node)) {
+      const panel = param.panel?.trim() ?? "";
+      const list = sections.get(panel) ?? [];
+      list.push(param);
+      sections.set(panel, list);
+    }
+    return [...sections.entries()];
   }
 
   function inputPorts(node: GraphNode): InputPort[] {
@@ -1539,6 +1580,16 @@
     }
   }
 
+  async function makeAudioGroup() {
+    if (!track || !onMakeAudioGroup) return;
+    const nodeIds = nodes
+      .filter((node) => selected.has(node.id) && !isNodeLocked?.(node))
+      .map((node) => node.id);
+    if (nodeIds.length === 0) return;
+    await onMakeAudioGroup(track.id, nodeIds);
+    selected = new Set();
+  }
+
   function deleteSelected() {
     const paths = selectedPaths().filter((path) => {
       const id = path.split("/").at(-1) ?? "";
@@ -1662,6 +1713,16 @@
     ) {
       event.preventDefault();
       toggleNodeFlag("muted");
+      return;
+    }
+    if (
+      (event.ctrlKey || event.metaKey) &&
+      !event.shiftKey &&
+      !event.altKey &&
+      event.key.toLowerCase() === "g"
+    ) {
+      event.preventDefault();
+      void makeAudioGroup();
       return;
     }
     if (event.key === "Home") {
@@ -2105,6 +2166,9 @@
                     startWire(event, node, "in", input.id)}
                 ></button>
                 <span class="graph-socket-name">{socketLabel(input.name)}</span>
+                {#if input.panel}
+                  <span class="graph-socket-panel">{input.panel}</span>
+                {/if}
                 {#if param && !linked}
                   <div class="graph-socket-value">
                     <NumberField
@@ -2128,6 +2192,9 @@
                 style:top={`${portTop(node, index)}px`}
               >
                 <span class="graph-socket-name">{socketLabel(output.name)}</span>
+                {#if output.panel}
+                  <span class="graph-socket-panel">{output.panel}</span>
+                {/if}
                 <button
                   type="button"
                   class="graph-port graph-port-out"
@@ -2238,6 +2305,18 @@
               }}
             >
               {t("graph.editGroup")}
+            </button>
+          {/if}
+          {#if onMakeAudioGroup}
+            <button
+              role="menuitem"
+              disabled={busy}
+              onclick={() => {
+                nodeMenu = null;
+                void makeAudioGroup();
+              }}
+            >
+              {t("graph.packAudioGroup")}
             </button>
           {/if}
           <button role="menuitem" disabled={busy} onclick={duplicateFromMenu}>
@@ -2371,20 +2450,25 @@
                 {t("graph.editGroup")}
               </button>
             {/if}
-            {#each sidebarParams(node) as param (param.name)}
-              <label class="node-sidebar-param">
-                <span>{paramLabel(param.name)}</span>
-                <NumberField
-                  value={paramOf(node, param.name, param.default)}
-                  min={param.minimum}
-                  max={param.maximum}
-                  step={0.01}
-                  precision={2}
-                  disabled={busy}
-                  onchange={(value) =>
-                    onParamChange(owner.id, node.id, param.name, value)}
-                />
-              </label>
+            {#each sidebarSections(node) as [panel, params] (panel)}
+              {#if panel}
+                <div class="node-sidebar-panel">{panel}</div>
+              {/if}
+              {#each params as param (param.name)}
+                <label class="node-sidebar-param">
+                  <span>{paramLabel(param.name)}</span>
+                  <NumberField
+                    value={paramOf(node, param.name, param.default)}
+                    min={param.minimum}
+                    max={param.maximum}
+                    step={param.step ?? 0.01}
+                    precision={2}
+                    disabled={busy}
+                    onchange={(value) =>
+                      onParamChange(owner.id, node.id, param.name, value)}
+                  />
+                </label>
+              {/each}
             {/each}
           </div>
         {:else}

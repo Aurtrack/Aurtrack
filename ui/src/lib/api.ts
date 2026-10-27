@@ -110,6 +110,7 @@ export type NodeTypeSocket = {
   name: string;
   type: "float" | "gate" | "audio";
   default?: number;
+  panel?: string;
 };
 
 export type NodeTypeParam = {
@@ -118,6 +119,7 @@ export type NodeTypeParam = {
   minimum: number;
   maximum: number;
   step?: number;
+  panel?: string;
 };
 
 export type NodeTypeInfo = {

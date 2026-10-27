@@ -200,7 +200,7 @@ export const en: Record<MessageKey, Message> = {
   "voice.noise": "HAMMER NOISE",
   "voice.mix": "MIX",
   "voice.output": "OUTPUT",
-  "voice.groupNode": "GROUP NODE",
+  "voice.groupNode": "Voice Instruments",
   "graph.silence": "Silence",
   "graph.silenceSource": "SILENT SOURCE",
   "graph.adsr": "Amplitude Envelope",
@@ -440,7 +440,7 @@ export const en: Record<MessageKey, Message> = {
   "node.reroute.float": "Reroute Float",
   "node.reroute.gate": "Reroute Gate",
   "node.reroute.audio": "Reroute Audio",
-  "node.audio.group": "Group",
+  "node.audio.group": "Voice Instrument",
   "node.audio.group.input": "Group Input",
   "node.audio.group.output": "Group Output",
   "node.audio.group.instance": "Audio Group",
@@ -560,6 +560,7 @@ export const en: Record<MessageKey, Message> = {
 
   "graph.audioGroups": "Audio Groups",
 
+  "graph.packAudioGroup": "Pack into Audio Group",
   "graph.nodeGraph": "Node Graph",
   "graph.closeGroup": "Close Group",
 

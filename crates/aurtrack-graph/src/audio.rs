@@ -754,6 +754,18 @@ impl AudioGroup {
 }
 
 impl AudioGraph {
+    pub fn new(
+        nodes: BTreeMap<NodeId, AudioNode>,
+        connections: Vec<AudioConnection>,
+        frames: BTreeMap<String, VoiceFrame>,
+    ) -> Self {
+        Self {
+            nodes,
+            connections,
+            frames,
+        }
+    }
+
     pub fn empty_track(group: &str) -> Self {
         let mut instrument = AudioNode::new(NodeId::fixed("instrument"), "audio.group");
         instrument.group = Some(group.to_string());

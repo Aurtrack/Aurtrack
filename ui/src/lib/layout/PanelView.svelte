@@ -160,6 +160,8 @@
     onParamChange={(trackId, nodeId, name, value) =>
       void session.changeDeviceParam(trackId, nodeId, name, value)}
     onOpenAudioGroup={openAudioGroup}
+    onMakeAudioGroup={(trackId, nodeIds) =>
+      session.audioGroupFromNodes(trackId, nodeIds)}
     inactive={Boolean(currentAudioGroup)}
   />
   {#if currentAudioGroup}

@@ -954,11 +954,162 @@ button.number-step:hover:not(:disabled) {
   color: var(--ink);
 }
 
-.audio-group-editor-body {
+.audio-group-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.audio-group-interface-toggle {
+  height: 26px;
+  padding: 0 10px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: transparent;
+  color: var(--muted);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.audio-group-interface-toggle:hover,
+.audio-group-interface-toggle.active {
+  border-color: var(--blue);
+  color: var(--blue);
+}
+
+.audio-group-editor-main {
   display: flex;
   flex: 1;
   min-height: 0;
   overflow: hidden;
+}
+
+.audio-group-editor-body {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.audio-group-interface {
+  display: flex;
+  flex: 0 0 340px;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 0;
+  padding: 12px 14px;
+  overflow-y: auto;
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.audio-group-interface-head,
+.audio-group-interface-title {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.audio-group-interface-head strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+}
+
+.audio-group-interface-title {
+  color: var(--muted);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.audio-group-interface-error {
+  margin: 0;
+  color: var(--danger, #d66);
+  font-size: 11px;
+}
+
+.audio-group-interface-section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.audio-group-socket {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 8px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+}
+
+.audio-group-socket-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.audio-group-socket-head code {
+  flex: 0 0 auto;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.audio-group-socket-name {
+  flex: 1;
+  min-width: 0;
+}
+
+.audio-group-socket-type {
+  flex: 0 0 66px;
+}
+
+.audio-group-socket-remove {
+  flex: 0 0 auto;
+  width: 20px;
+  height: 20px;
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: pointer;
+}
+
+.audio-group-socket-remove:hover {
+  color: var(--danger, #d66);
+}
+
+.audio-group-socket-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.audio-group-socket-fields label {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.audio-group-socket-fields label.wide {
+  grid-column: 1 / -1;
+}
+
+.audio-group-socket-fields input,
+.audio-group-socket-name,
+.audio-group-socket-type {
+  min-width: 0;
+  height: 24px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--bg);
+  color: var(--ink);
+  font-size: 11px;
 }
 
 .graph-add {
@@ -2627,6 +2778,17 @@ button:disabled {
   white-space: nowrap;
 }
 
+.graph-socket-panel {
+  flex: 0 0 auto;
+  padding: 0 4px;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  color: var(--muted);
+  font-size: 7px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .graph-socket-row.out .graph-socket-name {
   margin-left: auto;
   color: var(--ink);
@@ -2796,6 +2958,17 @@ button:disabled {
   border: 1px solid var(--line);
   color: var(--blue);
   font-size: 8px;
+}
+
+.node-sidebar-panel {
+  margin-top: 8px;
+  padding-top: 6px;
+  border-top: 1px solid var(--line);
+  color: var(--ink);
+  font-size: 9px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
 .node-sidebar-param {

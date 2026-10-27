@@ -196,7 +196,7 @@ export const zhCN = {
   "voice.noise": "击弦噪声",
   "voice.mix": "混音",
   "voice.output": "输出",
-  "voice.groupNode": "组节点",
+  "voice.groupNode": "音色乐器",
   "graph.silenceSource": "静音源",
   "graph.adsr": "振幅包络",
   "graph.gain": "增益",
@@ -410,7 +410,7 @@ export const zhCN = {
   "node.reroute.float": "转发（浮点）",
   "node.reroute.gate": "转发（门）",
   "node.reroute.audio": "转发（音频）",
-  "node.audio.group": "节点组",
+  "node.audio.group": "音色乐器",
   "node.audio.group.input": "组输入",
   "node.audio.group.output": "组输出",
   "node.audio.group.instance": "Audio 组",
@@ -529,6 +529,7 @@ export const zhCN = {
   "voice.socketDescription": "说明",
 
   "graph.audioGroups": "Audio 组",
+  "graph.packAudioGroup": "打包为 Audio 组",
   "graph.nodeGraph": "节点图",
   "graph.closeGroup": "关闭组",
 } satisfies Record<string, Message>;

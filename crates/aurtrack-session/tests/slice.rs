@@ -333,7 +333,7 @@ fn batch_note_edits_and_cross_track_clip_move_share_snapshots() {
 fn describe_lists_all_commands() {
     let mut session = Session::default();
     let out = run(&mut session, "describe", json!({}));
-    assert_eq!(out["commands"].as_array().unwrap().len(), 68);
+    assert_eq!(out["commands"].as_array().unwrap().len(), 69);
     assert!(out["project"].is_null());
 }
 
@@ -1742,6 +1742,85 @@ fn audio_groups_create_persist_and_delete() {
     );
     let state = run(&mut session, "project.state", json!({}));
     assert!(state["project"]["audio_groups"].get("aux.audio").is_none());
+}
+
+#[test]
+fn audio_group_from_nodes_packs_effect_chain() {
+    let mut session = Session::default();
+    run(
+        &mut session,
+        "project.create",
+        json!({ "name": "audio-group-pack" }),
+    );
+    run(
+        &mut session,
+        "track.create",
+        json!({ "name": "sine", "source": "sine" }),
+    );
+    let added = run(
+        &mut session,
+        "node.add",
+        json!({
+            "track_id": "track-1",
+            "kind": "gain",
+            "position": [300.0, 300.0]
+        }),
+    );
+    let gain = added["node_id"].as_str().unwrap();
+    run(
+        &mut session,
+        "node.disconnect",
+        json!({
+            "from": "/tracks/track-1/nodes/instrument",
+            "from_port": "out",
+            "to": "/tracks/track-1/nodes/output",
+            "to_port": "in"
+        }),
+    );
+    run(
+        &mut session,
+        "node.connect",
+        json!({
+            "from": "/tracks/track-1/nodes/instrument",
+            "from_port": "out",
+            "to": format!("/tracks/track-1/nodes/{gain}"),
+            "to_port": "in"
+        }),
+    );
+    run(
+        &mut session,
+        "node.connect",
+        json!({
+            "from": format!("/tracks/track-1/nodes/{gain}"),
+            "from_port": "out",
+            "to": "/tracks/track-1/nodes/output",
+            "to_port": "in"
+        }),
+    );
+    let packed = run(
+        &mut session,
+        "audio_group.from_nodes",
+        json!({
+            "source_track_id": "track-1",
+            "node_ids": [gain],
+            "name": "Packed Gain"
+        }),
+    );
+    let group_id = packed["group_id"].as_str().unwrap();
+    let project = session.project().unwrap();
+    assert!(project.audio_groups.contains_key(group_id));
+    let group = &project.audio_groups[group_id];
+    assert_eq!(group.interface.inputs.len(), 1);
+    assert_eq!(group.interface.outputs.len(), 1);
+    assert_eq!(group.interface.inputs[0].id, "in-1");
+    let (_, _, plan) = project.tracks[0]
+        .playback_graph(&project.node_groups, &project.audio_groups)
+        .unwrap();
+    assert!(
+        plan.nodes
+            .iter()
+            .any(|node| matches!(node.op, aurtrack_engine::GraphOp::Gain))
+    );
 }
 
 #[test]

@@ -3,11 +3,14 @@
   import type {
     AudioGroup,
     GraphNode,
+    NodeGroupInterface,
+    NodeGroupSocket,
     NodeTypeInfo,
     Track,
     TrackGraph,
     VoiceFrame,
   } from "../api";
+  import { errorMessage } from "../api";
   import { t } from "../i18n.svelte";
   import { session } from "../session.svelte";
 
@@ -33,6 +36,14 @@
   let groupName = $derived(session.audioGroups[groupId]?.name ?? groupId);
   let graph = $state<TrackGraph>(cloneGraph(EMPTY_GRAPH));
   let activeGroupId = $state("");
+  let interfaceOpen = $state(false);
+  let interfaceDraft = $state<NodeGroupInterface>({ inputs: [], outputs: [] });
+  let interfaceError = $state("");
+  let interfaceTimer: ReturnType<typeof setTimeout> | null = null;
+  const interfaceSides = $derived([
+    { key: "inputs" as const, label: t("graph.inputs") },
+    { key: "outputs" as const, label: t("graph.outputs") },
+  ]);
   let saveQueue = Promise.resolve();
 
   $effect(() => {
@@ -269,6 +280,69 @@
     return ids.map((id) => ({ source: id, node_id: mapping.get(id) ?? id }));
   }
 
+  function openInterface(): void {
+    const source = session.audioGroups[groupId]?.interface;
+    interfaceDraft = source
+      ? structuredClone($state.snapshot(source))
+      : { inputs: [], outputs: [] };
+    interfaceError = "";
+    interfaceOpen = true;
+  }
+
+  function addSocket(side: "inputs" | "outputs"): void {
+    const list = interfaceDraft[side];
+    const prefix = side === "inputs" ? "in" : "out";
+    let number = list.length + 1;
+    while (list.some((socket) => socket.id === `${prefix}-${number}`)) {
+      number += 1;
+    }
+    list.push({
+      id: `${prefix}-${number}`,
+      name: `${prefix === "in" ? t("graph.inputs") : t("graph.outputs")} ${number}`,
+      type: "audio",
+      default: 0,
+    });
+    queueInterfaceSave();
+  }
+
+  function removeSocket(side: "inputs" | "outputs", index: number): void {
+    interfaceDraft[side].splice(index, 1);
+    queueInterfaceSave();
+  }
+
+  function setSocketType(socket: NodeGroupSocket, type: string): void {
+    socket.type = type as NodeGroupSocket["type"];
+    if (type === "audio") {
+      socket.default = undefined;
+      socket.minimum = undefined;
+      socket.maximum = undefined;
+      socket.step = undefined;
+    } else if (socket.default === undefined) {
+      socket.default = 0;
+    }
+    queueInterfaceSave();
+  }
+
+  function queueInterfaceSave(): void {
+    interfaceError = "";
+    if (interfaceTimer) clearTimeout(interfaceTimer);
+    interfaceTimer = setTimeout(() => {
+      interfaceTimer = null;
+      void saveInterface();
+    }, 500);
+  }
+
+  async function saveInterface(): Promise<void> {
+    try {
+      await session.setAudioGroupInterface(
+        groupId,
+        structuredClone($state.snapshot(interfaceDraft)),
+      );
+    } catch (error) {
+      interfaceError = errorMessage(error);
+    }
+  }
+
   function openNested(node: GraphNode): void {
     if (!node.group) return;
     const nested = session.audioGroups[node.group];
@@ -288,39 +362,187 @@
         <span class="audio-group-crumb">{item.name}</span>
       {/each}
     </div>
-    <button
-      class="audio-group-close"
-      title={t("graph.closeGroup")}
-      onclick={onClose}
-    >
-      ×
-    </button>
+    <div class="audio-group-head-actions">
+      <button
+        class="audio-group-interface-toggle"
+        class:active={interfaceOpen}
+        onclick={() => {
+          if (interfaceOpen) interfaceOpen = false;
+          else openInterface();
+        }}
+      >
+        {t("voice.interface")}
+      </button>
+      <button
+        class="audio-group-close"
+        title={t("graph.closeGroup")}
+        onclick={onClose}
+      >
+        ×
+      </button>
+    </div>
   </header>
-  <div class="audio-group-editor-body">
-    <NodeGraph
-      track={fakeTrack}
-      busy={session.busy}
-      compact
-      onAddNode={(trackId, kind, x, y, group) =>
-        addNode(trackId, kind, x, y, group)}
-      onConnect={(trackId, fromNodeId, fromPort, toNodeId, toPort) =>
-        connect(trackId, fromNodeId, fromPort, toNodeId, toPort)}
-      onDisconnect={(trackId, fromNodeId, fromPort, toNodeId, toPort) =>
-        disconnect(trackId, fromNodeId, fromPort, toNodeId, toPort)}
-      onPlace={(trackId, nodes) => place(trackId, nodes)}
-      onDuplicate={(paths) => duplicate(paths)}
-      onRemove={(path) => removeIds([nodeIdFromPath(path)])}
-      onRemoveMany={(paths) => removeIds(paths.map(nodeIdFromPath))}
-      onParamChange={(trackId, nodeId, name, value) =>
-        void changeParam(trackId, nodeId, name, value)}
-      onFlags={(trackId, nodeId, patch) =>
-        changeFlags(trackId, nodeId, patch)}
-      onFrames={(trackId, frames, assignments) =>
-        setFrames(trackId, frames, assignments)}
-      onOpenAudioGroup={openNested}
-      isNodeLocked={(node) =>
-        node.type_id === "audio.group.input" ||
-        node.type_id === "audio.group.output"}
-    />
+  <div class="audio-group-editor-main">
+    {#if interfaceOpen}
+      <aside class="audio-group-interface">
+        <div class="audio-group-interface-head">
+          <strong>{groupName} · {t("voice.interface")}</strong>
+          <button
+            class="audio-group-close"
+            title={t("voice.close")}
+            onclick={() => (interfaceOpen = false)}
+          >
+            ×
+          </button>
+        </div>
+        {#if interfaceError}
+          <p class="audio-group-interface-error">{interfaceError}</p>
+        {/if}
+        {#each interfaceSides as section (section.key)}
+          {@const sockets = interfaceDraft[section.key]}
+          <section class="audio-group-interface-section">
+            <div class="audio-group-interface-title">
+              <span>{section.label}</span>
+              <button
+                class="ghost small"
+                onclick={() => addSocket(section.key)}
+              >
+                +
+              </button>
+            </div>
+            {#each sockets as socket, index (socket.id)}
+              <div class="audio-group-socket">
+                <div class="audio-group-socket-head">
+                  <code>{socket.id}</code>
+                  <input
+                    class="audio-group-socket-name"
+                    value={socket.name}
+                    oninput={(event) => {
+                      socket.name = event.currentTarget.value;
+                      queueInterfaceSave();
+                    }}
+                  />
+                  <select
+                    class="audio-group-socket-type"
+                    value={socket.type}
+                    onchange={(event) =>
+                      setSocketType(socket, event.currentTarget.value)}
+                  >
+                    <option value="audio">Audio</option>
+                    <option value="float">Float</option>
+                    <option value="gate">Gate</option>
+                  </select>
+                  <button
+                    class="audio-group-socket-remove"
+                    title={t("voice.delete")}
+                    onclick={() => removeSocket(section.key, index)}
+                  >
+                    ×
+                  </button>
+                </div>
+                <div class="audio-group-socket-fields">
+                  {#if socket.type !== "audio"}
+                    <label>
+                      <span>{t("voice.socketDefault")}</span>
+                      <input
+                        type="number"
+                        value={socket.default ?? 0}
+                        oninput={(event) => {
+                          socket.default = Number(event.currentTarget.value);
+                          queueInterfaceSave();
+                        }}
+                      />
+                    </label>
+                    <label>
+                      <span>{t("voice.socketMinimum")}</span>
+                      <input
+                        type="number"
+                        value={socket.minimum ?? 0}
+                        oninput={(event) => {
+                          socket.minimum = Number(event.currentTarget.value);
+                          queueInterfaceSave();
+                        }}
+                      />
+                    </label>
+                    <label>
+                      <span>{t("voice.socketMaximum")}</span>
+                      <input
+                        type="number"
+                        value={socket.maximum ?? 1}
+                        oninput={(event) => {
+                          socket.maximum = Number(event.currentTarget.value);
+                          queueInterfaceSave();
+                        }}
+                      />
+                    </label>
+                    <label>
+                      <span>{t("voice.socketStep")}</span>
+                      <input
+                        type="number"
+                        value={socket.step ?? 0.01}
+                        oninput={(event) => {
+                          socket.step = Number(event.currentTarget.value);
+                          queueInterfaceSave();
+                        }}
+                      />
+                    </label>
+                  {/if}
+                  <label class="wide">
+                    <span>{t("voice.socketPanel")}</span>
+                    <input
+                      value={socket.panel ?? ""}
+                      placeholder={t("voice.socketPanelHint")}
+                      oninput={(event) => {
+                        socket.panel =
+                          event.currentTarget.value.trim() || undefined;
+                        queueInterfaceSave();
+                      }}
+                    />
+                  </label>
+                  <label class="wide">
+                    <span>{t("voice.socketDescription")}</span>
+                    <input
+                      value={socket.description ?? ""}
+                      oninput={(event) => {
+                        socket.description =
+                          event.currentTarget.value || undefined;
+                        queueInterfaceSave();
+                      }}
+                    />
+                  </label>
+                </div>
+              </div>
+            {/each}
+          </section>
+        {/each}
+      </aside>
+    {/if}
+    <div class="audio-group-editor-body">
+      <NodeGraph
+        track={fakeTrack}
+        busy={session.busy}
+        compact
+        onAddNode={(trackId, kind, x, y, group) =>
+          addNode(trackId, kind, x, y, group)}
+        onConnect={(trackId, fromNodeId, fromPort, toNodeId, toPort) =>
+          connect(trackId, fromNodeId, fromPort, toNodeId, toPort)}
+        onDisconnect={(trackId, fromNodeId, fromPort, toNodeId, toPort) =>
+          disconnect(trackId, fromNodeId, fromPort, toNodeId, toPort)}
+        onPlace={(trackId, nodes) => place(trackId, nodes)}
+        onDuplicate={(paths) => duplicate(paths)}
+        onRemove={(path) => removeIds([nodeIdFromPath(path)])}
+        onRemoveMany={(paths) => removeIds(paths.map(nodeIdFromPath))}
+        onParamChange={(trackId, nodeId, name, value) =>
+          void changeParam(trackId, nodeId, name, value)}
+        onFlags={(trackId, nodeId, patch) =>
+          changeFlags(trackId, nodeId, patch)}
+        onFrames={(trackId, frames, assignments) =>
+          setFrames(trackId, frames, assignments)}
+        onOpenAudioGroup={openNested}
+        isNodeLocked={(node) =>
+          node.type_id === "audio.group.input" ||
+          node.type_id === "audio.group.output"}
+      />
+    </div>
   </div>
 </div>
