@@ -108,7 +108,7 @@
       return tLoose("node.group.output", "GROUP OUTPUT").toUpperCase();
     }
     if (node.type_id === "voice.group") {
-      return tLoose("node.voice.group", "VOICE GROUP").toUpperCase();
+      return nodeGroup(node)?.name ?? node.group ?? tLoose("node.voice.group", "VOICE GROUP");
     }
     const info = typeById.get(node.type_id);
     return (info ? nodeTypeLabel(info) : node.type_id).toUpperCase();
@@ -1840,44 +1840,6 @@
           {/each}
         </div>
       </div>
-      <div class="voice-editor-actions">
-        <button
-          class="ghost small"
-          disabled={selected.size === 0}
-          title="Ctrl+G"
-          onclick={() => void makeGroup()}
-        >
-          {t("voice.makeGroup")}
-        </button>
-        <button
-          class="ghost small"
-          disabled={voice.nodes[active]?.type_id !== "voice.group"}
-          title="Ctrl+Alt+G"
-          onclick={() => void ungroupActive()}
-        >
-          {t("voice.ungroup")}
-        </button>
-        <button class="ghost small" onclick={() => (libraryOpen = !libraryOpen)}>
-          {t("voice.library")}
-        </button>
-        <button class="ghost small" onclick={openInterface}>
-          {t("voice.interface")}
-        </button>
-        <button
-          class="ghost small"
-          title={t("graph.sidebar")}
-          onclick={toggleSidebar}
-        >
-          N
-        </button>
-        <button
-          class="ghost small"
-          title={t("voice.close")}
-          onclick={() => void leave()}
-        >
-          ×
-        </button>
-      </div>
     </header>
 
     {#if libraryOpen}
@@ -2037,12 +1999,17 @@
           style:height={`${nodeHeight(node)}px`}
           onmousedown={(event) => nodeMouseDown(event, node)}
           oncontextmenu={(event) => openNodeMenu(event, node)}
-          ondblclick={() => void enterGroup(node)}
           role="group"
           tabindex="-1"
           data-category={typeById.get(node.type_id)?.category ?? ""}
         >
-          <div class="voice-node-head">
+          <div
+            class="voice-node-head"
+            role="presentation"
+            ondblclick={() => {
+              if (node.type_id === "voice.group") void enterGroup(node);
+            }}
+          >
             <span class="voice-node-title">{nodeLabel(node)}</span>
             {#if node.muted}<span class="voice-node-muted">M</span>{/if}
             <span class="voice-node-id">{node.id}</span>
@@ -2051,7 +2018,7 @@
           {#if !node.collapsed}
           {#if node.type_id === "voice.group"}
             <div class="voice-node-group-line">
-              <span>{nodeGroup(node)?.name ?? node.group ?? "—"}</span>
+              <code>{node.group ?? "—"}</code>
               <button
                 class="voice-node-enter"
                 title={t("graph.editGroup")}

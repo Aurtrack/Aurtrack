@@ -3030,3 +3030,36 @@ button:disabled {
   font-family: var(--mono);
   font-size: 11px;
 }
+.graph-group-interface {
+  display: flex;
+  height: 24px;
+  align-items: center;
+  gap: 5px;
+  padding: 0 8px;
+  overflow: hidden;
+  border-bottom: 1px solid var(--line);
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 8px;
+  white-space: nowrap;
+}
+.graph-group-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+}
+.graph-group-chip i {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--socket-float);
+}
+.graph-group-chip.port-audio i {
+  background: var(--socket-audio);
+}
+.graph-group-chip.port-gate i {
+  background: var(--socket-gate);
+}
+.graph-group-arrow {
+  color: #8a929c;
+}

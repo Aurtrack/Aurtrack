@@ -545,4 +545,6 @@ export const en: Record<MessageKey, Message> = {
   "transport.total": "Total",
   "transport.seconds": (params) => `${params.value} s`,
 
+  "graph.noteDriven": "Driven by piano-roll notes",
+
 };

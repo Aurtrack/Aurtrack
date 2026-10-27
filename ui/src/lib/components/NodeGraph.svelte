@@ -249,7 +249,8 @@
   });
 
   function groupHeaderHeight(node: GraphNode): number {
-    return nodeTypeId(node) === "audio.group" ? 18 : 0;
+    if (nodeTypeId(node) !== "audio.group") return 0;
+    return groupFor(node) ? 42 : 18;
   }
 
   function nodeInputs(node: GraphNode) {
@@ -376,6 +377,9 @@
   }
 
   function nodeLabel(node: GraphNode): string {
+    if (nodeTypeId(node) === "audio.group") {
+      return groupFor(node)?.name ?? node.group ?? t("graph.group");
+    }
     const info = nodeType(node);
     if (info) return nodeTypeLabel(info).toUpperCase();
     if (node.kind === "instrument.silence") return t("graph.silence");
@@ -1925,15 +1929,15 @@
             style:width={`${position?.w ?? CARD_WIDTH}px`}
             onmousedown={(event) => nodeMouseDown(event, node)}
             oncontextmenu={(event) => openNodeMenu(event, node)}
-            ondblclick={() => {
-              if (nodeTypeId(node) === "audio.group") openVoiceGroup(node);
-            }}
           >
             <div
               class="graph-node-head"
               role="button"
               tabindex="0"
               aria-label={nodeLabel(node)}
+              ondblclick={() => {
+                if (nodeTypeId(node) === "audio.group") openVoiceGroup(node);
+              }}
             >
               <span class="graph-node-kind">{nodeLabel(node)}</span>
               {#if node.muted}<span class="voice-node-muted">M</span>{/if}
@@ -1943,7 +1947,7 @@
             {#if !node.collapsed}
             {#if nodeTypeId(node) === "audio.group"}
               <div class="graph-node-group-line">
-                <span>{groupFor(node)?.name ?? node.group ?? "—"}</span>
+                <code>{node.group ?? "—"}</code>
                 <button
                   class="graph-node-enter"
                   title={t("graph.editGroup")}
@@ -1953,6 +1957,32 @@
                   ↗
                 </button>
               </div>
+              {#if groupFor(node)}
+                <div class="graph-group-interface">
+                  {#each groupFor(node)?.interface.inputs ?? [] as port (port.id)}
+                    <span
+                      class="graph-group-chip"
+                      class:port-audio={port.type === "audio"}
+                      class:port-float={port.type === "float"}
+                      class:port-gate={port.type === "gate"}
+                      title={t("graph.noteDriven")}
+                    >
+                      <i></i>{socketLabel(port.name)}
+                    </span>
+                  {/each}
+                  <span class="graph-group-arrow">→</span>
+                  {#each groupFor(node)?.interface.outputs ?? [] as port (port.id)}
+                    <span
+                      class="graph-group-chip out"
+                      class:port-audio={port.type === "audio"}
+                      class:port-float={port.type === "float"}
+                      class:port-gate={port.type === "gate"}
+                    >
+                      <i></i>{socketLabel(port.name)}
+                    </span>
+                  {/each}
+                </div>
+              {/if}
             {/if}
 
             {#each nodeInputs(node) as input, index (input.id)}
