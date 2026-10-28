@@ -194,10 +194,7 @@ impl VoicePlan {
                             .inputs
                             .get(4)
                             .map_or(context.seed, |input| values[*input].to_bits());
-                        let noise = ((seed.wrapping_mul(6_364_136_223_846_793_005) >> 40) as f64
-                            / 16_777_216.0)
-                            * 2.0
-                            - 1.0;
+                        let noise = noise_sample(seed, time);
                         noise * level * velocity * (-time / duration.max(0.001)).exp()
                     }
                 },
@@ -242,6 +239,15 @@ impl VoicePlan {
         }
         values[self.output]
     }
+}
+
+fn noise_sample(seed: u64, time: f64) -> f64 {
+    let mut state = seed ^ time.to_bits().wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+    state = (state ^ (state >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+    state = (state ^ (state >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+    state ^= state >> 31;
+    (state >> 11) as f64 / (1_u64 << 53) as f64 * 2.0 - 1.0
 }
 
 fn osc_partials(
@@ -1343,6 +1349,33 @@ mod tests {
             seed: 7,
         });
         assert!(sample.abs() > 0.0001);
+    }
+
+    #[test]
+    fn noise_burst_varies_with_time() {
+        let plan = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(
+                    VoiceOp::NoiseBurst {
+                        level: 0.5,
+                        duration: 0.05,
+                    },
+                    vec![],
+                ),
+                VoiceNodePlan::new(VoiceOp::Output, vec![0]),
+            ],
+            1,
+        );
+        let sample = |local_time| {
+            plan.sample(VoiceContext {
+                pitch: 60.0,
+                velocity: 1.0,
+                local_time,
+                gate: true,
+                seed: 42,
+            })
+        };
+        assert!((sample(0.001) - sample(0.002)).abs() > 1e-9);
     }
 
     #[test]
