@@ -770,7 +770,7 @@ fn compile_voice(
     interface: &NodeGroupInterface,
     groups: &BTreeMap<String, NodeGroup>,
 ) -> Result<VoicePlan, GraphError> {
-    compile_voice_inner(voice, interface, groups, &mut Vec::new(), None)
+    compile_voice_inner(voice, interface, groups, &mut Vec::new(), None, &[])
 }
 
 fn compile_voice_inner(
@@ -779,10 +779,11 @@ fn compile_voice_inner(
     groups: &BTreeMap<String, NodeGroup>,
     stack: &mut Vec<String>,
     input_bindings: Option<&BTreeMap<String, usize>>,
+    initial_nodes: &[VoiceNodePlan],
 ) -> Result<VoicePlan, GraphError> {
     let order = voice.topological_order()?;
     let mut indices = BTreeMap::<(NodeId, String), usize>::new();
-    let mut nodes = Vec::new();
+    let mut nodes = initial_nodes.to_vec();
     let mut output = None;
     for id in order {
         let node = voice.node(&id).ok_or(GraphError::VoiceUnknownNode)?;
@@ -887,6 +888,52 @@ fn compile_voice_inner(
             }
             continue;
         }
+        if node.type_id == "voice.repeat" {
+            let group_id = node.group.as_deref().ok_or(GraphError::EmptyGroupId)?;
+            if stack.iter().any(|item| item == group_id) {
+                return Err(GraphError::GroupCycle(group_id.to_string()));
+            }
+            let group = groups
+                .get(group_id)
+                .ok_or_else(|| GraphError::GroupMissing(group_id.to_string()))?;
+            if group.interface.inputs.len() != 1
+                || group.interface.inputs[0].id != "in"
+                || group.interface.inputs[0].ty != NodeGroupSocketType::Audio
+                || group.interface.outputs.len() != 1
+                || group.interface.outputs[0].id != "audio"
+                || group.interface.outputs[0].ty != NodeGroupSocketType::Audio
+            {
+                return Err(GraphError::InvalidGroupSocket {
+                    socket: "repeat".to_string(),
+                    reason: "循环体必须恰好有一个 in 音频输入和一个 audio 输出".to_string(),
+                });
+            }
+            let mut bindings = BTreeMap::new();
+            bindings.insert("in".to_string(), 0);
+            stack.push(group_id.to_string());
+            let body = compile_voice_inner(
+                &group.graph,
+                &group.interface,
+                groups,
+                stack,
+                Some(&bindings),
+                &[VoiceNodePlan::new(VoiceOp::Input(0), Vec::new())],
+            )?;
+            stack.pop();
+            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+            let count =
+                (node.params.get("count").copied().unwrap_or(10.0).round() as usize).clamp(1, 32);
+            let index = nodes.len();
+            nodes.push(VoiceNodePlan::new(
+                VoiceOp::Repeat {
+                    body: Box::new(body),
+                    count,
+                },
+                Vec::new(),
+            ));
+            indices.insert((id.clone(), "out".to_string()), index);
+            continue;
+        }
         if node.type_id == "voice.group" {
             let group_id = node.group.as_deref().ok_or(GraphError::EmptyGroupId)?;
             if stack.iter().any(|item| item == group_id) {
@@ -936,6 +983,7 @@ fn compile_voice_inner(
                 groups,
                 stack,
                 Some(&bindings),
+                &[],
             )?;
             stack.pop();
             let offset = nodes.len();
@@ -948,16 +996,10 @@ fn compile_voice_inner(
         }
         let param = |name: &str, default: f64| node.params.get(name).copied().unwrap_or(default);
         let op = match node.type_id.as_str() {
-            "osc.partials" => {
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                let partials = (param("partials", 12.0).round() as usize).clamp(1, 16);
-                VoiceOp::OscPartials {
-                    partials,
-                    inharmonicity: param("inharmonicity", 0.0004),
-                    brightness: param("brightness", 0.55),
-                    decay: param("decay", 1.4),
-                }
-            },
+            "voice.partial" => VoiceOp::Partial,
+            "voice.iteration" => VoiceOp::Iteration,
+            "voice.pitch" => VoiceOp::Pitch,
+            "voice.velocity" => VoiceOp::Velocity,
             "voice.envelope" => VoiceOp::Envelope {
                 attack: param("attack", 0.004),
                 decay: param("decay", 1.8),
@@ -1173,7 +1215,10 @@ impl Session {
             loop_start_tick: 0,
             loop_end_tick: 0,
             tracks: Vec::new(),
-            node_groups: BTreeMap::from([("piano.voice".to_string(), NodeGroup::piano_default())]),
+            node_groups: BTreeMap::from([
+                ("piano.voice".to_string(), NodeGroup::piano_default()),
+                ("piano.partial".to_string(), NodeGroup::partial_default()),
+            ]),
             audio_groups: BTreeMap::new(),
             master_plugin: None,
         };

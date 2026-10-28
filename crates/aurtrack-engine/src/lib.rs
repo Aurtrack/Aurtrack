@@ -55,6 +55,7 @@ pub struct VoiceContext {
     pub gate: bool,
     pub seed: u64,
     pub note_index: u64,
+    pub iteration: u64,
 }
 
 /// Voice 子图编译结果。
@@ -94,8 +95,15 @@ pub enum VoiceOp {
     Gate,
     Time,
     NoteIndex,
+    Iteration,
+    Input(usize),
     WhiteNoise,
     Constant(f64),
+    Partial,
+    Repeat {
+        body: Box<VoicePlan>,
+        count: usize,
+    },
     OscPartials {
         partials: usize,
         inharmonicity: f64,
@@ -119,6 +127,10 @@ pub enum VoiceOp {
 
 impl VoicePlan {
     pub fn sample(&self, context: VoiceContext) -> f64 {
+        self.sample_with_inputs(context, &[])
+    }
+
+    pub fn sample_with_inputs(&self, context: VoiceContext, inputs: &[f64]) -> f64 {
         if self.nodes.len() > 64 || self.output >= self.nodes.len() {
             return 0.0;
         }
@@ -130,6 +142,8 @@ impl VoicePlan {
                 VoiceOp::Gate => f64::from(u8::from(context.gate)),
                 VoiceOp::Time => context.local_time,
                 VoiceOp::NoteIndex => context.note_index as f64,
+                VoiceOp::Iteration => context.iteration as f64,
+                VoiceOp::Input(index) => inputs.get(index).copied().unwrap_or(0.0),
                 VoiceOp::WhiteNoise => {
                     let value = node.inputs.first().map_or(0.0, |input| values[*input]);
                     white_noise(value)
@@ -167,6 +181,33 @@ impl VoicePlan {
                         velocity,
                         context.local_time,
                         partials,
+                        inharmonicity,
+                        brightness,
+                        decay,
+                    )
+                },
+                VoiceOp::Partial => {
+                    let pitch = node
+                        .inputs
+                        .first()
+                        .map_or(context.pitch, |input| values[*input]);
+                    let velocity = node
+                        .inputs
+                        .get(1)
+                        .map_or(context.velocity, |input| values[*input]);
+                    let time = node
+                        .inputs
+                        .get(2)
+                        .map_or(context.local_time, |input| values[*input]);
+                    let index = node.inputs.get(3).map_or(0.0, |input| values[*input]);
+                    let inharmonicity = node.inputs.get(4).map_or(0.0004, |input| values[*input]);
+                    let brightness = node.inputs.get(5).map_or(0.5, |input| values[*input]);
+                    let decay = node.inputs.get(6).map_or(1.2, |input| values[*input]);
+                    partial_sample(
+                        pitch,
+                        velocity,
+                        time,
+                        index,
                         inharmonicity,
                         brightness,
                         decay,
@@ -234,6 +275,15 @@ impl VoicePlan {
                     let max = node.inputs.get(2).map_or(1.0, |input| values[*input]);
                     value.clamp(min, max)
                 },
+                VoiceOp::Repeat { ref body, count } => {
+                    let mut audio = 0.0;
+                    for iteration in 0..count {
+                        let mut loop_context = context;
+                        loop_context.iteration = iteration as u64;
+                        audio = body.sample_with_inputs(loop_context, &[audio]);
+                    }
+                    audio
+                },
                 VoiceOp::Output => node.inputs.first().map_or(0.0, |input| values[*input]),
             };
         }
@@ -255,6 +305,26 @@ fn white_noise(value: f64) -> f64 {
 fn noise_sample(seed: u64, time: f64) -> f64 {
     let state = hash64(seed ^ time.to_bits().wrapping_mul(0x9E37_79B9_7F4A_7C15));
     (state >> 11) as f64 / (1_u64 << 53) as f64 * 2.0 - 1.0
+}
+
+fn partial_sample(
+    pitch: f64,
+    velocity: f64,
+    time: f64,
+    index: f64,
+    inharmonicity: f64,
+    brightness: f64,
+    decay: f64,
+) -> f64 {
+    let partial = index.max(0.0).round() as usize + 1;
+    let frequency =
+        pitch * partial as f64 * (1.0 + inharmonicity * (partial * partial) as f64).sqrt();
+    if frequency >= 20_000.0 {
+        return 0.0;
+    }
+    let envelope = (-time * (0.8 + partial as f64 * 0.35) / decay.max(0.05)).exp();
+    let velocity = velocity.clamp(0.0, 1.0).powf(brightness + 0.5);
+    (std::f64::consts::TAU * frequency * time).sin() * envelope * velocity * 0.18 / partial as f64
 }
 
 fn osc_partials(
@@ -318,6 +388,7 @@ impl PianoPlan {
                     gate: local <= note.duration,
                     seed: note.start.to_bits() ^ note.frequency.to_bits() ^ note.velocity.to_bits(),
                     note_index: index as u64,
+                    iteration: 0,
                 });
                 continue;
             }
@@ -1359,6 +1430,7 @@ mod tests {
             gate: true,
             seed: 7,
             note_index: 0,
+            iteration: 0,
         });
         assert!(sample.abs() > 0.0001);
     }
@@ -1380,6 +1452,7 @@ mod tests {
                 gate: true,
                 seed: 42,
                 note_index: 0,
+                iteration: 0,
             })
         };
         assert!((sample(0.001) - sample(0.002)).abs() > 1e-9);
@@ -1394,6 +1467,7 @@ mod tests {
             gate: true,
             seed: 42,
             note_index: 3,
+            iteration: 0,
         };
         let plan = VoicePlan::new(
             vec![
@@ -1410,6 +1484,42 @@ mod tests {
     }
 
     #[test]
+    fn repeat_zone_accumulates_body_output() {
+        let body = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Input(0), vec![]),
+                VoiceNodePlan::new(VoiceOp::Constant(1.0), vec![]),
+                VoiceNodePlan::new(VoiceOp::Add, vec![0, 1]),
+                VoiceNodePlan::new(VoiceOp::Output, vec![2]),
+            ],
+            3,
+        );
+        let plan = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(
+                    VoiceOp::Repeat {
+                        body: Box::new(body),
+                        count: 4,
+                    },
+                    vec![],
+                ),
+                VoiceNodePlan::new(VoiceOp::Output, vec![0]),
+            ],
+            1,
+        );
+        let context = VoiceContext {
+            pitch: 261.63,
+            velocity: 0.8,
+            local_time: 0.0,
+            gate: true,
+            seed: 0,
+            note_index: 0,
+            iteration: 0,
+        };
+        assert!((plan.sample(context) - 4.0).abs() < 1e-9);
+    }
+
+    #[test]
     fn voice_gate_node_uses_explicit_gate_input() {
         let context = VoiceContext {
             pitch: 261.63,
@@ -1418,6 +1528,7 @@ mod tests {
             gate: true,
             seed: 7,
             note_index: 0,
+            iteration: 0,
         };
         for (gate, expected) in [(0.0, 0.0), (1.0, 0.5)] {
             let plan = VoicePlan::new(
@@ -1443,6 +1554,7 @@ mod tests {
             gate: true,
             seed: 7,
             note_index: 0,
+            iteration: 0,
         };
         for (factor, expected) in [(0.0, 0.25), (0.25, 0.375), (1.0, 0.75)] {
             let plan = VoicePlan::new(

@@ -334,6 +334,15 @@ impl NodeGroup {
         }
     }
 
+    pub fn partial_default() -> Self {
+        Self {
+            id: "piano.partial".to_string(),
+            name: "Piano Partial".to_string(),
+            interface: NodeGroupInterface::partial(),
+            graph: VoiceGraph::partial_default(),
+        }
+    }
+
     pub fn empty(id: impl Into<String>, name: impl Into<String>) -> Self {
         let interface = NodeGroupInterface::piano();
         Self {
@@ -481,6 +490,21 @@ impl NodeGroupInterface {
                 "note",
                 "Note",
                 NodeGroupSocketType::Note,
+            )],
+            outputs: vec![NodeGroupSocket::new(
+                "audio",
+                "Audio",
+                NodeGroupSocketType::Audio,
+            )],
+        }
+    }
+
+    pub fn partial() -> Self {
+        Self {
+            inputs: vec![NodeGroupSocket::new(
+                "in",
+                "Audio",
+                NodeGroupSocketType::Audio,
             )],
             outputs: vec![NodeGroupSocket::new(
                 "audio",
@@ -693,33 +717,6 @@ const MATH_PARAMS: [ParamSpec; 1] = [ParamSpec {
 
 const NOTE_IN: [VoiceSocketSpec; 1] = [VoiceSocketSpec::new("note", "Note", SocketType::Note)];
 
-const OSC_INPUTS: [VoiceSocketSpec; 6] = [
-    VoiceSocketSpec::new("pitch", "Pitch", SocketType::Float)
-        .with_default(261.63)
-        .with_range(20.0, 20_000.0)
-        .with_step(0.01),
-    VoiceSocketSpec::new("velocity", "Velocity", SocketType::Float)
-        .with_default(0.8)
-        .with_range(0.0, 1.0)
-        .with_step(0.01),
-    VoiceSocketSpec::new("partials", "Partials", SocketType::Float)
-        .with_default(10.0)
-        .with_range(1.0, 16.0)
-        .with_step(1.0),
-    VoiceSocketSpec::new("inharmonicity", "Inharmonicity", SocketType::Float)
-        .with_default(0.0004)
-        .with_range(0.0, 0.01)
-        .with_step(0.0001),
-    VoiceSocketSpec::new("brightness", "Brightness", SocketType::Float)
-        .with_default(0.55)
-        .with_range(0.0, 1.0)
-        .with_step(0.01),
-    VoiceSocketSpec::new("decay", "Decay", SocketType::Float)
-        .with_default(1.2)
-        .with_range(0.1, 8.0)
-        .with_step(0.01),
-];
-
 const ENVELOPE_INPUTS: [VoiceSocketSpec; 3] = [
     VoiceSocketSpec::new("time", "Time", SocketType::Float)
         .with_default(0.0)
@@ -753,6 +750,48 @@ const VCA_INPUTS: [VoiceSocketSpec; 2] = [
         .with_range(0.0, 2.0)
         .with_step(0.01),
 ];
+const PARTIAL_INPUTS: [VoiceSocketSpec; 7] = [
+    VoiceSocketSpec::new("pitch", "Pitch", SocketType::Float)
+        .with_default(261.63)
+        .with_range(20.0, 20_000.0)
+        .with_step(0.01),
+    VoiceSocketSpec::new("velocity", "Velocity", SocketType::Float)
+        .with_default(0.8)
+        .with_range(0.0, 1.0)
+        .with_step(0.01),
+    VoiceSocketSpec::new("time", "Time", SocketType::Float)
+        .with_default(0.0)
+        .with_range(0.0, 1000.0)
+        .with_step(0.001),
+    VoiceSocketSpec::new("index", "Index", SocketType::Float)
+        .with_default(0.0)
+        .with_range(0.0, 63.0)
+        .with_step(1.0),
+    VoiceSocketSpec::new("inharmonicity", "Inharmonicity", SocketType::Float)
+        .with_default(0.0004)
+        .with_range(0.0, 0.01)
+        .with_step(0.0001),
+    VoiceSocketSpec::new("brightness", "Brightness", SocketType::Float)
+        .with_default(0.5)
+        .with_range(0.0, 1.0)
+        .with_step(0.01),
+    VoiceSocketSpec::new("decay", "Decay", SocketType::Float)
+        .with_default(1.2)
+        .with_range(0.05, 8.0)
+        .with_step(0.01),
+];
+const REPEAT_PARAMS: [ParamSpec; 1] = [ParamSpec {
+    name: "count",
+    default: 10.0,
+    minimum: 1.0,
+    maximum: 32.0,
+}];
+const CONTEXT_PITCH_OUT: [VoiceSocketSpec; 1] =
+    [VoiceSocketSpec::new("out", "Pitch", SocketType::Float)];
+const CONTEXT_VELOCITY_OUT: [VoiceSocketSpec; 1] =
+    [VoiceSocketSpec::new("out", "Velocity", SocketType::Float)];
+const CONTEXT_ITERATION_OUT: [VoiceSocketSpec; 1] =
+    [VoiceSocketSpec::new("out", "Iteration", SocketType::Float)];
 
 const AUDIO_OUT: [VoiceSocketSpec; 1] = [VoiceSocketSpec::new("out", "Audio", SocketType::Audio)];
 const FLOAT_OUT: [VoiceSocketSpec; 1] = [VoiceSocketSpec::new("out", "Value", SocketType::Float)];
@@ -882,11 +921,43 @@ pub const VOICE_NODE_TYPES: &[VoiceNodeType] = &[
         params: &[],
     },
     VoiceNodeType {
-        id: "osc.partials",
-        name: "Partials",
+        id: "voice.partial",
+        name: "Partial",
         category: "Generator",
-        inputs: &OSC_INPUTS,
+        inputs: &PARTIAL_INPUTS,
         outputs: &AUDIO_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "voice.repeat",
+        name: "Repeat",
+        category: "Group",
+        inputs: &[],
+        outputs: &AUDIO_OUT,
+        params: &REPEAT_PARAMS,
+    },
+    VoiceNodeType {
+        id: "voice.iteration",
+        name: "Iteration",
+        category: "Input",
+        inputs: &[],
+        outputs: &CONTEXT_ITERATION_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "voice.pitch",
+        name: "Pitch",
+        category: "Input",
+        inputs: &[],
+        outputs: &CONTEXT_PITCH_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "voice.velocity",
+        name: "Velocity",
+        category: "Input",
+        inputs: &[],
+        outputs: &CONTEXT_VELOCITY_OUT,
         params: &[],
     },
     VoiceNodeType {
@@ -1158,11 +1229,70 @@ impl VoiceGraph {
         }
     }
 
+    pub fn partial_default() -> Self {
+        let interface = NodeGroupInterface::partial();
+        let mut graph = Self::shell(&interface);
+        let pitch = VoiceNode::new(NodeId::fixed("pitch"), "voice.pitch");
+        let velocity = VoiceNode::new(NodeId::fixed("velocity"), "voice.velocity");
+        let time = VoiceNode::new(NodeId::fixed("time"), "voice.time");
+        let index = VoiceNode::new(NodeId::fixed("index"), "voice.iteration");
+        let partial = VoiceNode::new(NodeId::fixed("partial"), "voice.partial");
+        let add = VoiceNode::new(NodeId::fixed("add"), "voice.add");
+        for (node, position) in [
+            (pitch, [40.0, 220.0]),
+            (velocity, [40.0, 300.0]),
+            (time, [40.0, 380.0]),
+            (index, [40.0, 460.0]),
+            (partial, [300.0, 180.0]),
+            (add, [600.0, 100.0]),
+        ] {
+            let mut node = node;
+            node.position = Some(position);
+            graph.nodes.insert(node.id.clone(), node);
+        }
+        if let Some(output) = graph.nodes.get_mut(&NodeId::fixed("out")) {
+            output.position = Some([850.0, 100.0]);
+        }
+        graph.connections = vec![
+            VoiceConnection::new(
+                PortRef::fixed(NodeId::fixed("voice-in"), "in"),
+                PortRef::fixed(NodeId::fixed("add"), "in1"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(NodeId::fixed("pitch"), "out"),
+                PortRef::fixed(NodeId::fixed("partial"), "pitch"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(NodeId::fixed("velocity"), "out"),
+                PortRef::fixed(NodeId::fixed("partial"), "velocity"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(NodeId::fixed("time"), "out"),
+                PortRef::fixed(NodeId::fixed("partial"), "time"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(NodeId::fixed("index"), "out"),
+                PortRef::fixed(NodeId::fixed("partial"), "index"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(NodeId::fixed("partial"), "out"),
+                PortRef::fixed(NodeId::fixed("add"), "in2"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(NodeId::fixed("add"), "out"),
+                PortRef::fixed(NodeId::fixed("out"), "audio"),
+            ),
+        ];
+        graph
+    }
+
     #[allow(clippy::too_many_lines)]
     pub fn piano_default() -> Self {
         let input = VoiceNode::new(NodeId::fixed("voice-in"), "group.input");
         let separate = VoiceNode::new(NodeId::fixed("note-separate"), "note.separate");
-        let osc = VoiceNode::new(NodeId::fixed("osc"), "osc.partials");
+        let mut partials = VoiceNode::new(NodeId::fixed("partials"), "voice.repeat");
+        partials.group = Some("piano.partial".to_string());
+        partials.params.insert("count".to_string(), 10.0);
         let env = VoiceNode::new(NodeId::fixed("env"), "voice.envelope");
         let osc_vca = VoiceNode::new(NodeId::fixed("osc-vca"), "voice.vca");
         let noise = VoiceNode::new(NodeId::fixed("noise"), "voice.noise");
@@ -1183,7 +1313,7 @@ impl VoiceGraph {
         for node in [
             input,
             separate,
-            osc,
+            partials,
             env,
             osc_vca,
             noise,
@@ -1203,7 +1333,7 @@ impl VoiceGraph {
         let positions = [
             ("voice-in", [30.0, 140.0]),
             ("note-separate", [280.0, 140.0]),
-            ("osc", [520.0, 40.0]),
+            ("partials", [520.0, 40.0]),
             ("env", [760.0, 40.0]),
             ("osc-vca", [960.0, 40.0]),
             ("noise", [520.0, 220.0]),
@@ -1229,14 +1359,6 @@ impl VoiceGraph {
                 VoiceConnection::new(
                     PortRef::fixed(NodeId::fixed("voice-in"), "note"),
                     PortRef::fixed(NodeId::fixed("note-separate"), "note"),
-                ),
-                VoiceConnection::new(
-                    PortRef::fixed(NodeId::fixed("note-separate"), "pitch"),
-                    PortRef::fixed(NodeId::fixed("osc"), "pitch"),
-                ),
-                VoiceConnection::new(
-                    PortRef::fixed(NodeId::fixed("note-separate"), "velocity"),
-                    PortRef::fixed(NodeId::fixed("osc"), "velocity"),
                 ),
                 VoiceConnection::new(
                     PortRef::fixed(NodeId::fixed("note-separate"), "velocity"),
@@ -1267,7 +1389,7 @@ impl VoiceGraph {
                     PortRef::fixed(NodeId::fixed("add"), "in2"),
                 ),
                 VoiceConnection::new(
-                    PortRef::fixed(NodeId::fixed("osc"), "out"),
+                    PortRef::fixed(NodeId::fixed("partials"), "out"),
                     PortRef::fixed(NodeId::fixed("osc-vca"), "in"),
                 ),
                 VoiceConnection::new(
@@ -2631,16 +2753,14 @@ mod tests {
 
     #[test]
     fn voice_parameters_are_input_sockets() {
-        let node_type = voice_node_type("osc.partials").unwrap();
-        assert_eq!(node_type.inputs.len(), 6);
-        let partials = node_type
+        let node_type = voice_node_type("voice.partial").unwrap();
+        assert_eq!(node_type.inputs.len(), 7);
+        let inharmonicity = node_type
             .inputs
             .iter()
-            .find(|socket| socket.id == "partials")
+            .find(|socket| socket.id == "inharmonicity")
             .unwrap();
-        assert!((partials.default - 10.0).abs() < 1e-9);
-        assert!((partials.minimum - 1.0).abs() < 1e-9);
-        assert!((partials.maximum - 16.0).abs() < 1e-9);
+        assert!((inharmonicity.default - 0.0004).abs() < 1e-9);
         assert!(node_type.params.is_empty());
     }
 

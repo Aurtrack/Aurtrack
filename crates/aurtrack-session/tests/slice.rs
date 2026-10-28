@@ -1347,7 +1347,8 @@ fn piano_tracks_share_one_node_group() {
         );
     }
     let project = session.project().unwrap().clone();
-    assert_eq!(project.node_groups.len(), 1);
+    assert_eq!(project.node_groups.len(), 2);
+    assert!(project.node_groups.contains_key("piano.partial"));
     let group_ids: Vec<String> = project
         .tracks
         .iter()
@@ -1367,7 +1368,7 @@ fn piano_tracks_share_one_node_group() {
         "group.voice",
         json!({ "group_id": "piano.voice", "voice": voice }),
     );
-    assert_eq!(session.project().unwrap().node_groups.len(), 1);
+    assert_eq!(session.project().unwrap().node_groups.len(), 2);
 }
 
 #[test]
@@ -1399,10 +1400,10 @@ fn math_nodes_flow_into_voice_engine() {
     let mut voice = serde_json::to_value(&project.node_groups["piano.voice"].graph).unwrap();
     let connections = voice["connections"].as_array_mut().unwrap();
     connections.retain(|connection| {
-        !(connection["to"]["node"] == "osc" && connection["to"]["port"] == "pitch")
+        !(connection["to"]["node"] == "white-noise" && connection["to"]["port"] == "w")
     });
     connections.push(json!({
-        "from": { "node": "note-separate", "port": "pitch" },
+        "from": { "node": "note-separate", "port": "velocity" },
         "to": { "node": "sum", "port": "a" }
     }));
     connections.push(json!({
@@ -1411,7 +1412,7 @@ fn math_nodes_flow_into_voice_engine() {
     }));
     connections.push(json!({
         "from": { "node": "sum", "port": "out" },
-        "to": { "node": "osc", "port": "pitch" }
+        "to": { "node": "white-noise", "port": "w" }
     }));
     voice["nodes"]["sum"] = json!({
         "id": "sum",
@@ -1501,15 +1502,21 @@ fn group_from_nodes_rewires_boundaries() {
         "group.from_nodes",
         json!({
             "source_group_id": "piano.voice",
-            "node_ids": ["osc", "env"],
-            "name": "Osc Env"
+            "node_ids": ["partials", "env"],
+            "name": "Partials Env"
         }),
     );
     let group_id = result["group_id"].as_str().unwrap();
     let node_id = result["node_id"].as_str().unwrap();
     let project = session.project().unwrap();
     let parent = &project.node_groups["piano.voice"];
-    assert!(!parent.graph.nodes.keys().any(|id| id.to_string() == "osc"));
+    assert!(
+        !parent
+            .graph
+            .nodes
+            .keys()
+            .any(|id| id.to_string() == "partials")
+    );
     assert!(!parent.graph.nodes.keys().any(|id| id.to_string() == "env"));
     let group_node = parent
         .graph
@@ -1521,9 +1528,15 @@ fn group_from_nodes_rewires_boundaries() {
     assert_eq!(group_node.type_id, "voice.group");
     assert_eq!(group_node.group.as_deref(), Some(group_id));
     let child = &project.node_groups[group_id];
-    assert_eq!(child.interface.inputs.len(), 3);
+    assert_eq!(child.interface.inputs.len(), 1);
     assert_eq!(child.interface.outputs.len(), 2);
-    assert!(child.graph.nodes.keys().any(|id| id.to_string() == "osc"));
+    assert!(
+        child
+            .graph
+            .nodes
+            .keys()
+            .any(|id| id.to_string() == "partials")
+    );
     assert!(child.graph.nodes.keys().any(|id| id.to_string() == "env"));
     let plan = project.tracks[0]
         .playback_graph(&project.node_groups, &project.audio_groups)
@@ -1545,7 +1558,13 @@ fn group_from_nodes_rewires_boundaries() {
             .keys()
             .any(|id| id.to_string() == node_id)
     );
-    assert!(parent.graph.nodes.keys().any(|id| id.to_string() == "osc"));
+    assert!(
+        parent
+            .graph
+            .nodes
+            .keys()
+            .any(|id| id.to_string() == "partials")
+    );
     assert!(parent.graph.nodes.keys().any(|id| id.to_string() == "env"));
     let plan = project.tracks[0]
         .playback_graph(&project.node_groups, &project.audio_groups)
@@ -2319,6 +2338,45 @@ fn audio_group_instance_expands_effect_nodes() {
             .iter()
             .any(|node| matches!(node.op, aurtrack_engine::GraphOp::Gain))
     );
+}
+
+#[test]
+fn default_piano_partial_loop_is_explicit() {
+    let mut session = Session::default();
+    run(&mut session, "project.create", json!({ "name": "loop" }));
+    run(
+        &mut session,
+        "track.create",
+        json!({ "name": "Piano", "source": "piano" }),
+    );
+    let project = session.project().unwrap();
+    let voice = &project.node_groups["piano.voice"];
+    let repeat = voice
+        .graph
+        .nodes
+        .values()
+        .find(|node| node.id.to_string() == "partials")
+        .unwrap();
+    assert_eq!(repeat.type_id, "voice.repeat");
+    assert_eq!(repeat.group.as_deref(), Some("piano.partial"));
+    let body = &project.node_groups["piano.partial"];
+    assert!(
+        body.graph
+            .nodes
+            .values()
+            .any(|node| node.type_id == "voice.partial")
+    );
+    assert!(
+        body.graph
+            .nodes
+            .values()
+            .any(|node| node.type_id == "voice.iteration")
+    );
+    let plan = project.tracks[0]
+        .playback_graph(&project.node_groups, &project.audio_groups)
+        .unwrap()
+        .2;
+    assert!(plan.piano.unwrap().voice.is_some());
 }
 
 #[test]

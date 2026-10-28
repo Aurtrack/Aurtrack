@@ -52,6 +52,9 @@
 | envelope | 包络 | 只输出控制值，不直接处理音频 |
 | VCA | 压控放大器 | 音频 × 控制值 |
 | noise | 噪声 | 只输出噪声音频源 |
+| repeat | 重复 | Repeat Zone，引用循环体组并执行 count 次 |
+| iteration | 迭代 | 循环内部当前迭代序号 |
+| partial | 泛音 | 单次生成一个泛音的音频 |
 | patch | 音色 | 与 preset 区分 |
 | preset | 预设 | |
 | parameter | 参数 | |

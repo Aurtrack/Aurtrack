@@ -110,6 +110,10 @@
     return node.group ? groups[node.group] : undefined;
   }
 
+  function isGroupNode(node: VoiceNode | undefined): boolean {
+    return node?.type_id === "voice.group" || node?.type_id === "voice.repeat";
+  }
+
   function nodeLabel(node: VoiceNode): string {
     if (node.type_id === "group.input") {
       return tLoose("node.group.input", "GROUP INPUT").toUpperCase();
@@ -117,7 +121,7 @@
     if (node.type_id === "group.output") {
       return tLoose("node.group.output", "GROUP OUTPUT").toUpperCase();
     }
-    if (node.type_id === "voice.group") {
+    if (isGroupNode(node)) {
       return nodeGroup(node)?.name ?? node.group ?? tLoose("node.voice.group", "VOICE GROUP");
     }
     const info = typeById.get(node.type_id);
@@ -294,7 +298,7 @@
   });
 
   function groupHeaderHeight(node: VoiceNode): number {
-    return node.type_id === "voice.group" ? 18 : 0;
+    return isGroupNode(node) ? 18 : 0;
   }
 
   function matchingParam(node: VoiceNode, portId: string) {
@@ -1795,7 +1799,7 @@
       event.preventDefault();
       if (event.shiftKey) return;
       const node = voice.nodes[active];
-      if (node && node.type_id === "voice.group" && nodeGroup(node)) {
+      if (node && isGroupNode(node) && nodeGroup(node)) {
         void enterGroup(node);
       } else {
         void leave();
@@ -2168,7 +2172,7 @@
             class="voice-node-head"
             role="presentation"
             ondblclick={() => {
-              if (node.type_id === "voice.group") void enterGroup(node);
+              if (isGroupNode(node)) void enterGroup(node);
             }}
           >
             <span class="voice-node-title">{nodeLabel(node)}</span>
@@ -2177,7 +2181,7 @@
           </div>
 
           {#if !node.collapsed}
-          {#if node.type_id === "voice.group"}
+          {#if isGroupNode(node)}
             <div class="voice-node-group-line">
               <code>{node.group ?? "—"}</code>
               <button
@@ -2538,10 +2542,26 @@
             <strong>{nodeLabel(node)}</strong>
             <code>{node.id}</code>
             <div class="node-sidebar-type">{node.type_id}</div>
-            {#if node.type_id === "voice.group"}
-              <div class="node-sidebar-group">
-                {nodeGroup(node)?.name ?? node.group ?? "—"}
-              </div>
+            {#if isGroupNode(node)}
+              {#if node.type_id === "voice.repeat"}
+                <select
+                  class="node-sidebar-select"
+                  value={node.group ?? ""}
+                  onchange={(event) => {
+                    const value = (event.currentTarget as HTMLSelectElement).value;
+                    node.group = value || undefined;
+                  }}
+                >
+                  <option value="">—</option>
+                  {#each Object.values(groups) as candidate (candidate.id)}
+                    <option value={candidate.id}>{candidate.name}</option>
+                  {/each}
+                </select>
+              {:else}
+                <div class="node-sidebar-group">
+                  {nodeGroup(node)?.name ?? node.group ?? "—"}
+                </div>
+              {/if}
               <button class="ghost small" onclick={() => void enterGroup(node)}>
                 {t("graph.editGroup")}
               </button>
@@ -2575,7 +2595,8 @@
         tabindex="-1"
         onmousedown={(event) => event.stopPropagation()}
       >
-        {#if voice.nodes[nodeMenu.nodeId]?.type_id === "voice.group"}
+        {#if isGroupNode(voice.nodes[nodeMenu.nodeId])}
+
           <button
             role="menuitem"
             onclick={() => {

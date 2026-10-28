@@ -32,6 +32,8 @@
 - `voice.time` 输出逐音符时间；`Separate Note` 的 `index` 输出经 `voice.white_noise` 的 1D `W` 输入转换成确定性种子。
 - 包络和噪声从 `time`、`seed` 输入读取，不再直接读 `VoiceContext`。
 - `voice.envelope` 只输出控制值，`voice.vca` 负责音频乘控制值；`voice.noise` 只输出噪声源，不再内置包络和电平。
+- `voice.repeat` 是 Repeat Zone：引用一个循环体组，按 `count` 重复执行；循环体有一个音频累加器输入 `in` 和一个音频输出 `audio`，内部用 `voice.iteration` 获取迭代序号。
+- `voice.partial` 是单个泛音的原子节点；默认 `Partials` 由 `Repeat("piano.partial") + Partial` 组成，不再有单体 `osc.partials` 节点。
 - 嵌套 Voice 组的 Note 输入未接线时绑定为禁用，不会从父级上下文偷音符。
 - 轨道里的 `audio.group.instance` 是**Audio 组实例**，端口由 `AudioGroup.interface` 动态生成。
 - Voice 图里的 `voice.group` 继续是真正的 Voice 组实例。
