@@ -34,11 +34,17 @@ pub struct AudioPort {
 }
 
 fn audio_port_from_socket(socket: &crate::NodeGroupSocket) -> AudioPort {
+    let fallback = match socket.id.to_ascii_lowercase().as_str() {
+        "pitch" => 261.63,
+        "velocity" => 0.8,
+        "gate" => 1.0,
+        _ => 0.0,
+    };
     AudioPort {
         id: socket.id.clone(),
         name: socket.name.clone(),
         ty: socket.ty,
-        default: socket.effective_default().unwrap_or(0.0),
+        default: socket.effective_default().unwrap_or(fallback),
     }
 }
 
