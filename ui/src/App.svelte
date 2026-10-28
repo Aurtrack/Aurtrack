@@ -31,11 +31,6 @@
     );
   }
 
-  function isButtonTarget(target: EventTarget | null): boolean {
-    const element = target as HTMLElement | null;
-    return element?.tagName === "BUTTON" || element?.tagName === "A";
-  }
-
   function handleKeydown(event: KeyboardEvent) {
     if (event.defaultPrevented || isTypingTarget(event.target)) return;
     const modifier = event.ctrlKey || event.metaKey;
@@ -46,7 +41,6 @@
       nodeCanvasActive &&
       (key === "delete" ||
         key === "backspace" ||
-        key === " " ||
         (modifier && key === "d"))
     ) {
       return;
@@ -77,7 +71,7 @@
     } else if (key === "delete" || key === "backspace") {
       event.preventDefault();
       void session.deleteSelected();
-    } else if (key === " " && !isButtonTarget(event.target)) {
+    } else if (key === " ") {
       event.preventDefault();
       if (session.playing) void session.stop();
       else void session.play();

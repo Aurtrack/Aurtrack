@@ -1920,6 +1920,7 @@ button:disabled {
   stroke-width: 14;
   pointer-events: stroke;
   cursor: pointer;
+  outline: none;
 }
 
 .graph-wire-hit:hover + .graph-wire,
@@ -2574,6 +2575,20 @@ button:disabled {
 .voice-editor-wires path {
   stroke: var(--socket-audio);
 }
+.voice-editor-wires .voice-wire-hit {
+  fill: none;
+  stroke: transparent;
+  stroke-width: 14;
+  pointer-events: stroke;
+  cursor: pointer;
+  outline: none;
+}
+
+.voice-editor-wires .voice-wire-hit:hover + .voice-wire,
+.voice-editor-wires .voice-wire-hit:focus + .voice-wire {
+  stroke-width: 2.6;
+}
+
 .voice-wire-temp {
   fill: none;
   stroke-width: 1.5;

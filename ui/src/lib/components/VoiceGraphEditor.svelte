@@ -292,6 +292,14 @@
     );
   }
 
+  function removeConnection(event: Event, connection: VoiceConnection): void {
+    event.preventDefault();
+    event.stopPropagation();
+    voice.connections = voice.connections.filter(
+      (candidate) => candidate !== connection,
+    );
+  }
+
   function extraParams(node: VoiceNode) {
     const ports = new Set(inputList(node).map((port) => port.id));
     return (typeById.get(node.type_id)?.params ?? []).filter(
@@ -876,7 +884,11 @@
       return;
     }
     const target = event.target as Element | null;
-    if (target?.closest(".voice-node, .voice-add-menu, .voice-interface-panel")) {
+    if (
+      target?.closest(
+        ".voice-node, .voice-add-menu, .voice-interface-panel, .voice-wire-hit",
+      )
+    ) {
       return;
     }
     addMenu = null;
@@ -1705,6 +1717,7 @@
       !event.altKey
     ) {
       event.preventDefault();
+      if (event.shiftKey) return;
       const node = voice.nodes[active];
       if (node && node.type_id === "voice.group" && nodeGroup(node)) {
         void enterGroup(node);
@@ -2015,7 +2028,24 @@
       {/each}
       <svg class="voice-editor-wires" viewBox={`0 0 ${CANVAS_WIDTH} ${CANVAS_HEIGHT}`}>
         {#each voice.connections as connection (connection.from.node + connection.from.port + connection.to.node + connection.to.port)}
-          <path d={wirePath(connection)} style:stroke={wireColor(connection)} />
+          <path
+            class="voice-wire-hit"
+            d={wirePath(connection)}
+            role="button"
+            tabindex="0"
+            aria-label={t("graph.removeWire")}
+            onclick={(event) => removeConnection(event, connection)}
+            onkeydown={(event) => {
+              if (event.key === "Enter" || event.key === " ") {
+                removeConnection(event, connection);
+              }
+            }}
+          />
+          <path
+            class="voice-wire"
+            d={wirePath(connection)}
+            style:stroke={wireColor(connection)}
+          />
         {/each}
         {#if insertTarget}
           <path class="voice-wire-insert" d={wirePath(insertTarget)} />

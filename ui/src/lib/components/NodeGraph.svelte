@@ -235,7 +235,6 @@
   let canvasMenu = $state<Point | null>(null);
   type VoicePathEntry = { id: string; name: string };
   let voicePath = $state<VoicePathEntry[]>([]);
-  let spaceHeld = $state(false);
   let lastPointer = $state<Point>({ x: 0, y: 0 });
 
   let graph = $derived(track?.graph ?? null);
@@ -1006,10 +1005,11 @@
   }
 
   function openCanvasMenu(event: MouseEvent) {
-    if (event.button !== 2 || event.ctrlKey) return;
+    if (event.button !== 2) return;
     const target = event.target as Element | null;
-    if (target?.closest(".graph-node, .graph-wire-hit")) return;
+    if (target?.closest(".graph-node")) return;
     event.preventDefault();
+    if (event.ctrlKey) return;
     canvasMenu = { x: event.clientX, y: event.clientY };
     addMenu = null;
     nodeMenu = null;
@@ -1043,7 +1043,7 @@
       }
       return;
     }
-    if (event.button === 1 || (spaceHeld && event.button === 0)) {
+    if (event.button === 1) {
       event.preventDefault();
       panDrag = {
         startX: event.clientX,
@@ -1112,7 +1112,7 @@
 
   function nodeMouseDown(event: MouseEvent, node: GraphNode) {
     if (circleMode) return;
-    if (event.button !== 0 || busy || spaceHeld) return;
+    if (event.button !== 0 || busy) return;
     if (isInteractive(event.target)) return;
     nodeMenu = null;
     event.stopPropagation();
@@ -1264,7 +1264,7 @@
 
   function startWire(event: MouseEvent, node: GraphNode, side: "out" | "in", port: string) {
     if (circleMode) return;
-    if (event.button !== 0 || busy || spaceHeld) return;
+    if (event.button !== 0 || busy) return;
     event.preventDefault();
     event.stopPropagation();
     const point = worldPoint(event);
@@ -1749,26 +1749,20 @@
 
   function handleKeyDown(event: KeyboardEvent) {
     if (inactive || editingGroup) return;
-    if ((event.code === "Space" || event.key === " ") && !isEditing()) {
-      spaceHeld = true;
-      event.preventDefault();
-      return;
-    }
     if (isEditing()) return;
     if (
       event.key === "Tab" &&
-      !event.shiftKey &&
       !event.ctrlKey &&
       !event.metaKey &&
-      !event.altKey &&
-      !editingGroup
+      !event.altKey
     ) {
+      event.preventDefault();
+      if (event.shiftKey) return;
       const groupNode = nodes.find(
         (node) =>
           selected.has(node.id) && nodeTypeId(node) === "audio.group",
       );
       if (groupNode) {
-        event.preventDefault();
         openVoiceGroup(groupNode);
         return;
       }
@@ -1779,15 +1773,13 @@
           Boolean(node.group),
       );
       if (audioGroupNode && onOpenAudioGroup) {
-        event.preventDefault();
         onOpenAudioGroup(audioGroupNode);
         return;
       }
       if (canExitGroup && onExitGroup) {
-        event.preventDefault();
         onExitGroup();
-        return;
       }
+      return;
     }
     if (
       event.key === "Tab" &&
@@ -1981,10 +1973,6 @@
     }
   }
 
-  function handleKeyUp(event: KeyboardEvent) {
-    if (event.code === "Space" || event.key === " ") spaceHeld = false;
-  }
-
   async function addNode(kind: string, at?: Point, group?: string) {
     if (!track) return;
     const point =
@@ -2032,7 +2020,6 @@
   onmousemove={handleMouseMove}
   onmouseup={handleMouseUp}
   onkeydown={handleKeyDown}
-  onkeyup={handleKeyUp}
 />
 
 <section class="section graph-section" class:compact>
