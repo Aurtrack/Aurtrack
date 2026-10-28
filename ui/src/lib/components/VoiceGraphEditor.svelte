@@ -767,6 +767,11 @@
 
   function nodeMouseDown(event: MouseEvent, node: VoiceNode) {
     if (circleMode) return;
+    if (wire) {
+      wire = null;
+      wireMoved = false;
+      pendingLink = null;
+    }
     nodeMenu = null;
     if (event.button !== 0) return;
     const target = event.target as Element | null;
@@ -1368,10 +1373,33 @@
     removeSelected();
   }
 
+  function dedupeConnections(connections: VoiceConnection[]): VoiceConnection[] {
+    const result: VoiceConnection[] = [];
+    const indexes = new Map<string, number>();
+    for (const connection of connections) {
+      const key = `${connection.to.node}\u0000${connection.to.port}`;
+      const existing = indexes.get(key);
+      if (existing === undefined) {
+        indexes.set(key, result.length);
+        result.push(connection);
+      } else {
+        result[existing] = connection;
+      }
+    }
+    return result;
+  }
+
   async function save(close = true): Promise<boolean> {
     saving = true;
     error = "";
     try {
+      const deduped = dedupeConnections(voice.connections);
+      if (
+        deduped.length !== voice.connections.length ||
+        deduped.some((connection, index) => connection !== voice.connections[index])
+      ) {
+        voice.connections = deduped;
+      }
       await session.setGroupVoice(groupId, {
         nodes: voice.nodes,
         connections: voice.connections,
@@ -2087,6 +2115,10 @@
           <path
             class="voice-wire-hit"
             d={wirePath(connection)}
+            data-from-node={connection.from.node}
+            data-from-port={connection.from.port}
+            data-to-node={connection.to.node}
+            data-to-port={connection.to.port}
             role="button"
             tabindex="0"
             aria-label={t("graph.removeWire")}
