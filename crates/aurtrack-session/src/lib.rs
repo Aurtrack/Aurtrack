@@ -748,6 +748,8 @@ impl Track {
     }
 }
 
+const NOTE_BINDING: usize = usize::MAX;
+
 fn compile_voice(
     voice: &VoiceGraph,
     interface: &NodeGroupInterface,
@@ -794,6 +796,14 @@ fn compile_voice_inner(
         }
         if node.type_id == "group.input" {
             for socket in &interface.inputs {
+                if socket.ty == NodeGroupSocketType::Note {
+                    let binding = input_bindings
+                        .and_then(|bindings| bindings.get(&socket.id))
+                        .copied()
+                        .unwrap_or(NOTE_BINDING);
+                    indices.insert((id.clone(), socket.id.clone()), binding);
+                    continue;
+                }
                 if let Some(index) = input_bindings.and_then(|bindings| bindings.get(&socket.id)) {
                     indices.insert((id.clone(), socket.id.clone()), *index);
                     continue;
@@ -834,6 +844,18 @@ fn compile_voice_inner(
             }
             continue;
         }
+        if node.type_id == "note.separate" {
+            for (port, op) in [
+                ("pitch", VoiceOp::Pitch),
+                ("velocity", VoiceOp::Velocity),
+                ("gate", VoiceOp::Gate),
+            ] {
+                let index = nodes.len();
+                nodes.push(VoiceNodePlan::new(op, Vec::new()));
+                indices.insert((id.clone(), port.to_string()), index);
+            }
+            continue;
+        }
         if node.type_id == "voice.group" {
             let group_id = node.group.as_deref().ok_or(GraphError::EmptyGroupId)?;
             if stack.iter().any(|item| item == group_id) {
@@ -854,6 +876,10 @@ fn compile_voice_inner(
                 bindings.insert(connection.to.port().to_string(), input);
             }
             for socket in &group.interface.inputs {
+                if socket.ty == NodeGroupSocketType::Note {
+                    bindings.entry(socket.id.clone()).or_insert(NOTE_BINDING);
+                    continue;
+                }
                 if bindings.contains_key(&socket.id) {
                     continue;
                 }
@@ -1438,8 +1464,13 @@ impl Session {
                 })
             }
             .ok_or_else(|| CommandError::not_found(format!("找不到参数：{path}")))?;
-            if socket.ty == NodeGroupSocketType::Audio {
-                return Err(CommandError::invalid_args("Audio 接口不能设置数值参数"));
+            if matches!(
+                socket.ty,
+                NodeGroupSocketType::Audio | NodeGroupSocketType::Note
+            ) {
+                return Err(CommandError::invalid_args(
+                    "Audio/Note 接口不能设置数值参数",
+                ));
             }
             let minimum = socket.minimum.unwrap_or(f64::NEG_INFINITY);
             let maximum = socket.maximum.unwrap_or(f64::INFINITY);

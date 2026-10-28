@@ -51,9 +51,7 @@ instrument.silence -> output
       "name": "Piano Voice",
       "interface": {
         "inputs": [
-          { "id": "pitch", "name": "Pitch", "type": "float" },
-          { "id": "velocity", "name": "Velocity", "type": "float" },
-          { "id": "gate", "name": "Gate", "type": "gate" }
+          { "id": "note", "name": "Note", "type": "note" }
         ],
         "outputs": [
           { "id": "audio", "name": "Audio", "type": "audio" }
@@ -67,6 +65,18 @@ instrument.silence -> output
   }
 }
 ```
+
+Piano Voice 的默认 Voice 图把外部接口收敛成一个 `Note`：
+
+```text
+group.input(note)
+  └─ note.separate
+       ├─ pitch ──→ osc.pitch
+       ├─ velocity ─→ osc.velocity / noise.velocity
+       └─ gate
+```
+
+`audio.group` 乐器节点因此只暴露一个 `note` 输入和一个 `audio` 输出；`note` 未连接时使用轨道钢琴卷帘的音符。
 
 组节点只引用组 ID；同一个组可以被多条轨道复用。
 
@@ -85,9 +95,11 @@ instrument.silence -> output
 
 Voice 节点实例用 `type_id` 引用注册表，端口和参数由 `node.types` 声明。轨道图使用 `AudioGraph`，同样以 `type_id` 引用 `AUDIO_NODE_TYPES`，节点不再保存固定 kind。
 
-Audio 节点类型：`audio.group`、`audio.instrument.sine`、`audio.instrument.silence`、`audio.adsr`、`audio.plugin`、`audio.gain`、`audio.mix`、`audio.filter.lowpass`、`audio.filter.highpass`、`audio.drive`、`audio.delay`、`audio.value`、`audio.output`。
+Audio 节点类型：`audio.group`、`audio.group.instance`、`audio.instrument.sine`、`audio.instrument.silence`、`audio.adsr`、`audio.plugin`、`audio.gain`、`audio.mix`、`audio.filter.lowpass`、`audio.filter.highpass`、`audio.drive`、`audio.delay`、`audio.value`、`audio.output`。
 
-工程视图同时输出 `type_id` 和兼容用 `kind`；写入只认 `type_id`。当前类型：`group.input`、`osc.partials`、`env.percussive`、`noise.burst`、`voice.mix`、`voice.group`、`group.output`、`math.add`、`math.multiply`、`math.map_range`、`math.clamp`、`value.float`。
+工程视图同时输出 `type_id` 和 UI 用的 `kind`；写入只认 `type_id`。当前 Voice 类型：`group.input`、`group.output`、`note.separate`、`osc.partials`、`env.percussive`、`noise.burst`、`voice.mix`、`voice.group`、`math.add`、`math.multiply`、`math.map_range`、`math.clamp`、`value.float`。
+
+组接口 socket 类型：`float`、`gate`、`audio`、`note`。`note` 表示逐音符事件，不参与 Audio 采样，也没有数值默认值。
 
 插件节点必须带 `plugin` 配置：
 

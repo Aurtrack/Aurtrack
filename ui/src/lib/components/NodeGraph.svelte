@@ -424,7 +424,8 @@
     const socket = group.interface.inputs.find(
       (candidate) => candidate.id === portId,
     );
-    if (!socket || socket.type === "audio") return undefined;
+    if (!socket || socket.type === "audio" || socket.type === "note")
+      return undefined;
     return {
       name: socket.id,
       default: socket.default ?? 0,
@@ -613,6 +614,7 @@
     float: "#a1a1a1",
     gate: "#cca6d6",
     audio: "#63c763",
+    note: "#d99a4e",
   };
 
   function wireDragColor(): string {
@@ -623,7 +625,10 @@
         "#63c763"
       );
     }
-    return socketColors.audio ?? "#63c763";
+    return (
+      socketColors[socketType(wireDrag.node, "in", wireDrag.port) ?? "audio"] ??
+      "#63c763"
+    );
   }
 
   function wireColor(connection: GraphConnection): string {
@@ -660,7 +665,7 @@
             ? session.audioGroups[node.group]
             : undefined;
       for (const socket of group?.interface.inputs ?? []) {
-        if (socket.type === "audio") continue;
+        if (socket.type === "audio" || socket.type === "note") continue;
         const param = matchingParam(node, socket.id);
         if (param) params.push(param);
       }
@@ -2275,11 +2280,16 @@
                   class="graph-port graph-port-in"
                   class:port-float={input.type === "float"}
                   class:port-gate={input.type === "gate"}
+                  class:port-note={input.type === "note"}
                   class:port-audio={input.type === "audio"}
                   class:active={wireHover?.node === node.id &&
                     wireHover?.port === input.id}
                   style:top="7px"
                   aria-label={t("graph.inputPort")}
+                  title={nodeTypeId(node) === "audio.group" &&
+                  input.type === "note"
+                    ? t("graph.noteInputHint")
+                    : undefined}
                   data-input-node={node.id}
                   data-input-port={input.id}
                   onmousedown={(event) =>
@@ -2320,6 +2330,7 @@
                   class="graph-port graph-port-out"
                   class:port-float={output.type === "float"}
                   class:port-gate={output.type === "gate"}
+                  class:port-note={output.type === "note"}
                   class:port-audio={output.type === "audio"}
                   class:active={wireHover?.node === node.id &&
                     wireDrag?.side === "in"}
@@ -2378,6 +2389,7 @@
                   class="graph-port graph-port-in"
                   class:port-float={input.type === "float"}
                   class:port-gate={input.type === "gate"}
+                  class:port-note={input.type === "note"}
                   class:port-audio={input.type === "audio"}
                   style:top={`${portTop(node, index)}px`}
                   aria-label={t("graph.inputPort")}
@@ -2393,6 +2405,7 @@
                   class="graph-port graph-port-out"
                   class:port-float={output.type === "float"}
                   class:port-gate={output.type === "gate"}
+                  class:port-note={output.type === "note"}
                   class:port-audio={output.type === "audio"}
                   style:top={`${portTop(node, index)}px`}
                   aria-label={t("graph.startWire")}

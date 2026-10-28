@@ -426,6 +426,7 @@ export const en: Record<MessageKey, Message> = {
   // 节点类型与分类
   "node.group.input": "Group Input",
   "node.group.output": "Group Output",
+  "node.note.separate": "Separate Note",
   "node.voice.group": "Group",
   "node.piano.voice": "Piano Voice",
   "node.osc.partials": "Partials",
@@ -469,6 +470,7 @@ export const en: Record<MessageKey, Message> = {
   "nodeCategory.Generator": "Generator",
   "nodeCategory.Envelope": "Envelope",
   "nodeCategory.Audio": "Audio",
+  "nodeCategory.Note": "Note",
   "nodeCategory.Math": "Math",
   "nodeCategory.Instrument": "Instrument",
   "nodeCategory.Plugin": "Plugin",
@@ -507,6 +509,7 @@ export const en: Record<MessageKey, Message> = {
   "param.min": "Min",
   "param.max": "Max",
   "socket.audio": "Audio",
+  "socket.note": "Note",
   "socket.value": "Value",
   "socket.gate": "Gate",
   "socket.pitch": "Pitch",
@@ -544,11 +547,13 @@ export const en: Record<MessageKey, Message> = {
   "graph.typeFloat": "Float",
   "graph.typeGate": "Gate",
   "graph.typeAudio": "Audio",
+  "graph.typeNote": "Note",
 
   "transport.total": "Total",
   "transport.seconds": (params) => `${params.value} s`,
 
   "graph.noteDriven": "Driven by piano-roll notes",
+  "graph.noteInputHint": "Uses piano-roll notes when unconnected",
 
   "voice.socketDefault": "Default",
   "voice.socketMinimum": "Min",

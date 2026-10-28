@@ -76,11 +76,12 @@
     y: number;
   };
 
-  type PortType = "float" | "gate" | "audio";
+  type PortType = "float" | "gate" | "audio" | "note";
   const socketColors: Record<PortType, string> = {
     float: "#a1a1a1",
     gate: "#cca6d6",
     audio: "#63c763",
+    note: "#d99a4e",
   };
   type PortInfo = {
     id: string;
@@ -273,7 +274,8 @@
     const socket = nodeGroup(node)?.interface.inputs.find(
       (candidate) => candidate.id === portId,
     );
-    if (!socket || socket.type === "audio") return undefined;
+    if (!socket || socket.type === "audio" || socket.type === "note")
+      return undefined;
     return {
       name: socket.id,
       default: socket.default ?? 0,
@@ -354,8 +356,13 @@
     const y1 = from.y + portY(source, outIndex);
     const x2 = to.x;
     const y2 = to.y + portY(target, inIndex);
-    const bend = Math.max(40, Math.abs(x2 - x1) * 0.45);
+    const bend = wireBend(x1, x2);
     return `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`;
+  }
+
+  function wireBend(x1: number, x2: number): number {
+    const gap = x2 - x1;
+    return gap > 0 ? Math.min(40, Math.max(2, gap * 0.5)) : 60;
   }
 
   function connectionEnds(
@@ -392,7 +399,7 @@
   ): Point[] {
     const ends = connectionEnds(connection);
     if (!ends) return [];
-    const bend = Math.max(40, Math.abs(ends.to.x - ends.from.x) * 0.45);
+    const bend = wireBend(ends.from.x, ends.to.x);
     const points: Point[] = [];
     for (let step = 0; step <= steps; step += 1) {
       const t = step / steps;
@@ -1542,7 +1549,7 @@
     const params = [...(typeById.get(node.type_id)?.params ?? [])];
     if (node.type_id === "voice.group") {
       for (const socket of nodeGroup(node)?.interface.inputs ?? []) {
-        if (socket.type === "audio") continue;
+        if (socket.type === "audio" || socket.type === "note") continue;
         const param = matchingParam(node, socket.id);
         if (param) params.push(param);
       }
@@ -2077,6 +2084,7 @@
                 class:port-audio={port.ty === "audio"}
                 class:port-float={port.ty === "float"}
                 class:port-gate={port.ty === "gate"}
+                class:port-note={port.ty === "note"}
                 style:top={`${NODE_ROW / 2 - 4}px`}
                 title={`${port.id} (${port.ty})`}
                 aria-label={port.id}
@@ -2116,6 +2124,7 @@
                 class:port-audio={port.ty === "audio"}
                 class:port-float={port.ty === "float"}
                 class:port-gate={port.ty === "gate"}
+                class:port-note={port.ty === "note"}
                 style:top={`${NODE_ROW / 2 - 4}px`}
                 title={`${port.id} (${port.ty})`}
                 aria-label={port.id}
@@ -2157,6 +2166,7 @@
                 class:port-audio={port.ty === "audio"}
                 class:port-float={port.ty === "float"}
                 class:port-gate={port.ty === "gate"}
+                class:port-note={port.ty === "note"}
                 style:top={`${portTop(node, index)}px`}
                 title={`${port.id} (${port.ty})`}
                 aria-label={port.id}
@@ -2173,6 +2183,7 @@
                 class:port-audio={port.ty === "audio"}
                 class:port-float={port.ty === "float"}
                 class:port-gate={port.ty === "gate"}
+                class:port-note={port.ty === "note"}
                 style:top={`${portTop(node, index)}px`}
                 title={`${port.id} (${port.ty})`}
                 aria-label={port.id}
@@ -2294,7 +2305,7 @@
                   onchange={(event) => {
                     socket.type = event.currentTarget
                       .value as NodeGroupInterface["inputs"][number]["type"];
-                    if (socket.type === "audio") {
+                    if (socket.type === "audio" || socket.type === "note") {
                       socket.default = undefined;
                       socket.minimum = undefined;
                       socket.maximum = undefined;
@@ -2309,6 +2320,7 @@
                   <option value="float">{t("graph.typeFloat")}</option>
                   <option value="gate">{t("graph.typeGate")}</option>
                   <option value="audio">{t("graph.typeAudio")}</option>
+                  <option value="note">{t("graph.typeNote")}</option>
                 </select>
                 <button
                   class="ghost small"
@@ -2318,7 +2330,7 @@
                 </button>
               </div>
               <div class="voice-interface-extra">
-                {#if socket.type !== "audio"}
+                {#if socket.type === "float" || socket.type === "gate"}
                   <label title={t("voice.socketDefault")}>
                     <span>{t("voice.socketDefault")}</span>
                     <NumberField

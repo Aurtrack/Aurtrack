@@ -872,9 +872,7 @@ fn group_interface_accepts_new_typed_socket() {
             "group_id": "piano.voice",
             "interface": {
                 "inputs": [
-                    { "id": "pitch", "name": "Pitch", "type": "float" },
-                    { "id": "velocity", "name": "Velocity", "type": "float" },
-                    { "id": "gate", "name": "Gate", "type": "gate" },
+                    { "id": "note", "name": "Note", "type": "note" },
                     { "id": "mod", "name": "Mod", "type": "float" }
                 ],
                 "outputs": [
@@ -889,7 +887,7 @@ fn group_interface_accepts_new_typed_socket() {
             .as_array()
             .unwrap()
             .len(),
-        4
+        2
     );
     let group_input = state["project"]["node_groups"]["piano.voice"]["graph"]["nodes"]["voice-in"]
         ["type_id"]
@@ -1404,7 +1402,7 @@ fn math_nodes_flow_into_voice_engine() {
         !(connection["to"]["node"] == "osc" && connection["to"]["port"] == "pitch")
     });
     connections.push(json!({
-        "from": { "node": "voice-in", "port": "pitch" },
+        "from": { "node": "note-separate", "port": "pitch" },
         "to": { "node": "add", "port": "a" }
     }));
     connections.push(json!({
@@ -1459,8 +1457,8 @@ fn nested_group_compiles_into_voice_plan() {
     let connections = voice["connections"].as_array_mut().unwrap();
     connections.retain(|connection| connection["to"]["port"] != "audio");
     connections.push(json!({
-        "from": { "node": "voice-in", "port": "pitch" },
-        "to": { "node": "nested", "port": "pitch" }
+        "from": { "node": "voice-in", "port": "note" },
+        "to": { "node": "nested", "port": "note" }
     }));
     connections.push(json!({
         "from": { "node": "nested", "port": "audio" },
@@ -1745,45 +1743,17 @@ fn audio_groups_create_persist_and_delete() {
 }
 
 #[test]
-fn piano_instrument_exposes_voice_interface_ports() {
+fn piano_instrument_exposes_note_input() {
     let mut session = Session::default();
     run(
         &mut session,
         "project.create",
-        json!({ "name": "piano-ports" }),
+        json!({ "name": "piano-note-port" }),
     );
     run(
         &mut session,
         "track.create",
         json!({ "name": "Piano", "source": "piano" }),
-    );
-    let value = run(
-        &mut session,
-        "node.add",
-        json!({
-            "track_id": "track-1",
-            "kind": "audio.value",
-            "position": [300.0, 300.0]
-        }),
-    );
-    let value_id = value["node_id"].as_str().unwrap();
-    run(
-        &mut session,
-        "node.connect",
-        json!({
-            "from": format!("/tracks/track-1/nodes/{value_id}"),
-            "from_port": "out",
-            "to": "/tracks/track-1/nodes/instrument",
-            "to_port": "pitch"
-        }),
-    );
-    run(
-        &mut session,
-        "param.set",
-        json!({
-            "path": "/tracks/track-1/nodes/instrument/params/velocity",
-            "value": 0.5
-        }),
     );
     let project = session.project().unwrap();
     let instrument = project.tracks[0]
@@ -1792,7 +1762,16 @@ fn piano_instrument_exposes_voice_interface_ports() {
         .values()
         .find(|node| node.id.as_str() == "instrument")
         .unwrap();
-    assert_eq!(instrument.params.get("velocity"), Some(&0.5));
+    let ports = aurtrack_graph::AudioGraph::inputs_with_all_groups(
+        instrument,
+        &project.node_groups,
+        &project.audio_groups,
+        None,
+    )
+    .unwrap();
+    assert_eq!(ports.len(), 1);
+    assert_eq!(ports[0].id, "note");
+    assert_eq!(ports[0].ty, aurtrack_graph::NodeGroupSocketType::Note);
     let (_, _, plan) = project.tracks[0]
         .playback_graph(&project.node_groups, &project.audio_groups)
         .unwrap();
@@ -1800,6 +1779,25 @@ fn piano_instrument_exposes_voice_interface_ports() {
         plan.nodes
             .iter()
             .any(|node| matches!(node.op, aurtrack_engine::GraphOp::Voice))
+    );
+    let voice = plan.piano.unwrap().voice.unwrap();
+    assert!(
+        voice
+            .nodes
+            .iter()
+            .any(|node| matches!(node.op, aurtrack_engine::VoiceOp::Pitch))
+    );
+    assert!(
+        voice
+            .nodes
+            .iter()
+            .any(|node| matches!(node.op, aurtrack_engine::VoiceOp::Velocity))
+    );
+    assert!(
+        voice
+            .nodes
+            .iter()
+            .any(|node| matches!(node.op, aurtrack_engine::VoiceOp::Gate))
     );
 }
 

@@ -33,6 +33,13 @@
 | graph | 图 | |
 | port | 端口 | |
 | connection | 连接 | |
+| socket | 端口 | 与 port 统一用「端口」 |
+| socket value | 端口值 | 组实例上未连接输入的实例值 |
+| socket default | 端口默认值 | 组接口上的模板默认值 |
+| group input | 组输入 | Blender 的 Group Input 节点 |
+| group output | 组输出 | Blender 的 Group Output 节点 |
+| note event | 音符事件 | |
+| note separate | 分离音符 | 把 Note 拆成 pitch、velocity、gate |
 | patch | 音色 | 与 preset 区分 |
 | preset | 预设 | |
 | parameter | 参数 | |
@@ -89,7 +96,7 @@
 | swing | 摇摆 | |
 | velocity | 力度 | |
 | pitch | 音高 | |
-| note | 音符 | |
+| note | 音符 | 逐音符事件数据，不是单个浮点数 |
 | polyphony | 复音 | |
 
 ## 不翻译的词

@@ -465,20 +465,11 @@ impl NodeGroupInterface {
 
     pub fn piano() -> Self {
         Self {
-            inputs: vec![
-                NodeGroupSocket::new("pitch", "Pitch", NodeGroupSocketType::Float)
-                    .with_default(261.63)
-                    .with_range(20.0, 20_000.0)
-                    .with_step(0.01),
-                NodeGroupSocket::new("velocity", "Velocity", NodeGroupSocketType::Float)
-                    .with_default(0.8)
-                    .with_range(0.0, 1.0)
-                    .with_step(0.01),
-                NodeGroupSocket::new("gate", "Gate", NodeGroupSocketType::Gate)
-                    .with_default(1.0)
-                    .with_range(0.0, 1.0)
-                    .with_step(1.0),
-            ],
+            inputs: vec![NodeGroupSocket::new(
+                "note",
+                "Note",
+                NodeGroupSocketType::Note,
+            )],
             outputs: vec![NodeGroupSocket::new(
                 "audio",
                 "Audio",
@@ -556,14 +547,11 @@ impl NodeGroupSocket {
         self
     }
 
-    /// 未连接时使用的数值。Audio socket 没有默认值。
+    /// 未连接时使用的数值。Audio 和 Note socket 没有数值默认值。
     pub fn effective_default(&self) -> Option<f64> {
-        if self.ty == NodeGroupSocketType::Audio {
-            return None;
-        }
         self.default.or(match self.ty {
             NodeGroupSocketType::Float | NodeGroupSocketType::Gate => Some(0.0),
-            NodeGroupSocketType::Audio => None,
+            NodeGroupSocketType::Audio | NodeGroupSocketType::Note => None,
         })
     }
 }
@@ -573,13 +561,15 @@ fn validate_group_socket(socket: &NodeGroupSocket) -> Result<(), GraphError> {
         socket: socket.id.clone(),
         reason: reason.to_string(),
     };
-    if socket.ty == NodeGroupSocketType::Audio
-        && (socket.default.is_some()
-            || socket.minimum.is_some()
-            || socket.maximum.is_some()
-            || socket.step.is_some())
+    if matches!(
+        socket.ty,
+        NodeGroupSocketType::Audio | NodeGroupSocketType::Note
+    ) && (socket.default.is_some()
+        || socket.minimum.is_some()
+        || socket.maximum.is_some()
+        || socket.step.is_some())
     {
-        return Err(invalid("audio socket 不能有数值默认值或范围"));
+        return Err(invalid("audio/note socket 不能有数值默认值或范围"));
     }
     for value in [socket.default, socket.minimum, socket.maximum, socket.step]
         .into_iter()
@@ -619,6 +609,8 @@ pub enum NodeGroupSocketType {
     Gate,
     #[serde(rename = "audio")]
     Audio,
+    #[serde(rename = "note")]
+    Note,
 }
 
 /// 节点 socket 的数据类型。
@@ -821,6 +813,34 @@ pub const VOICE_NODE_TYPES: &[VoiceNodeType] = &[
         category: "Output",
         inputs: &[],
         outputs: &[],
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "note.separate",
+        name: "Separate Note",
+        category: "Note",
+        inputs: &[VoiceSocketSpec {
+            id: "note",
+            name: "Note",
+            ty: SocketType::Note,
+        }],
+        outputs: &[
+            VoiceSocketSpec {
+                id: "pitch",
+                name: "Pitch",
+                ty: SocketType::Float,
+            },
+            VoiceSocketSpec {
+                id: "velocity",
+                name: "Velocity",
+                ty: SocketType::Float,
+            },
+            VoiceSocketSpec {
+                id: "gate",
+                name: "Gate",
+                ty: SocketType::Gate,
+            },
+        ],
         params: &[],
     },
     VoiceNodeType {
@@ -1094,22 +1114,24 @@ impl VoiceGraph {
 
     pub fn piano_default() -> Self {
         let input = VoiceNode::new(NodeId::fixed("voice-in"), "group.input");
+        let separate = VoiceNode::new(NodeId::fixed("note-separate"), "note.separate");
         let osc = VoiceNode::new(NodeId::fixed("osc"), "osc.partials");
         let env = VoiceNode::new(NodeId::fixed("env"), "env.percussive");
         let noise = VoiceNode::new(NodeId::fixed("noise"), "noise.burst");
         let mix = VoiceNode::new(NodeId::fixed("mix"), "voice.mix");
         let output = VoiceNode::new(NodeId::fixed("out"), "group.output");
         let mut nodes = BTreeMap::new();
-        for node in [input, osc, env, noise, mix, output] {
+        for node in [input, separate, osc, env, noise, mix, output] {
             nodes.insert(node.id.clone(), node);
         }
         let positions = [
             ("voice-in", [30.0, 140.0]),
-            ("osc", [300.0, 40.0]),
-            ("env", [580.0, 40.0]),
-            ("noise", [300.0, 220.0]),
-            ("mix", [850.0, 120.0]),
-            ("out", [1110.0, 120.0]),
+            ("note-separate", [280.0, 140.0]),
+            ("osc", [520.0, 40.0]),
+            ("env", [760.0, 40.0]),
+            ("noise", [520.0, 220.0]),
+            ("mix", [990.0, 120.0]),
+            ("out", [1220.0, 120.0]),
         ];
         for (id, position) in positions {
             if let Some(node) = nodes.get_mut(&NodeId::fixed(id)) {
@@ -1120,15 +1142,19 @@ impl VoiceGraph {
             nodes,
             connections: vec![
                 VoiceConnection::new(
-                    PortRef::fixed(NodeId::fixed("voice-in"), "pitch"),
+                    PortRef::fixed(NodeId::fixed("voice-in"), "note"),
+                    PortRef::fixed(NodeId::fixed("note-separate"), "note"),
+                ),
+                VoiceConnection::new(
+                    PortRef::fixed(NodeId::fixed("note-separate"), "pitch"),
                     PortRef::fixed(NodeId::fixed("osc"), "pitch"),
                 ),
                 VoiceConnection::new(
-                    PortRef::fixed(NodeId::fixed("voice-in"), "velocity"),
+                    PortRef::fixed(NodeId::fixed("note-separate"), "velocity"),
                     PortRef::fixed(NodeId::fixed("osc"), "velocity"),
                 ),
                 VoiceConnection::new(
-                    PortRef::fixed(NodeId::fixed("voice-in"), "velocity"),
+                    PortRef::fixed(NodeId::fixed("note-separate"), "velocity"),
                     PortRef::fixed(NodeId::fixed("noise"), "velocity"),
                 ),
                 VoiceConnection::new(
@@ -2435,7 +2461,7 @@ mod tests {
             .nodes
             .insert(id.clone(), VoiceNode::new(id.clone(), "math.add"));
         graph.connections.push(VoiceConnection {
-            from: PortRef::fixed(NodeId::fixed("voice-in"), "pitch"),
+            from: PortRef::fixed(NodeId::fixed("voice-in"), "note"),
             to: PortRef::new(id.clone(), "a"),
         });
         graph.connections.push(VoiceConnection {
@@ -2457,8 +2483,8 @@ mod tests {
         nested.group = Some("missing.voice".to_string());
         graph.nodes.insert(id.clone(), nested);
         graph.connections.push(VoiceConnection {
-            from: PortRef::fixed(NodeId::fixed("voice-in"), "pitch"),
-            to: PortRef::new(id, "pitch"),
+            from: PortRef::fixed(NodeId::fixed("voice-in"), "note"),
+            to: PortRef::new(id, "note"),
         });
         let error = graph
             .validate_with_groups(&interface, &BTreeMap::new())
@@ -2473,8 +2499,9 @@ mod tests {
         let compiled = graph.compile_graph().unwrap();
         assert_eq!(compiled.group.as_deref(), Some("piano.voice"));
         let group = NodeGroup::piano_default();
-        assert_eq!(group.interface.inputs.len(), 3);
-        assert_eq!(group.graph.nodes.len(), 6);
+        assert_eq!(group.interface.inputs.len(), 1);
+        assert_eq!(group.interface.inputs[0].ty, NodeGroupSocketType::Note);
+        assert_eq!(group.graph.nodes.len(), 7);
     }
 
     #[test]

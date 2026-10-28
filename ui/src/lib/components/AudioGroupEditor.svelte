@@ -315,7 +315,7 @@
 
   function setSocketType(socket: NodeGroupSocket, type: string): void {
     socket.type = type as NodeGroupSocket["type"];
-    if (type === "audio") {
+    if (type === "audio" || type === "note") {
       socket.default = undefined;
       socket.minimum = undefined;
       socket.maximum = undefined;
@@ -458,7 +458,7 @@
                   </button>
                 </div>
                 <div class="audio-group-socket-fields">
-                  {#if socket.type !== "audio"}
+                  {#if socket.type === "float" || socket.type === "gate"}
                     <label>
                       <span>{t("voice.socketDefault")}</span>
                       <input

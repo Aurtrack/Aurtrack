@@ -396,6 +396,7 @@ export const zhCN = {
   // 节点类型与分类
   "node.group.input": "组输入",
   "node.group.output": "组输出",
+  "node.note.separate": "分离音符",
   "node.voice.group": "节点组",
   "node.piano.voice": "钢琴声部",
   "node.osc.partials": "泛音振荡器",
@@ -439,6 +440,7 @@ export const zhCN = {
   "nodeCategory.Generator": "发生器",
   "nodeCategory.Envelope": "包络",
   "nodeCategory.Audio": "音频",
+  "nodeCategory.Note": "音符",
   "nodeCategory.Math": "数学",
   "nodeCategory.Instrument": "乐器",
   "nodeCategory.Plugin": "插件",
@@ -477,6 +479,7 @@ export const zhCN = {
   "param.min": "最小",
   "param.max": "最大",
   "socket.audio": "音频",
+  "socket.note": "音符",
   "socket.value": "值",
   "socket.gate": "门",
   "socket.pitch": "音高",
@@ -514,11 +517,13 @@ export const zhCN = {
   "graph.typeFloat": "浮点",
   "graph.typeGate": "门",
   "graph.typeAudio": "音频",
+  "graph.typeNote": "音符",
 
   "transport.total": "总时长",
   "transport.seconds": (params) => `${params.value} 秒`,
 
   "graph.noteDriven": "由钢琴卷帘的音符驱动",
+  "graph.noteInputHint": "未连接时使用钢琴卷帘的音符",
 
   "voice.socketDefault": "默认",
   "voice.socketMinimum": "最小",
