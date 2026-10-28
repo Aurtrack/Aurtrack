@@ -375,11 +375,15 @@ impl NodeGroup {
 }
 
 /// 运行时端口：来自节点声明或组接口。
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct VoicePort {
     pub id: String,
     pub name: String,
     pub ty: SocketType,
+    pub default: f64,
+    pub minimum: f64,
+    pub maximum: f64,
+    pub step: f64,
 }
 
 fn interface_ports(sockets: &[NodeGroupSocket]) -> Vec<VoicePort> {
@@ -389,6 +393,10 @@ fn interface_ports(sockets: &[NodeGroupSocket]) -> Vec<VoicePort> {
             id: socket.id.clone(),
             name: socket.name.clone(),
             ty: socket.ty,
+            default: socket.effective_default().unwrap_or(0.0),
+            minimum: socket.minimum.unwrap_or(f64::NEG_INFINITY),
+            maximum: socket.maximum.unwrap_or(f64::INFINITY),
+            step: socket.step.unwrap_or(0.01),
         })
         .collect()
 }
@@ -400,6 +408,10 @@ fn static_ports(sockets: &[VoiceSocketSpec]) -> Vec<VoicePort> {
             id: socket.id.to_string(),
             name: socket.name.to_string(),
             ty: socket.ty,
+            default: socket.default,
+            minimum: socket.minimum,
+            maximum: socket.maximum,
+            step: socket.step,
         })
         .collect()
 }
@@ -617,11 +629,48 @@ pub enum NodeGroupSocketType {
 pub type SocketType = NodeGroupSocketType;
 
 /// 节点类型的一个端口声明。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 pub struct VoiceSocketSpec {
     pub id: &'static str,
     pub name: &'static str,
     pub ty: SocketType,
+    pub default: f64,
+    pub minimum: f64,
+    pub maximum: f64,
+    pub step: f64,
+}
+
+impl VoiceSocketSpec {
+    pub const fn new(id: &'static str, name: &'static str, ty: SocketType) -> Self {
+        Self {
+            id,
+            name,
+            ty,
+            default: 0.0,
+            minimum: f64::NEG_INFINITY,
+            maximum: f64::INFINITY,
+            step: 0.01,
+        }
+    }
+
+    #[must_use]
+    pub const fn with_default(mut self, default: f64) -> Self {
+        self.default = default;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_range(mut self, minimum: f64, maximum: f64) -> Self {
+        self.minimum = minimum;
+        self.maximum = maximum;
+        self
+    }
+
+    #[must_use]
+    pub const fn with_step(mut self, step: f64) -> Self {
+        self.step = step;
+        self
+    }
 }
 
 /// 可注册的 Voice 节点类型。
@@ -642,159 +691,115 @@ const MATH_PARAMS: [ParamSpec; 1] = [ParamSpec {
     maximum: 1000.0,
 }];
 
-const OSC_INPUTS: [VoiceSocketSpec; 2] = [
-    VoiceSocketSpec {
-        id: "pitch",
-        name: "Pitch",
-        ty: SocketType::Float,
-    },
-    VoiceSocketSpec {
-        id: "velocity",
-        name: "Velocity",
-        ty: SocketType::Float,
-    },
-];
-const OSC_PARAMS: [ParamSpec; 4] = [
-    ParamSpec {
-        name: "partials",
-        default: 10.0,
-        minimum: 1.0,
-        maximum: 16.0,
-    },
-    ParamSpec {
-        name: "inharmonicity",
-        default: 0.0004,
-        minimum: 0.0,
-        maximum: 0.01,
-    },
-    ParamSpec {
-        name: "brightness",
-        default: 0.5,
-        minimum: 0.0,
-        maximum: 1.0,
-    },
-    ParamSpec {
-        name: "decay",
-        default: 1.2,
-        minimum: 0.1,
-        maximum: 8.0,
-    },
-];
-const ENV_PARAMS: [ParamSpec; 2] = [
-    ParamSpec {
-        name: "attack",
-        default: 0.004,
-        minimum: 0.0,
-        maximum: 1.0,
-    },
-    ParamSpec {
-        name: "decay",
-        default: 1.2,
-        minimum: 0.05,
-        maximum: 8.0,
-    },
-];
-const NOISE_PARAMS: [ParamSpec; 2] = [
-    ParamSpec {
-        name: "level",
-        default: 0.2,
-        minimum: 0.0,
-        maximum: 1.0,
-    },
-    ParamSpec {
-        name: "duration",
-        default: 0.008,
-        minimum: 0.001,
-        maximum: 0.2,
-    },
+const NOTE_IN: [VoiceSocketSpec; 1] = [VoiceSocketSpec::new("note", "Note", SocketType::Note)];
+
+const OSC_INPUTS: [VoiceSocketSpec; 6] = [
+    VoiceSocketSpec::new("pitch", "Pitch", SocketType::Float)
+        .with_default(261.63)
+        .with_range(20.0, 20_000.0)
+        .with_step(0.01),
+    VoiceSocketSpec::new("velocity", "Velocity", SocketType::Float)
+        .with_default(0.8)
+        .with_range(0.0, 1.0)
+        .with_step(0.01),
+    VoiceSocketSpec::new("partials", "Partials", SocketType::Float)
+        .with_default(10.0)
+        .with_range(1.0, 16.0)
+        .with_step(1.0),
+    VoiceSocketSpec::new("inharmonicity", "Inharmonicity", SocketType::Float)
+        .with_default(0.0004)
+        .with_range(0.0, 0.01)
+        .with_step(0.0001),
+    VoiceSocketSpec::new("brightness", "Brightness", SocketType::Float)
+        .with_default(0.55)
+        .with_range(0.0, 1.0)
+        .with_step(0.01),
+    VoiceSocketSpec::new("decay", "Decay", SocketType::Float)
+        .with_default(1.2)
+        .with_range(0.1, 8.0)
+        .with_step(0.01),
 ];
 
-const AUDIO_OUT: [VoiceSocketSpec; 1] = [VoiceSocketSpec {
-    id: "out",
-    name: "Audio",
-    ty: SocketType::Audio,
-}];
-const FLOAT_OUT: [VoiceSocketSpec; 1] = [VoiceSocketSpec {
-    id: "out",
-    name: "Value",
-    ty: SocketType::Float,
-}];
+const ENV_INPUTS: [VoiceSocketSpec; 3] = [
+    VoiceSocketSpec::new("in", "Audio", SocketType::Audio),
+    VoiceSocketSpec::new("attack", "Attack", SocketType::Float)
+        .with_default(0.004)
+        .with_range(0.0, 1.0)
+        .with_step(0.001),
+    VoiceSocketSpec::new("decay", "Decay", SocketType::Float)
+        .with_default(1.2)
+        .with_range(0.05, 8.0)
+        .with_step(0.01),
+];
+
+const NOISE_INPUTS: [VoiceSocketSpec; 3] = [
+    VoiceSocketSpec::new("velocity", "Velocity", SocketType::Float)
+        .with_default(0.8)
+        .with_range(0.0, 1.0)
+        .with_step(0.01),
+    VoiceSocketSpec::new("level", "Level", SocketType::Float)
+        .with_default(0.2)
+        .with_range(0.0, 1.0)
+        .with_step(0.01),
+    VoiceSocketSpec::new("duration", "Duration", SocketType::Float)
+        .with_default(0.008)
+        .with_range(0.001, 0.2)
+        .with_step(0.001),
+];
+
+const AUDIO_OUT: [VoiceSocketSpec; 1] = [VoiceSocketSpec::new("out", "Audio", SocketType::Audio)];
+const FLOAT_OUT: [VoiceSocketSpec; 1] = [VoiceSocketSpec::new("out", "Value", SocketType::Float)];
 const TWO_AUDIO_IN: [VoiceSocketSpec; 2] = [
-    VoiceSocketSpec {
-        id: "in1",
-        name: "A",
-        ty: SocketType::Audio,
-    },
-    VoiceSocketSpec {
-        id: "in2",
-        name: "B",
-        ty: SocketType::Audio,
-    },
+    VoiceSocketSpec::new("in1", "A", SocketType::Audio),
+    VoiceSocketSpec::new("in2", "B", SocketType::Audio),
 ];
 const TWO_FLOAT_IN: [VoiceSocketSpec; 2] = [
-    VoiceSocketSpec {
-        id: "a",
-        name: "A",
-        ty: SocketType::Float,
-    },
-    VoiceSocketSpec {
-        id: "b",
-        name: "B",
-        ty: SocketType::Float,
-    },
+    VoiceSocketSpec::new("a", "A", SocketType::Float)
+        .with_default(0.0)
+        .with_range(-1000.0, 1000.0),
+    VoiceSocketSpec::new("b", "B", SocketType::Float)
+        .with_default(0.0)
+        .with_range(-1000.0, 1000.0),
 ];
-const REROUTE_FLOAT_IN: [VoiceSocketSpec; 1] = [VoiceSocketSpec {
-    id: "in",
-    name: "Value",
-    ty: SocketType::Float,
-}];
-const REROUTE_GATE_IN: [VoiceSocketSpec; 1] = [VoiceSocketSpec {
-    id: "in",
-    name: "Gate",
-    ty: SocketType::Gate,
-}];
-const REROUTE_AUDIO_IN: [VoiceSocketSpec; 1] = [VoiceSocketSpec {
-    id: "in",
-    name: "Audio",
-    ty: SocketType::Audio,
-}];
-const REROUTE_FLOAT_OUT: [VoiceSocketSpec; 1] = [VoiceSocketSpec {
-    id: "out",
-    name: "Value",
-    ty: SocketType::Float,
-}];
-const REROUTE_GATE_OUT: [VoiceSocketSpec; 1] = [VoiceSocketSpec {
-    id: "out",
-    name: "Gate",
-    ty: SocketType::Gate,
-}];
+const REROUTE_FLOAT_IN: [VoiceSocketSpec; 1] =
+    [VoiceSocketSpec::new("in", "Value", SocketType::Float)];
+const REROUTE_GATE_IN: [VoiceSocketSpec; 1] =
+    [VoiceSocketSpec::new("in", "Gate", SocketType::Gate)];
+const REROUTE_AUDIO_IN: [VoiceSocketSpec; 1] =
+    [VoiceSocketSpec::new("in", "Audio", SocketType::Audio)];
+const REROUTE_FLOAT_OUT: [VoiceSocketSpec; 1] =
+    [VoiceSocketSpec::new("out", "Value", SocketType::Float)];
+const REROUTE_GATE_OUT: [VoiceSocketSpec; 1] =
+    [VoiceSocketSpec::new("out", "Gate", SocketType::Gate)];
 
 const MAP_RANGE_IN: [VoiceSocketSpec; 5] = [
-    VoiceSocketSpec {
-        id: "value",
-        name: "Value",
-        ty: SocketType::Float,
-    },
-    VoiceSocketSpec {
-        id: "from_min",
-        name: "From Min",
-        ty: SocketType::Float,
-    },
-    VoiceSocketSpec {
-        id: "from_max",
-        name: "From Max",
-        ty: SocketType::Float,
-    },
-    VoiceSocketSpec {
-        id: "to_min",
-        name: "To Min",
-        ty: SocketType::Float,
-    },
-    VoiceSocketSpec {
-        id: "to_max",
-        name: "To Max",
-        ty: SocketType::Float,
-    },
+    VoiceSocketSpec::new("value", "Value", SocketType::Float)
+        .with_default(0.0)
+        .with_range(-1000.0, 1000.0),
+    VoiceSocketSpec::new("from_min", "From Min", SocketType::Float)
+        .with_default(0.0)
+        .with_range(-1000.0, 1000.0),
+    VoiceSocketSpec::new("from_max", "From Max", SocketType::Float)
+        .with_default(1.0)
+        .with_range(-1000.0, 1000.0),
+    VoiceSocketSpec::new("to_min", "To Min", SocketType::Float)
+        .with_default(0.0)
+        .with_range(-1000.0, 1000.0),
+    VoiceSocketSpec::new("to_max", "To Max", SocketType::Float)
+        .with_default(1.0)
+        .with_range(-1000.0, 1000.0),
+];
+
+const CLAMP_INPUTS: [VoiceSocketSpec; 3] = [
+    VoiceSocketSpec::new("value", "Value", SocketType::Float)
+        .with_default(0.0)
+        .with_range(-1000.0, 1000.0),
+    VoiceSocketSpec::new("min", "Min", SocketType::Float)
+        .with_default(0.0)
+        .with_range(-1000.0, 1000.0),
+    VoiceSocketSpec::new("max", "Max", SocketType::Float)
+        .with_default(1.0)
+        .with_range(-1000.0, 1000.0),
 ];
 
 /// 所有可用 Voice 节点类型。UI 和命令面都从这里生成。
@@ -819,27 +824,11 @@ pub const VOICE_NODE_TYPES: &[VoiceNodeType] = &[
         id: "note.separate",
         name: "Separate Note",
         category: "Note",
-        inputs: &[VoiceSocketSpec {
-            id: "note",
-            name: "Note",
-            ty: SocketType::Note,
-        }],
+        inputs: &NOTE_IN,
         outputs: &[
-            VoiceSocketSpec {
-                id: "pitch",
-                name: "Pitch",
-                ty: SocketType::Float,
-            },
-            VoiceSocketSpec {
-                id: "velocity",
-                name: "Velocity",
-                ty: SocketType::Float,
-            },
-            VoiceSocketSpec {
-                id: "gate",
-                name: "Gate",
-                ty: SocketType::Gate,
-            },
+            VoiceSocketSpec::new("pitch", "Pitch", SocketType::Float),
+            VoiceSocketSpec::new("velocity", "Velocity", SocketType::Float),
+            VoiceSocketSpec::new("gate", "Gate", SocketType::Gate),
         ],
         params: &[],
     },
@@ -857,31 +846,23 @@ pub const VOICE_NODE_TYPES: &[VoiceNodeType] = &[
         category: "Generator",
         inputs: &OSC_INPUTS,
         outputs: &AUDIO_OUT,
-        params: &OSC_PARAMS,
+        params: &[],
     },
     VoiceNodeType {
         id: "env.percussive",
         name: "Percussive Envelope",
         category: "Envelope",
-        inputs: &[VoiceSocketSpec {
-            id: "in",
-            name: "Audio",
-            ty: SocketType::Audio,
-        }],
+        inputs: &ENV_INPUTS,
         outputs: &AUDIO_OUT,
-        params: &ENV_PARAMS,
+        params: &[],
     },
     VoiceNodeType {
         id: "noise.burst",
         name: "Noise Burst",
         category: "Generator",
-        inputs: &[VoiceSocketSpec {
-            id: "velocity",
-            name: "Velocity",
-            ty: SocketType::Float,
-        }],
+        inputs: &NOISE_INPUTS,
         outputs: &AUDIO_OUT,
-        params: &NOISE_PARAMS,
+        params: &[],
     },
     VoiceNodeType {
         id: "voice.mix",
@@ -919,23 +900,7 @@ pub const VOICE_NODE_TYPES: &[VoiceNodeType] = &[
         id: "math.clamp",
         name: "Clamp",
         category: "Math",
-        inputs: &[
-            VoiceSocketSpec {
-                id: "value",
-                name: "Value",
-                ty: SocketType::Float,
-            },
-            VoiceSocketSpec {
-                id: "min",
-                name: "Min",
-                ty: SocketType::Float,
-            },
-            VoiceSocketSpec {
-                id: "max",
-                name: "Max",
-                ty: SocketType::Float,
-            },
-        ],
+        inputs: &CLAMP_INPUTS,
         outputs: &FLOAT_OUT,
         params: &[],
     },
@@ -2490,6 +2455,21 @@ mod tests {
             .validate_with_groups(&interface, &BTreeMap::new())
             .unwrap_err();
         assert!(matches!(error, GraphError::GroupMissing(_)));
+    }
+
+    #[test]
+    fn voice_parameters_are_input_sockets() {
+        let node_type = voice_node_type("osc.partials").unwrap();
+        assert_eq!(node_type.inputs.len(), 6);
+        let partials = node_type
+            .inputs
+            .iter()
+            .find(|socket| socket.id == "partials")
+            .unwrap();
+        assert!((partials.default - 10.0).abs() < 1e-9);
+        assert!((partials.minimum - 1.0).abs() < 1e-9);
+        assert!((partials.maximum - 16.0).abs() < 1e-9);
+        assert!(node_type.params.is_empty());
     }
 
     #[test]

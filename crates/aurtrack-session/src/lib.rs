@@ -778,8 +778,9 @@ fn compile_voice_inner(
             let Some(connection) = voice.connections.iter().find(|connection| {
                 connection.to.node() == &id && connection.to.port() == port.id.as_str()
             }) else {
+                let value = node.params.get(&port.id).copied().unwrap_or(port.default);
                 let index = nodes.len();
-                nodes.push(VoiceNodePlan::new(VoiceOp::Constant(0.0), Vec::new()));
+                nodes.push(VoiceNodePlan::new(VoiceOp::Constant(value), Vec::new()));
                 inputs.push(index);
                 continue;
             };
@@ -4665,6 +4666,10 @@ fn voice_types_json() -> Vec<Value> {
                     "id": socket.id,
                     "name": socket.name,
                     "type": socket.ty,
+                    "default": socket.default,
+                    "minimum": socket.minimum,
+                    "maximum": socket.maximum,
+                    "step": socket.step,
                 })).collect::<Vec<_>>(),
                 "outputs": node_type.outputs.iter().map(|socket| json!({
                     "id": socket.id,

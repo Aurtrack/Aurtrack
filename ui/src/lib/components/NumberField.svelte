@@ -39,7 +39,12 @@
   let dragging = $state(false);
   let dirty = $state(false);
   let drag: Drag | null = null;
-  let decimals = $derived(precision ?? (step < 1 ? 2 : 0));
+  function stepDecimals(value: number): number {
+    if (!(value > 0) || !Number.isFinite(value)) return 2;
+    return Math.max(2, Math.min(6, Math.ceil(-Math.log10(value))));
+  }
+
+  let decimals = $derived(precision ?? stepDecimals(step));
 
   $effect(() => {
     if (editing || dragging) return;

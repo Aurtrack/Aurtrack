@@ -2665,6 +2665,11 @@ button:disabled {
 
 .voice-socket-row.out {
   padding: 0 12px 0 8px;
+  pointer-events: none;
+}
+
+.voice-socket-row.out .voice-port {
+  pointer-events: auto;
 }
 
 .voice-socket-row .voice-port {

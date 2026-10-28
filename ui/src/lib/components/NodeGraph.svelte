@@ -2293,8 +2293,7 @@
                       min={param.minimum}
                       max={param.maximum}
                       step={param.step ?? 0.01}
-                      precision={2}
-                      disabled={busy}
+                        disabled={busy}
                       onchange={(value) =>
                         onParamChange(owner.id, node.id, param.name, value)}
                     />
@@ -2347,7 +2346,6 @@
                     min={param.minimum}
                     max={param.maximum}
                     step={param.step ?? 0.01}
-                    precision={2}
                     disabled={busy}
                     onchange={(value) =>
                       onParamChange(owner.id, node.id, param.name, value)}
@@ -2597,7 +2595,6 @@
                     min={param.minimum}
                     max={param.maximum}
                     step={param.step ?? 0.01}
-                    precision={2}
                     disabled={busy}
                     onchange={(value) =>
                       onParamChange(owner.id, node.id, param.name, value)}

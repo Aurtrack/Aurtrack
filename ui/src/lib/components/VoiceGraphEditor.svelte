@@ -87,6 +87,10 @@
     id: string;
     name: string;
     ty: PortType;
+    default?: number;
+    minimum?: number;
+    maximum?: number;
+    step?: number;
     panel?: string;
   };
 
@@ -125,6 +129,10 @@
       id: socket.id,
       name: socket.name,
       ty: socket.type,
+      default: socket.default,
+      minimum: socket.minimum,
+      maximum: socket.maximum,
+      step: socket.step,
       panel: socket.panel,
     }));
   }
@@ -137,6 +145,10 @@
       id: socket.id,
       name: socket.name,
       ty: socket.type,
+      default: socket.default,
+      minimum: socket.minimum,
+      maximum: socket.maximum,
+      step: socket.step,
     }));
   }
 
@@ -270,6 +282,22 @@
       .get(node.type_id)
       ?.params.find((param) => param.name === portId);
     if (declared) return declared;
+    const staticSocket = typeById
+      .get(node.type_id)
+      ?.inputs.find((socket) => socket.id === portId);
+    if (
+      staticSocket &&
+      staticSocket.type !== "audio" &&
+      staticSocket.type !== "note"
+    ) {
+      return {
+        name: staticSocket.id,
+        default: staticSocket.default ?? 0,
+        minimum: staticSocket.minimum ?? -Infinity,
+        maximum: staticSocket.maximum ?? Infinity,
+        step: staticSocket.step ?? 0.01,
+      };
+    }
     if (node.type_id !== "voice.group") return undefined;
     const socket = nodeGroup(node)?.interface.inputs.find(
       (candidate) => candidate.id === portId,
@@ -2135,7 +2163,6 @@
                     min={param.minimum}
                     max={param.maximum}
                     step={param.step ?? 0.01}
-                    precision={2}
                     onchange={(value) => setParam(node, param.name, value)}
                   />
                 </div>
@@ -2183,8 +2210,7 @@
                   min={param.minimum}
                   max={param.maximum}
                   step={param.step ?? 0.01}
-                  precision={2}
-                  onchange={(value) => setParam(node, param.name, value)}
+                    onchange={(value) => setParam(node, param.name, value)}
                 />
               </div>
             </div>
@@ -2368,8 +2394,7 @@
                       min={socket.minimum}
                       max={socket.maximum}
                       step={socket.step ?? (socket.type === "gate" ? 1 : 0.01)}
-                      precision={2}
-                      onchange={(value) => {
+                        onchange={(value) => {
                         socket.default = value;
                         queueInterfaceSave();
                       }}
@@ -2380,8 +2405,7 @@
                     <NumberField
                       value={socket.minimum ?? 0}
                       step={0.01}
-                      precision={2}
-                      onchange={(value) => {
+                        onchange={(value) => {
                         socket.minimum = value;
                         queueInterfaceSave();
                       }}
@@ -2392,8 +2416,7 @@
                     <NumberField
                       value={socket.maximum ?? 1}
                       step={0.01}
-                      precision={2}
-                      onchange={(value) => {
+                        onchange={(value) => {
                         socket.maximum = value;
                         queueInterfaceSave();
                       }}
@@ -2471,8 +2494,7 @@
                   min={param.minimum}
                   max={param.maximum}
                   step={param.step ?? 0.01}
-                  precision={2}
-                  onchange={(value) => setParam(node, param.name, value)}
+                    onchange={(value) => setParam(node, param.name, value)}
                 />
               </label>
             {/each}

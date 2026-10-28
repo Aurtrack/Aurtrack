@@ -140,6 +140,19 @@ impl VoicePlan {
                         .inputs
                         .get(1)
                         .map_or(context.velocity, |input| values[*input]);
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    let partials = node.inputs.get(2).map_or(partials, |input| {
+                        (values[*input].round() as usize).clamp(1, 16)
+                    });
+                    let inharmonicity = node
+                        .inputs
+                        .get(3)
+                        .map_or(inharmonicity, |input| values[*input]);
+                    let brightness = node
+                        .inputs
+                        .get(4)
+                        .map_or(brightness, |input| values[*input]);
+                    let decay = node.inputs.get(5).map_or(decay, |input| values[*input]);
                     osc_partials(
                         pitch,
                         velocity,
@@ -152,10 +165,14 @@ impl VoicePlan {
                 },
                 VoiceOp::EnvPercussive { attack, decay } => {
                     let input = node.inputs.first().map_or(0.0, |input| values[*input]);
+                    let attack = node.inputs.get(1).map_or(attack, |input| values[*input]);
+                    let decay = node.inputs.get(2).map_or(decay, |input| values[*input]);
                     let attack_gain = (context.local_time / attack.max(0.0001)).min(1.0);
                     input * attack_gain * (-context.local_time / decay.max(0.01)).exp()
                 },
                 VoiceOp::NoiseBurst { level, duration } => {
+                    let level = node.inputs.get(1).map_or(level, |input| values[*input]);
+                    let duration = node.inputs.get(2).map_or(duration, |input| values[*input]);
                     if context.local_time > duration || !context.gate {
                         0.0
                     } else {

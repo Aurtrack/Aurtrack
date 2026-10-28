@@ -101,6 +101,8 @@ Audio 节点类型：`audio.group`、`audio.group.instance`、`audio.instrument.
 
 组接口 socket 类型：`float`、`gate`、`audio`、`note`。`note` 表示逐音符事件，不参与 Audio 采样，也没有数值默认值。
 
+Voice 节点的数值参数以输入 socket 暴露：未连接时显示并使用 socket default，连接后由连线覆盖。`value.float` 的 `value` 是节点属性，不是输入 socket。
+
 插件节点必须带 `plugin` 配置：
 
 ```json
