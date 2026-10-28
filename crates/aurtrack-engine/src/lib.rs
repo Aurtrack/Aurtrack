@@ -102,14 +102,12 @@ pub enum VoiceOp {
         brightness: f64,
         decay: f64,
     },
-    EnvPercussive {
+    Envelope {
         attack: f64,
         decay: f64,
     },
-    NoiseBurst {
-        level: f64,
-        duration: f64,
-    },
+    Noise,
+    Vca,
     Mix,
     GateNode,
     Add,
@@ -174,35 +172,31 @@ impl VoicePlan {
                         decay,
                     )
                 },
-                VoiceOp::EnvPercussive { attack, decay } => {
-                    let input = node.inputs.first().map_or(0.0, |input| values[*input]);
+                VoiceOp::Envelope { attack, decay } => {
+                    let time = node
+                        .inputs
+                        .first()
+                        .map_or(context.local_time, |input| values[*input]);
                     let attack = node.inputs.get(1).map_or(attack, |input| values[*input]);
                     let decay = node.inputs.get(2).map_or(decay, |input| values[*input]);
-                    let time = node
-                        .inputs
-                        .get(3)
-                        .map_or(context.local_time, |input| values[*input]);
                     let attack_gain = (time / attack.max(0.0001)).min(1.0);
-                    input * attack_gain * (-time / decay.max(0.01)).exp()
+                    attack_gain * (-time / decay.max(0.01)).exp()
                 },
-                VoiceOp::NoiseBurst { level, duration } => {
-                    let level = node.inputs.get(1).map_or(level, |input| values[*input]);
-                    let duration = node.inputs.get(2).map_or(duration, |input| values[*input]);
+                VoiceOp::Noise => {
                     let time = node
                         .inputs
-                        .get(3)
+                        .first()
                         .map_or(context.local_time, |input| values[*input]);
-                    if time > duration {
-                        0.0
-                    } else {
-                        let velocity = node.inputs.first().map_or(1.0, |input| values[*input]);
-                        let seed = node
-                            .inputs
-                            .get(4)
-                            .map_or(context.seed, |input| values[*input].to_bits());
-                        let noise = noise_sample(seed, time);
-                        noise * level * velocity * (-time / duration.max(0.001)).exp()
-                    }
+                    let seed = node
+                        .inputs
+                        .get(1)
+                        .map_or(context.seed, |input| values[*input].to_bits());
+                    noise_sample(seed, time)
+                },
+                VoiceOp::Vca => {
+                    let input = node.inputs.first().map_or(0.0, |input| values[*input]);
+                    let gain = node.inputs.get(1).map_or(1.0, |input| values[*input]);
+                    input * gain
                 },
                 VoiceOp::Mix => {
                     let factor = node.inputs.first().map_or(0.5, |input| values[*input]);
@@ -1337,23 +1331,26 @@ mod tests {
                     vec![],
                 ),
                 VoiceNodePlan::new(
-                    VoiceOp::EnvPercussive {
+                    VoiceOp::Envelope {
                         attack: 0.004,
                         decay: 1.8,
                     },
-                    vec![0],
+                    vec![],
                 ),
+                VoiceNodePlan::new(VoiceOp::Vca, vec![0, 1]),
+                VoiceNodePlan::new(VoiceOp::Noise, vec![]),
                 VoiceNodePlan::new(
-                    VoiceOp::NoiseBurst {
-                        level: 0.2,
-                        duration: 0.008,
+                    VoiceOp::Envelope {
+                        attack: 0.0001,
+                        decay: 0.05,
                     },
                     vec![],
                 ),
-                VoiceNodePlan::new(VoiceOp::Add, vec![1, 2]),
-                VoiceNodePlan::new(VoiceOp::Output, vec![3]),
+                VoiceNodePlan::new(VoiceOp::Vca, vec![3, 4]),
+                VoiceNodePlan::new(VoiceOp::Add, vec![2, 5]),
+                VoiceNodePlan::new(VoiceOp::Output, vec![6]),
             ],
-            4,
+            7,
         );
         let sample = plan.sample(VoiceContext {
             pitch: 261.63,
@@ -1367,16 +1364,10 @@ mod tests {
     }
 
     #[test]
-    fn noise_burst_varies_with_time() {
+    fn noise_source_varies_with_time() {
         let plan = VoicePlan::new(
             vec![
-                VoiceNodePlan::new(
-                    VoiceOp::NoiseBurst {
-                        level: 0.5,
-                        duration: 0.05,
-                    },
-                    vec![],
-                ),
+                VoiceNodePlan::new(VoiceOp::Noise, vec![]),
                 VoiceNodePlan::new(VoiceOp::Output, vec![0]),
             ],
             1,

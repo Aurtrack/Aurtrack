@@ -72,18 +72,25 @@ Piano Voice 的默认 Voice 图把外部接口收敛成一个 `Note`：
 group.input(note)
   └─ note.separate
        ├─ pitch ──→ osc.pitch
-       ├─ velocity ─→ osc.velocity / noise.velocity
-       └─ gate ───→ gate.gate
+       ├─ velocity ─→ osc.velocity / vel-level.a
+       ├─ index ───→ white-noise.w ──→ noise.seed
+       └─ gate ────→ gate.gate
 
-time ──→ env.time
-time ──→ noise.time
-note-separate.index ──→ white-noise.w ──→ noise.seed
+time ──→ env.time / noise-env.time / noise.time
 
-osc/env ──→ add.A
-noise   ──→ add.B
-add     ──→ gate.in
-gate    ──→ out.audio
+osc ──→ osc-vca.in
+env ──→ osc-vca.gain
+osc-vca ──→ add.A
+
+noise ──→ noise-vca.in
+velocity × level × noise-env ──→ noise-vca.gain
+noise-vca ──→ add.B
+
+add ──→ gate.in
+gate ──→ out.audio
 ```
+
+`Envelope` 只输出控制值，`VCA` 负责音频乘控制值；`Noise` 只输出噪声源。
 
 钢琴轨的 Audio 图默认把 `audio.note` 音符输入节点连到 `audio.group.note`。断开这条线即停止音符事件；断开 `gate.gate` 即静音输出。
 

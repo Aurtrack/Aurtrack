@@ -1522,7 +1522,7 @@ fn group_from_nodes_rewires_boundaries() {
     assert_eq!(group_node.group.as_deref(), Some(group_id));
     let child = &project.node_groups[group_id];
     assert_eq!(child.interface.inputs.len(), 3);
-    assert_eq!(child.interface.outputs.len(), 1);
+    assert_eq!(child.interface.outputs.len(), 2);
     assert!(child.graph.nodes.keys().any(|id| id.to_string() == "osc"));
     assert!(child.graph.nodes.keys().any(|id| id.to_string() == "env"));
     let plan = project.tracks[0]

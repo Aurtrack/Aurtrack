@@ -720,8 +720,11 @@ const OSC_INPUTS: [VoiceSocketSpec; 6] = [
         .with_step(0.01),
 ];
 
-const ENV_INPUTS: [VoiceSocketSpec; 4] = [
-    VoiceSocketSpec::new("in", "Audio", SocketType::Audio),
+const ENVELOPE_INPUTS: [VoiceSocketSpec; 3] = [
+    VoiceSocketSpec::new("time", "Time", SocketType::Float)
+        .with_default(0.0)
+        .with_range(0.0, 1000.0)
+        .with_step(0.001),
     VoiceSocketSpec::new("attack", "Attack", SocketType::Float)
         .with_default(0.004)
         .with_range(0.0, 1.0)
@@ -729,26 +732,10 @@ const ENV_INPUTS: [VoiceSocketSpec; 4] = [
     VoiceSocketSpec::new("decay", "Decay", SocketType::Float)
         .with_default(1.2)
         .with_range(0.05, 8.0)
-        .with_step(0.01),
-    VoiceSocketSpec::new("time", "Time", SocketType::Float)
-        .with_default(0.0)
-        .with_range(0.0, 1000.0)
         .with_step(0.001),
 ];
 
-const NOISE_INPUTS: [VoiceSocketSpec; 5] = [
-    VoiceSocketSpec::new("velocity", "Velocity", SocketType::Float)
-        .with_default(0.8)
-        .with_range(0.0, 1.0)
-        .with_step(0.01),
-    VoiceSocketSpec::new("level", "Level", SocketType::Float)
-        .with_default(0.2)
-        .with_range(0.0, 1.0)
-        .with_step(0.01),
-    VoiceSocketSpec::new("duration", "Duration", SocketType::Float)
-        .with_default(0.008)
-        .with_range(0.001, 0.2)
-        .with_step(0.001),
+const NOISE_SOURCE_INPUTS: [VoiceSocketSpec; 2] = [
     VoiceSocketSpec::new("time", "Time", SocketType::Float)
         .with_default(0.0)
         .with_range(0.0, 1000.0)
@@ -757,6 +744,14 @@ const NOISE_INPUTS: [VoiceSocketSpec; 5] = [
         .with_default(0.0)
         .with_range(0.0, 1.0)
         .with_step(0.001),
+];
+
+const VCA_INPUTS: [VoiceSocketSpec; 2] = [
+    VoiceSocketSpec::new("in", "Audio", SocketType::Audio),
+    VoiceSocketSpec::new("gain", "Gain", SocketType::Float)
+        .with_default(1.0)
+        .with_range(0.0, 2.0)
+        .with_step(0.01),
 ];
 
 const AUDIO_OUT: [VoiceSocketSpec; 1] = [VoiceSocketSpec::new("out", "Audio", SocketType::Audio)];
@@ -895,18 +890,26 @@ pub const VOICE_NODE_TYPES: &[VoiceNodeType] = &[
         params: &[],
     },
     VoiceNodeType {
-        id: "env.percussive",
+        id: "voice.envelope",
         name: "Percussive Envelope",
         category: "Envelope",
-        inputs: &ENV_INPUTS,
+        inputs: &ENVELOPE_INPUTS,
+        outputs: &FLOAT_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "voice.noise",
+        name: "Noise",
+        category: "Generator",
+        inputs: &NOISE_SOURCE_INPUTS,
         outputs: &AUDIO_OUT,
         params: &[],
     },
     VoiceNodeType {
-        id: "noise.burst",
-        name: "Noise Burst",
-        category: "Generator",
-        inputs: &NOISE_INPUTS,
+        id: "voice.vca",
+        name: "VCA",
+        category: "Audio",
+        inputs: &VCA_INPUTS,
         outputs: &AUDIO_OUT,
         params: &[],
     },
@@ -1160,10 +1163,19 @@ impl VoiceGraph {
         let input = VoiceNode::new(NodeId::fixed("voice-in"), "group.input");
         let separate = VoiceNode::new(NodeId::fixed("note-separate"), "note.separate");
         let osc = VoiceNode::new(NodeId::fixed("osc"), "osc.partials");
-        let env = VoiceNode::new(NodeId::fixed("env"), "env.percussive");
-        let noise = VoiceNode::new(NodeId::fixed("noise"), "noise.burst");
+        let env = VoiceNode::new(NodeId::fixed("env"), "voice.envelope");
+        let osc_vca = VoiceNode::new(NodeId::fixed("osc-vca"), "voice.vca");
+        let noise = VoiceNode::new(NodeId::fixed("noise"), "voice.noise");
+        let mut noise_env = VoiceNode::new(NodeId::fixed("noise-env"), "voice.envelope");
+        noise_env.params.insert("attack".to_string(), 0.001);
+        noise_env.params.insert("decay".to_string(), 0.008);
+        let noise_vca = VoiceNode::new(NodeId::fixed("noise-vca"), "voice.vca");
         let time = VoiceNode::new(NodeId::fixed("time"), "voice.time");
         let white_noise = VoiceNode::new(NodeId::fixed("white-noise"), "voice.white_noise");
+        let vel_level = VoiceNode::new(NodeId::fixed("vel-level"), "math.multiply");
+        let noise_gain = VoiceNode::new(NodeId::fixed("noise-gain"), "math.multiply");
+        let mut level = VoiceNode::new(NodeId::fixed("level"), "value.float");
+        level.params.insert("value".to_string(), 0.2);
         let add = VoiceNode::new(NodeId::fixed("add"), "voice.add");
         let gate = VoiceNode::new(NodeId::fixed("gate"), "voice.gate");
         let output = VoiceNode::new(NodeId::fixed("out"), "group.output");
@@ -1173,9 +1185,15 @@ impl VoiceGraph {
             separate,
             osc,
             env,
+            osc_vca,
             noise,
+            noise_env,
+            noise_vca,
             time,
             white_noise,
+            vel_level,
+            noise_gain,
+            level,
             add,
             gate,
             output,
@@ -1187,12 +1205,18 @@ impl VoiceGraph {
             ("note-separate", [280.0, 140.0]),
             ("osc", [520.0, 40.0]),
             ("env", [760.0, 40.0]),
+            ("osc-vca", [960.0, 40.0]),
             ("noise", [520.0, 220.0]),
-            ("time", [800.0, 300.0]),
-            ("white-noise", [760.0, 400.0]),
-            ("add", [990.0, 140.0]),
-            ("gate", [1160.0, 140.0]),
-            ("out", [1350.0, 140.0]),
+            ("noise-env", [760.0, 220.0]),
+            ("noise-vca", [960.0, 220.0]),
+            ("time", [800.0, 360.0]),
+            ("white-noise", [760.0, 440.0]),
+            ("vel-level", [760.0, 540.0]),
+            ("level", [520.0, 620.0]),
+            ("noise-gain", [960.0, 540.0]),
+            ("add", [1180.0, 140.0]),
+            ("gate", [1340.0, 140.0]),
+            ("out", [1500.0, 140.0]),
         ];
         for (id, position) in positions {
             if let Some(node) = nodes.get_mut(&NodeId::fixed(id)) {
@@ -1216,15 +1240,51 @@ impl VoiceGraph {
                 ),
                 VoiceConnection::new(
                     PortRef::fixed(NodeId::fixed("note-separate"), "velocity"),
-                    PortRef::fixed(NodeId::fixed("noise"), "velocity"),
+                    PortRef::fixed(NodeId::fixed("vel-level"), "a"),
+                ),
+                VoiceConnection::new(
+                    PortRef::fixed(NodeId::fixed("level"), "out"),
+                    PortRef::fixed(NodeId::fixed("vel-level"), "b"),
+                ),
+                VoiceConnection::new(
+                    PortRef::fixed(NodeId::fixed("vel-level"), "out"),
+                    PortRef::fixed(NodeId::fixed("noise-gain"), "a"),
+                ),
+                VoiceConnection::new(
+                    PortRef::fixed(NodeId::fixed("noise-env"), "out"),
+                    PortRef::fixed(NodeId::fixed("noise-gain"), "b"),
+                ),
+                VoiceConnection::new(
+                    PortRef::fixed(NodeId::fixed("noise-gain"), "out"),
+                    PortRef::fixed(NodeId::fixed("noise-vca"), "gain"),
+                ),
+                VoiceConnection::new(
+                    PortRef::fixed(NodeId::fixed("noise"), "out"),
+                    PortRef::fixed(NodeId::fixed("noise-vca"), "in"),
+                ),
+                VoiceConnection::new(
+                    PortRef::fixed(NodeId::fixed("noise-vca"), "out"),
+                    PortRef::fixed(NodeId::fixed("add"), "in2"),
                 ),
                 VoiceConnection::new(
                     PortRef::fixed(NodeId::fixed("osc"), "out"),
-                    PortRef::fixed(NodeId::fixed("env"), "in"),
+                    PortRef::fixed(NodeId::fixed("osc-vca"), "in"),
+                ),
+                VoiceConnection::new(
+                    PortRef::fixed(NodeId::fixed("env"), "out"),
+                    PortRef::fixed(NodeId::fixed("osc-vca"), "gain"),
+                ),
+                VoiceConnection::new(
+                    PortRef::fixed(NodeId::fixed("osc-vca"), "out"),
+                    PortRef::fixed(NodeId::fixed("add"), "in1"),
                 ),
                 VoiceConnection::new(
                     PortRef::fixed(NodeId::fixed("time"), "out"),
                     PortRef::fixed(NodeId::fixed("env"), "time"),
+                ),
+                VoiceConnection::new(
+                    PortRef::fixed(NodeId::fixed("time"), "out"),
+                    PortRef::fixed(NodeId::fixed("noise-env"), "time"),
                 ),
                 VoiceConnection::new(
                     PortRef::fixed(NodeId::fixed("time"), "out"),
@@ -1239,20 +1299,12 @@ impl VoiceGraph {
                     PortRef::fixed(NodeId::fixed("noise"), "seed"),
                 ),
                 VoiceConnection::new(
-                    PortRef::fixed(NodeId::fixed("env"), "out"),
-                    PortRef::fixed(NodeId::fixed("add"), "in1"),
-                ),
-                VoiceConnection::new(
-                    PortRef::fixed(NodeId::fixed("noise"), "out"),
-                    PortRef::fixed(NodeId::fixed("add"), "in2"),
+                    PortRef::fixed(NodeId::fixed("note-separate"), "gate"),
+                    PortRef::fixed(NodeId::fixed("gate"), "gate"),
                 ),
                 VoiceConnection::new(
                     PortRef::fixed(NodeId::fixed("add"), "out"),
                     PortRef::fixed(NodeId::fixed("gate"), "in"),
-                ),
-                VoiceConnection::new(
-                    PortRef::fixed(NodeId::fixed("note-separate"), "gate"),
-                    PortRef::fixed(NodeId::fixed("gate"), "gate"),
                 ),
                 VoiceConnection::new(
                     PortRef::fixed(NodeId::fixed("gate"), "out"),
@@ -2601,7 +2653,7 @@ mod tests {
         let group = NodeGroup::piano_default();
         assert_eq!(group.interface.inputs.len(), 1);
         assert_eq!(group.interface.inputs[0].ty, NodeGroupSocketType::Note);
-        assert_eq!(group.graph.nodes.len(), 10);
+        assert_eq!(group.graph.nodes.len(), 16);
     }
 
     #[test]

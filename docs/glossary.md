@@ -49,6 +49,9 @@
 | seed | 种子 | 当前音符的确定性随机种子，由序号经白噪声转换 |
 | note index | 音符序号 | `Separate Note` 的 index 输出，当前音符在轨道事件列表中的序号 |
 | white noise | 白噪声 | 1D 确定性哈希，输入相同则输出相同 |
+| envelope | 包络 | 只输出控制值，不直接处理音频 |
+| VCA | 压控放大器 | 音频 × 控制值 |
+| noise | 噪声 | 只输出噪声音频源 |
 | patch | 音色 | 与 preset 区分 |
 | preset | 预设 | |
 | parameter | 参数 | |

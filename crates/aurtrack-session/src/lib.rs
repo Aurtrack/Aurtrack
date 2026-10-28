@@ -958,14 +958,12 @@ fn compile_voice_inner(
                     decay: param("decay", 1.4),
                 }
             },
-            "env.percussive" => VoiceOp::EnvPercussive {
+            "voice.envelope" => VoiceOp::Envelope {
                 attack: param("attack", 0.004),
                 decay: param("decay", 1.8),
             },
-            "noise.burst" => VoiceOp::NoiseBurst {
-                level: param("level", 0.15),
-                duration: param("duration", 0.008),
-            },
+            "voice.noise" => VoiceOp::Noise,
+            "voice.vca" => VoiceOp::Vca,
             "voice.add" | "math.add" => VoiceOp::Add,
             "voice.mix" => VoiceOp::Mix,
             "voice.gate" => VoiceOp::GateNode,
