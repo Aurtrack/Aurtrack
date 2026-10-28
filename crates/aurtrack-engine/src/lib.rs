@@ -54,6 +54,7 @@ pub struct VoiceContext {
     pub local_time: f64,
     pub gate: bool,
     pub seed: u64,
+    pub note_index: u64,
 }
 
 /// Voice 子图编译结果。
@@ -92,7 +93,8 @@ pub enum VoiceOp {
     Velocity,
     Gate,
     Time,
-    Seed,
+    NoteIndex,
+    WhiteNoise,
     Constant(f64),
     OscPartials {
         partials: usize,
@@ -129,7 +131,11 @@ impl VoicePlan {
                 VoiceOp::Velocity => context.velocity,
                 VoiceOp::Gate => f64::from(u8::from(context.gate)),
                 VoiceOp::Time => context.local_time,
-                VoiceOp::Seed => context.seed as f64 / u64::MAX as f64,
+                VoiceOp::NoteIndex => context.note_index as f64,
+                VoiceOp::WhiteNoise => {
+                    let value = node.inputs.first().map_or(0.0, |input| values[*input]);
+                    white_noise(value)
+                },
                 VoiceOp::Constant(value) => value,
                 VoiceOp::OscPartials {
                     partials,
@@ -241,12 +247,19 @@ impl VoicePlan {
     }
 }
 
-fn noise_sample(seed: u64, time: f64) -> f64 {
-    let mut state = seed ^ time.to_bits().wrapping_mul(0x9E37_79B9_7F4A_7C15);
+fn hash64(mut state: u64) -> u64 {
     state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
     state = (state ^ (state >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
     state = (state ^ (state >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-    state ^= state >> 31;
+    state ^ (state >> 31)
+}
+
+fn white_noise(value: f64) -> f64 {
+    (hash64(value.to_bits()) >> 11) as f64 / (1_u64 << 53) as f64
+}
+
+fn noise_sample(seed: u64, time: f64) -> f64 {
+    let state = hash64(seed ^ time.to_bits().wrapping_mul(0x9E37_79B9_7F4A_7C15));
     (state >> 11) as f64 / (1_u64 << 53) as f64 * 2.0 - 1.0
 }
 
@@ -298,7 +311,7 @@ impl PianoPlan {
 
     pub fn sample(&self, notes: &[NotePlan], time: f64) -> f64 {
         let mut output = 0.0;
-        for note in notes {
+        for (index, note) in notes.iter().enumerate() {
             let local = time - note.start;
             if local < 0.0 || local > note.duration + 0.5 {
                 continue;
@@ -310,6 +323,7 @@ impl PianoPlan {
                     local_time: local,
                     gate: local <= note.duration,
                     seed: note.start.to_bits() ^ note.frequency.to_bits() ^ note.velocity.to_bits(),
+                    note_index: index as u64,
                 });
                 continue;
             }
@@ -1347,6 +1361,7 @@ mod tests {
             local_time: 0.002,
             gate: true,
             seed: 7,
+            note_index: 0,
         });
         assert!(sample.abs() > 0.0001);
     }
@@ -1373,30 +1388,33 @@ mod tests {
                 local_time,
                 gate: true,
                 seed: 42,
+                note_index: 0,
             })
         };
         assert!((sample(0.001) - sample(0.002)).abs() > 1e-9);
     }
 
     #[test]
-    fn voice_time_and_seed_are_explicit_nodes() {
+    fn voice_index_and_white_noise_are_explicit_nodes() {
         let context = VoiceContext {
             pitch: 261.63,
             velocity: 0.8,
             local_time: 0.25,
             gate: true,
             seed: 42,
+            note_index: 3,
         };
         let plan = VoicePlan::new(
             vec![
+                VoiceNodePlan::new(VoiceOp::NoteIndex, vec![]),
+                VoiceNodePlan::new(VoiceOp::WhiteNoise, vec![0]),
                 VoiceNodePlan::new(VoiceOp::Time, vec![]),
-                VoiceNodePlan::new(VoiceOp::Seed, vec![]),
-                VoiceNodePlan::new(VoiceOp::Add, vec![0, 1]),
-                VoiceNodePlan::new(VoiceOp::Output, vec![2]),
+                VoiceNodePlan::new(VoiceOp::Add, vec![1, 2]),
+                VoiceNodePlan::new(VoiceOp::Output, vec![3]),
             ],
-            3,
+            4,
         );
-        let expected = 0.25 + 42.0 / u64::MAX as f64;
+        let expected = white_noise(3.0) + 0.25;
         assert!((plan.sample(context) - expected).abs() < 1e-9);
     }
 
@@ -1408,6 +1426,7 @@ mod tests {
             local_time: 0.0,
             gate: true,
             seed: 7,
+            note_index: 0,
         };
         for (gate, expected) in [(0.0, 0.0), (1.0, 0.5)] {
             let plan = VoicePlan::new(
@@ -1432,6 +1451,7 @@ mod tests {
             local_time: 0.0,
             gate: true,
             seed: 7,
+            note_index: 0,
         };
         for (factor, expected) in [(0.0, 0.25), (0.25, 0.375), (1.0, 0.75)] {
             let plan = VoicePlan::new(

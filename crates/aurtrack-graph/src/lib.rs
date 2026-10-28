@@ -785,8 +785,18 @@ const VOICE_TIME_OUT: [VoiceSocketSpec; 1] =
         .with_default(0.0)
         .with_range(0.0, 1000.0)
         .with_step(0.001)];
-const VOICE_SEED_OUT: [VoiceSocketSpec; 1] =
-    [VoiceSocketSpec::new("out", "Seed", SocketType::Float)
+const VOICE_INDEX_OUT: [VoiceSocketSpec; 1] =
+    [VoiceSocketSpec::new("out", "Index", SocketType::Float)
+        .with_default(0.0)
+        .with_range(0.0, 1_000_000.0)
+        .with_step(1.0)];
+const WHITE_NOISE_INPUTS: [VoiceSocketSpec; 1] =
+    [VoiceSocketSpec::new("w", "W", SocketType::Float)
+        .with_default(0.0)
+        .with_range(-1000.0, 1000.0)
+        .with_step(0.01)];
+const WHITE_NOISE_OUT: [VoiceSocketSpec; 1] =
+    [VoiceSocketSpec::new("out", "Value", SocketType::Float)
         .with_default(0.0)
         .with_range(0.0, 1.0)
         .with_step(0.001)];
@@ -934,11 +944,19 @@ pub const VOICE_NODE_TYPES: &[VoiceNodeType] = &[
         params: &[],
     },
     VoiceNodeType {
-        id: "voice.seed",
-        name: "Seed",
+        id: "voice.note_index",
+        name: "Note Index",
         category: "Input",
         inputs: &[],
-        outputs: &VOICE_SEED_OUT,
+        outputs: &VOICE_INDEX_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "voice.white_noise",
+        name: "White Noise",
+        category: "Generator",
+        inputs: &WHITE_NOISE_INPUTS,
+        outputs: &WHITE_NOISE_OUT,
         params: &[],
     },
     VoiceNodeType {
@@ -1146,6 +1164,7 @@ impl VoiceGraph {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     pub fn piano_default() -> Self {
         let input = VoiceNode::new(NodeId::fixed("voice-in"), "group.input");
         let separate = VoiceNode::new(NodeId::fixed("note-separate"), "note.separate");
@@ -1153,13 +1172,24 @@ impl VoiceGraph {
         let env = VoiceNode::new(NodeId::fixed("env"), "env.percussive");
         let noise = VoiceNode::new(NodeId::fixed("noise"), "noise.burst");
         let time = VoiceNode::new(NodeId::fixed("time"), "voice.time");
-        let seed = VoiceNode::new(NodeId::fixed("seed"), "voice.seed");
+        let index = VoiceNode::new(NodeId::fixed("note-index"), "voice.note_index");
+        let white_noise = VoiceNode::new(NodeId::fixed("white-noise"), "voice.white_noise");
         let add = VoiceNode::new(NodeId::fixed("add"), "voice.add");
         let gate = VoiceNode::new(NodeId::fixed("gate"), "voice.gate");
         let output = VoiceNode::new(NodeId::fixed("out"), "group.output");
         let mut nodes = BTreeMap::new();
         for node in [
-            input, separate, osc, env, noise, time, seed, add, gate, output,
+            input,
+            separate,
+            osc,
+            env,
+            noise,
+            time,
+            index,
+            white_noise,
+            add,
+            gate,
+            output,
         ] {
             nodes.insert(node.id.clone(), node);
         }
@@ -1170,7 +1200,8 @@ impl VoiceGraph {
             ("env", [760.0, 40.0]),
             ("noise", [520.0, 220.0]),
             ("time", [800.0, 300.0]),
-            ("seed", [620.0, 380.0]),
+            ("note-index", [520.0, 380.0]),
+            ("white-noise", [760.0, 440.0]),
             ("add", [990.0, 140.0]),
             ("gate", [1160.0, 140.0]),
             ("out", [1350.0, 140.0]),
@@ -1212,7 +1243,11 @@ impl VoiceGraph {
                     PortRef::fixed(NodeId::fixed("noise"), "time"),
                 ),
                 VoiceConnection::new(
-                    PortRef::fixed(NodeId::fixed("seed"), "out"),
+                    PortRef::fixed(NodeId::fixed("note-index"), "out"),
+                    PortRef::fixed(NodeId::fixed("white-noise"), "w"),
+                ),
+                VoiceConnection::new(
+                    PortRef::fixed(NodeId::fixed("white-noise"), "out"),
                     PortRef::fixed(NodeId::fixed("noise"), "seed"),
                 ),
                 VoiceConnection::new(
@@ -2578,7 +2613,7 @@ mod tests {
         let group = NodeGroup::piano_default();
         assert_eq!(group.interface.inputs.len(), 1);
         assert_eq!(group.interface.inputs[0].ty, NodeGroupSocketType::Note);
-        assert_eq!(group.graph.nodes.len(), 10);
+        assert_eq!(group.graph.nodes.len(), 11);
     }
 
     #[test]

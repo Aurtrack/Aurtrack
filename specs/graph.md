@@ -77,7 +77,7 @@ group.input(note)
 
 time ──→ env.time
 time ──→ noise.time
-seed ──→ noise.seed
+note-index ──→ white-noise.w ──→ noise.seed
 
 osc/env ──→ add.A
 noise   ──→ add.B
