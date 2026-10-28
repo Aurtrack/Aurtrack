@@ -1743,6 +1743,48 @@ fn audio_groups_create_persist_and_delete() {
 }
 
 #[test]
+fn connecting_to_occupied_input_replaces_previous_link() {
+    let mut session = Session::default();
+    run(
+        &mut session,
+        "project.create",
+        json!({ "name": "replace-input" }),
+    );
+    run(
+        &mut session,
+        "track.create",
+        json!({ "name": "Piano", "source": "piano" }),
+    );
+    let added = run(
+        &mut session,
+        "node.add",
+        json!({
+            "track_id": "track-1",
+            "kind": "audio.group",
+            "group": "piano.voice"
+        }),
+    );
+    let node_id = added["node_id"].as_str().unwrap();
+    run(
+        &mut session,
+        "node.connect",
+        json!({
+            "from": format!("/tracks/track-1/nodes/{node_id}"),
+            "from_port": "out",
+            "to": "/tracks/track-1/nodes/output",
+            "to_port": "in"
+        }),
+    );
+    let project = session.project().unwrap();
+    let connections = &project.tracks[0].graph.connections;
+    assert_eq!(connections.len(), 1);
+    assert_eq!(connections[0].from.node().as_str(), node_id);
+    project.tracks[0]
+        .playback_graph(&project.node_groups, &project.audio_groups)
+        .unwrap();
+}
+
+#[test]
 fn piano_instrument_exposes_note_input() {
     let mut session = Session::default();
     run(

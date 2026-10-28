@@ -4287,6 +4287,23 @@ impl Session {
             .iter_mut()
             .find(|track| track.id == track_id)
             .ok_or_else(|| CommandError::not_found(format!("找不到轨道：{track_id}")))?;
+        let multi_input = track
+            .graph
+            .nodes
+            .get(to.node())
+            .is_some_and(|node| aurtrack_graph::audio_multi_input(&node.type_id));
+        if !multi_input {
+            let previous: Vec<_> = track
+                .graph
+                .connections
+                .iter()
+                .filter(|connection| connection.to == to)
+                .map(|connection| connection.from.clone())
+                .collect();
+            for from in previous {
+                let _ = track.graph.disconnect(&from, &to);
+            }
+        }
         track.graph.connect(from, to).map_err(graph_error)?;
         Ok(CommandResponse::ok(json!({
             "from": args.from,

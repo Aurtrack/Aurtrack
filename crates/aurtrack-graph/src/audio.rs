@@ -1030,7 +1030,23 @@ impl AudioGraph {
         if !self.nodes.contains_key(&to.node) {
             return Err(GraphError::UnknownNode(to.node.clone()));
         }
+        let multi_input = self
+            .nodes
+            .get(&to.node)
+            .is_some_and(|node| audio_multi_input(&node.type_id));
+        if !multi_input
+            && self
+                .connections
+                .iter()
+                .any(|connection| connection.to == to)
+        {
+            return Err(GraphError::PortOccupied);
+        }
         self.connections.push(AudioConnection::new(from, to));
+        if let Err(error) = self.topological_order() {
+            self.connections.pop();
+            return Err(error);
+        }
         Ok(())
     }
 
@@ -1330,6 +1346,34 @@ mod tests {
             .unwrap();
         assert_eq!(group.interface.inputs[0].id, "in");
         assert_eq!(group.interface.outputs[0].id, "out");
+    }
+
+    #[test]
+    fn audio_connect_rejects_occupied_input() {
+        let mut graph = AudioGraph::empty_track("piano.voice");
+        graph.connections.clear();
+        let first = NodeId::new("first").unwrap();
+        let second = NodeId::new("second").unwrap();
+        graph
+            .nodes
+            .insert(first.clone(), AudioNode::new(first.clone(), "audio.value"));
+        graph.nodes.insert(
+            second.clone(),
+            AudioNode::new(second.clone(), "audio.value"),
+        );
+        graph
+            .connect(
+                PortRef::new(first, "out"),
+                PortRef::fixed(NodeId::fixed("output"), "in"),
+            )
+            .unwrap();
+        let error = graph
+            .connect(
+                PortRef::new(second, "out"),
+                PortRef::fixed(NodeId::fixed("output"), "in"),
+            )
+            .unwrap_err();
+        assert!(matches!(error, GraphError::PortOccupied));
     }
 
     #[test]
