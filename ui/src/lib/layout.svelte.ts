@@ -52,7 +52,6 @@ export type SplitNode = {
 export type LayoutNode = PaneNode | SplitNode;
 
 const STORAGE_KEY = "aurtrack.layout.v2";
-const LEGACY_STORAGE_KEY = "aurtrack.layout.v1";
 const MIN_RATIO = 0.15;
 const MAX_RATIO = 0.85;
 
@@ -234,16 +233,6 @@ function loadState(): LayoutState | null {
       return { active, roots };
     }
 
-    const legacy = localStorage.getItem(LEGACY_STORAGE_KEY);
-    if (legacy) {
-      const root = parseLayout(JSON.parse(legacy));
-      if (root) {
-        return {
-          active: "layout",
-          roots: { ...defaultWorkspaceRoots(), layout: root },
-        };
-      }
-    }
   } catch {
     // 本地布局损坏时回退默认布局。
   }

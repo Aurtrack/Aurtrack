@@ -406,14 +406,6 @@
     return groupPorts(node, "outputs") ?? nodeType(node)?.outputs ?? [];
   }
 
-  function socketFallback(socket: { id: string; type: string }): number {
-    const key = socket.id.toLowerCase();
-    if (key === "pitch") return 261.63;
-    if (key === "velocity") return 0.8;
-    if (key === "gate") return 1;
-    return 0;
-  }
-
   function matchingParam(node: GraphNode, portId: string) {
     const declared = nodeType(node)?.params.find(
       (param) => param.name === portId,
@@ -435,7 +427,7 @@
     if (!socket || socket.type === "audio") return undefined;
     return {
       name: socket.id,
-      default: socket.default ?? socketFallback(socket),
+      default: socket.default ?? 0,
       minimum: socket.minimum ?? -Infinity,
       maximum: socket.maximum ?? Infinity,
       step: socket.step ?? 0.01,

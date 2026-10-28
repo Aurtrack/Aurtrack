@@ -668,7 +668,7 @@ impl Track {
             .into_iter()
             .map(|node| Device {
                 id: node.id().to_string(),
-                kind: legacy_audio_kind(&node.type_id).to_string(),
+                kind: device_kind(&node.type_id).to_string(),
                 params: node.params().clone(),
             })
             .collect()
@@ -4666,7 +4666,7 @@ fn audio_types_json() -> Vec<Value> {
         .collect()
 }
 
-fn legacy_audio_kind(type_id: &str) -> &'static str {
+fn device_kind(type_id: &str) -> &'static str {
     match type_id {
         "audio.instrument.sine" => "instrument.sine",
         "audio.instrument.silence" => "instrument.silence",
@@ -4694,7 +4694,7 @@ fn graph_view(graph: &aurtrack_graph::AudioGraph) -> Value {
             let mut view = json!({
                 "id": id,
                 "type_id": &node.type_id,
-                "kind": legacy_audio_kind(&node.type_id),
+                "kind": device_kind(&node.type_id),
                 "params": &node.params,
             });
             if let Some(position) = node.position {
