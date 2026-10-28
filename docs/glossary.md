@@ -45,6 +45,8 @@
 | add | 加法 | 两个输入相加，没有系数 |
 | mix | 混合 | Blender 式混合，`Factor` 在第一个输入 |
 | factor | 系数 | 混合节点中 A 到 B 的插值位置 |
+| time | 时间 | 当前音符内的局部时间 |
+| seed | 种子 | 当前音符的确定性随机种子 |
 | patch | 音色 | 与 preset 区分 |
 | preset | 预设 | |
 | parameter | 参数 | |

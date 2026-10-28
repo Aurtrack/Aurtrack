@@ -91,6 +91,8 @@ pub enum VoiceOp {
     Pitch,
     Velocity,
     Gate,
+    Time,
+    Seed,
     Constant(f64),
     OscPartials {
         partials: usize,
@@ -126,6 +128,8 @@ impl VoicePlan {
                 VoiceOp::Pitch => context.pitch,
                 VoiceOp::Velocity => context.velocity,
                 VoiceOp::Gate => f64::from(u8::from(context.gate)),
+                VoiceOp::Time => context.local_time,
+                VoiceOp::Seed => context.seed as f64 / u64::MAX as f64,
                 VoiceOp::Constant(value) => value,
                 VoiceOp::OscPartials {
                     partials,
@@ -168,22 +172,33 @@ impl VoicePlan {
                     let input = node.inputs.first().map_or(0.0, |input| values[*input]);
                     let attack = node.inputs.get(1).map_or(attack, |input| values[*input]);
                     let decay = node.inputs.get(2).map_or(decay, |input| values[*input]);
-                    let attack_gain = (context.local_time / attack.max(0.0001)).min(1.0);
-                    input * attack_gain * (-context.local_time / decay.max(0.01)).exp()
+                    let time = node
+                        .inputs
+                        .get(3)
+                        .map_or(context.local_time, |input| values[*input]);
+                    let attack_gain = (time / attack.max(0.0001)).min(1.0);
+                    input * attack_gain * (-time / decay.max(0.01)).exp()
                 },
                 VoiceOp::NoiseBurst { level, duration } => {
                     let level = node.inputs.get(1).map_or(level, |input| values[*input]);
                     let duration = node.inputs.get(2).map_or(duration, |input| values[*input]);
-                    if context.local_time > duration || !context.gate {
+                    let time = node
+                        .inputs
+                        .get(3)
+                        .map_or(context.local_time, |input| values[*input]);
+                    if time > duration {
                         0.0
                     } else {
                         let velocity = node.inputs.first().map_or(1.0, |input| values[*input]);
-                        let noise = ((context.seed.wrapping_mul(6_364_136_223_846_793_005) >> 40)
-                            as f64
+                        let seed = node
+                            .inputs
+                            .get(4)
+                            .map_or(context.seed, |input| values[*input].to_bits());
+                        let noise = ((seed.wrapping_mul(6_364_136_223_846_793_005) >> 40) as f64
                             / 16_777_216.0)
                             * 2.0
                             - 1.0;
-                        noise * level * velocity * (-context.local_time / duration.max(0.001)).exp()
+                        noise * level * velocity * (-time / duration.max(0.001)).exp()
                     }
                 },
                 VoiceOp::Mix => {
@@ -577,6 +592,7 @@ pub struct GraphNodePlan {
 #[derive(Debug, Clone)]
 pub enum GraphOp {
     Voice,
+    Sine,
     Constant(f64),
     Lfo(LfoPlan),
     Add,
@@ -622,6 +638,10 @@ impl GraphPlan {
         for (index, node) in self.nodes.iter().enumerate() {
             let value = match &node.op {
                 GraphOp::Voice => voice,
+                GraphOp::Sine => {
+                    let frequency = control_value(node, 0, &values, 440.0).clamp(20.0, 20_000.0);
+                    (std::f64::consts::TAU * frequency * time).sin() * 0.25
+                },
                 GraphOp::Constant(value) => *value,
                 GraphOp::Lfo(lfo) => lfo.at(time),
                 GraphOp::Add => node.controls.iter().map(|control| values[*control]).sum(),
@@ -1323,6 +1343,28 @@ mod tests {
             seed: 7,
         });
         assert!(sample.abs() > 0.0001);
+    }
+
+    #[test]
+    fn voice_time_and_seed_are_explicit_nodes() {
+        let context = VoiceContext {
+            pitch: 261.63,
+            velocity: 0.8,
+            local_time: 0.25,
+            gate: true,
+            seed: 42,
+        };
+        let plan = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Time, vec![]),
+                VoiceNodePlan::new(VoiceOp::Seed, vec![]),
+                VoiceNodePlan::new(VoiceOp::Add, vec![0, 1]),
+                VoiceNodePlan::new(VoiceOp::Output, vec![2]),
+            ],
+            3,
+        );
+        let expected = 0.25 + 42.0 / u64::MAX as f64;
+        assert!((plan.sample(context) - expected).abs() < 1e-9);
     }
 
     #[test]

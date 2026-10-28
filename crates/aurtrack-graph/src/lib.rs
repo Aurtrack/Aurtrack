@@ -720,7 +720,7 @@ const OSC_INPUTS: [VoiceSocketSpec; 6] = [
         .with_step(0.01),
 ];
 
-const ENV_INPUTS: [VoiceSocketSpec; 3] = [
+const ENV_INPUTS: [VoiceSocketSpec; 4] = [
     VoiceSocketSpec::new("in", "Audio", SocketType::Audio),
     VoiceSocketSpec::new("attack", "Attack", SocketType::Float)
         .with_default(0.004)
@@ -730,9 +730,13 @@ const ENV_INPUTS: [VoiceSocketSpec; 3] = [
         .with_default(1.2)
         .with_range(0.05, 8.0)
         .with_step(0.01),
+    VoiceSocketSpec::new("time", "Time", SocketType::Float)
+        .with_default(0.0)
+        .with_range(0.0, 1000.0)
+        .with_step(0.001),
 ];
 
-const NOISE_INPUTS: [VoiceSocketSpec; 3] = [
+const NOISE_INPUTS: [VoiceSocketSpec; 5] = [
     VoiceSocketSpec::new("velocity", "Velocity", SocketType::Float)
         .with_default(0.8)
         .with_range(0.0, 1.0)
@@ -744,6 +748,14 @@ const NOISE_INPUTS: [VoiceSocketSpec; 3] = [
     VoiceSocketSpec::new("duration", "Duration", SocketType::Float)
         .with_default(0.008)
         .with_range(0.001, 0.2)
+        .with_step(0.001),
+    VoiceSocketSpec::new("time", "Time", SocketType::Float)
+        .with_default(0.0)
+        .with_range(0.0, 1000.0)
+        .with_step(0.001),
+    VoiceSocketSpec::new("seed", "Seed", SocketType::Float)
+        .with_default(0.0)
+        .with_range(0.0, 1.0)
         .with_step(0.001),
 ];
 
@@ -768,6 +780,16 @@ const VOICE_GATE_INPUTS: [VoiceSocketSpec; 2] = [
         .with_range(0.0, 1.0)
         .with_step(1.0),
 ];
+const VOICE_TIME_OUT: [VoiceSocketSpec; 1] =
+    [VoiceSocketSpec::new("out", "Time", SocketType::Float)
+        .with_default(0.0)
+        .with_range(0.0, 1000.0)
+        .with_step(0.001)];
+const VOICE_SEED_OUT: [VoiceSocketSpec; 1] =
+    [VoiceSocketSpec::new("out", "Seed", SocketType::Float)
+        .with_default(0.0)
+        .with_range(0.0, 1.0)
+        .with_step(0.001)];
 const TWO_FLOAT_IN: [VoiceSocketSpec; 2] = [
     VoiceSocketSpec::new("a", "A", SocketType::Float)
         .with_default(0.0)
@@ -901,6 +923,22 @@ pub const VOICE_NODE_TYPES: &[VoiceNodeType] = &[
         category: "Audio",
         inputs: &VOICE_GATE_INPUTS,
         outputs: &AUDIO_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "voice.time",
+        name: "Time",
+        category: "Input",
+        inputs: &[],
+        outputs: &VOICE_TIME_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "voice.seed",
+        name: "Seed",
+        category: "Input",
+        inputs: &[],
+        outputs: &VOICE_SEED_OUT,
         params: &[],
     },
     VoiceNodeType {
@@ -1114,11 +1152,15 @@ impl VoiceGraph {
         let osc = VoiceNode::new(NodeId::fixed("osc"), "osc.partials");
         let env = VoiceNode::new(NodeId::fixed("env"), "env.percussive");
         let noise = VoiceNode::new(NodeId::fixed("noise"), "noise.burst");
+        let time = VoiceNode::new(NodeId::fixed("time"), "voice.time");
+        let seed = VoiceNode::new(NodeId::fixed("seed"), "voice.seed");
         let add = VoiceNode::new(NodeId::fixed("add"), "voice.add");
         let gate = VoiceNode::new(NodeId::fixed("gate"), "voice.gate");
         let output = VoiceNode::new(NodeId::fixed("out"), "group.output");
         let mut nodes = BTreeMap::new();
-        for node in [input, separate, osc, env, noise, add, gate, output] {
+        for node in [
+            input, separate, osc, env, noise, time, seed, add, gate, output,
+        ] {
             nodes.insert(node.id.clone(), node);
         }
         let positions = [
@@ -1127,6 +1169,8 @@ impl VoiceGraph {
             ("osc", [520.0, 40.0]),
             ("env", [760.0, 40.0]),
             ("noise", [520.0, 220.0]),
+            ("time", [800.0, 300.0]),
+            ("seed", [620.0, 380.0]),
             ("add", [990.0, 140.0]),
             ("gate", [1160.0, 140.0]),
             ("out", [1350.0, 140.0]),
@@ -1158,6 +1202,18 @@ impl VoiceGraph {
                 VoiceConnection::new(
                     PortRef::fixed(NodeId::fixed("osc"), "out"),
                     PortRef::fixed(NodeId::fixed("env"), "in"),
+                ),
+                VoiceConnection::new(
+                    PortRef::fixed(NodeId::fixed("time"), "out"),
+                    PortRef::fixed(NodeId::fixed("env"), "time"),
+                ),
+                VoiceConnection::new(
+                    PortRef::fixed(NodeId::fixed("time"), "out"),
+                    PortRef::fixed(NodeId::fixed("noise"), "time"),
+                ),
+                VoiceConnection::new(
+                    PortRef::fixed(NodeId::fixed("seed"), "out"),
+                    PortRef::fixed(NodeId::fixed("noise"), "seed"),
                 ),
                 VoiceConnection::new(
                     PortRef::fixed(NodeId::fixed("env"), "out"),
@@ -2522,7 +2578,7 @@ mod tests {
         let group = NodeGroup::piano_default();
         assert_eq!(group.interface.inputs.len(), 1);
         assert_eq!(group.interface.inputs[0].ty, NodeGroupSocketType::Note);
-        assert_eq!(group.graph.nodes.len(), 8);
+        assert_eq!(group.graph.nodes.len(), 10);
     }
 
     #[test]

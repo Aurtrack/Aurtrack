@@ -1521,7 +1521,7 @@ fn group_from_nodes_rewires_boundaries() {
     assert_eq!(group_node.type_id, "voice.group");
     assert_eq!(group_node.group.as_deref(), Some(group_id));
     let child = &project.node_groups[group_id];
-    assert_eq!(child.interface.inputs.len(), 2);
+    assert_eq!(child.interface.inputs.len(), 3);
     assert_eq!(child.interface.outputs.len(), 1);
     assert!(child.graph.nodes.keys().any(|id| id.to_string() == "osc"));
     assert!(child.graph.nodes.keys().any(|id| id.to_string() == "env"));
@@ -2313,7 +2313,7 @@ fn audio_group_instance_expands_effect_nodes() {
     let (_, _, plan) = project.tracks[0]
         .playback_graph(&project.node_groups, &project.audio_groups)
         .unwrap();
-    assert_eq!(plan.nodes.len(), 4);
+    assert_eq!(plan.nodes.len(), 5);
     assert!(
         plan.nodes
             .iter()

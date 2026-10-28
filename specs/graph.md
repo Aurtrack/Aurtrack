@@ -75,6 +75,10 @@ group.input(note)
        ├─ velocity ─→ osc.velocity / noise.velocity
        └─ gate ───→ gate.gate
 
+time ──→ env.time
+time ──→ noise.time
+seed ──→ noise.seed
+
 osc/env ──→ add.A
 noise   ──→ add.B
 add     ──→ gate.in
@@ -102,7 +106,7 @@ gate    ──→ out.audio
 
 Voice 节点实例用 `type_id` 引用注册表，端口和参数由 `node.types` 声明。轨道图使用 `AudioGraph`，同样以 `type_id` 引用 `AUDIO_NODE_TYPES`，节点不再保存固定 kind。
 
-Audio 节点类型：`audio.group`、`audio.group.instance`、`audio.instrument.sine`、`audio.instrument.silence`、`audio.adsr`、`audio.plugin`、`audio.gain`、`audio.mix`、`audio.filter.lowpass`、`audio.filter.highpass`、`audio.drive`、`audio.delay`、`audio.value`、`audio.note`、`audio.output`。
+Audio 节点类型：`audio.group`、`audio.group.instance`、`audio.instrument.sine`、`audio.instrument.silence`、`audio.adsr`、`audio.plugin`、`audio.gain`、`audio.mix`、`audio.filter.lowpass`、`audio.filter.highpass`、`audio.drive`、`audio.delay`、`audio.value`、`audio.note`、`audio.output`。`audio.instrument.sine` 的频率是 `frequency` 输入 socket，可连接控制信号。
 
 工程视图同时输出 `type_id` 和 UI 用的 `kind`；写入只认 `type_id`。当前 Voice 类型：`group.input`、`group.output`、`note.separate`、`osc.partials`、`env.percussive`、`noise.burst`、`voice.mix`、`voice.group`、`math.add`、`math.multiply`、`math.map_range`、`math.clamp`、`value.float`。
 

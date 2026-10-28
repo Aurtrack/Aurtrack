@@ -477,9 +477,8 @@ fn compile_audio_graph(
                     &mut nodes,
                 )?;
                 let op = match node.type_id.as_str() {
-                    "audio.group" | "audio.instrument.sine" | "audio.instrument.silence" => {
-                        GraphOp::Voice
-                    },
+                    "audio.group" | "audio.instrument.silence" => GraphOp::Voice,
+                    "audio.instrument.sine" => GraphOp::Sine,
                     "audio.value" => GraphOp::Constant(node.param("value").unwrap_or(0.0)),
                     "audio.lfo" => GraphOp::Lfo(LfoPlan::new(
                         node.param("rate").unwrap_or(1.0),
@@ -764,6 +763,7 @@ impl Track {
 }
 
 const NOTE_BINDING: usize = usize::MAX;
+const NO_NOTE_BINDING: usize = usize::MAX - 1;
 
 fn compile_voice(
     voice: &VoiceGraph,
@@ -861,9 +861,15 @@ fn compile_voice_inner(
             continue;
         }
         if node.type_id == "note.separate" {
-            let note_connected = incoming
-                .iter()
-                .any(|connection| connection.to.port() == "note");
+            let note_connected = incoming.iter().any(|connection| {
+                connection.to.port() == "note"
+                    && indices
+                        .get(&(
+                            connection.from.node().clone(),
+                            connection.from.port().to_string(),
+                        ))
+                        .is_some_and(|index| *index != NO_NOTE_BINDING)
+            });
             for (port, op) in [
                 ("pitch", VoiceOp::Pitch),
                 ("velocity", VoiceOp::Velocity),
@@ -901,7 +907,12 @@ fn compile_voice_inner(
             }
             for socket in &group.interface.inputs {
                 if socket.ty == NodeGroupSocketType::Note {
-                    bindings.entry(socket.id.clone()).or_insert(NOTE_BINDING);
+                    if !incoming
+                        .iter()
+                        .any(|connection| connection.to.port() == socket.id)
+                    {
+                        bindings.insert(socket.id.clone(), NO_NOTE_BINDING);
+                    }
                     continue;
                 }
                 if bindings.contains_key(&socket.id) {
@@ -957,6 +968,8 @@ fn compile_voice_inner(
             "voice.add" | "math.add" => VoiceOp::Add,
             "voice.mix" => VoiceOp::Mix,
             "voice.gate" => VoiceOp::GateNode,
+            "voice.time" => VoiceOp::Time,
+            "voice.seed" => VoiceOp::Seed,
             "math.multiply" => VoiceOp::Multiply,
             "math.map_range" => VoiceOp::MapRange,
             "math.clamp" => VoiceOp::Clamp,
