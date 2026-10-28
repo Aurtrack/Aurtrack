@@ -2282,6 +2282,7 @@
                   type="button"
                   class="graph-port graph-port-in"
                   class:port-float={input.type === "float"}
+                  class:port-gate={input.type === "gate"}
                   class:port-audio={input.type === "audio"}
                   class:active={wireHover?.node === node.id &&
                     wireHover?.port === input.id}
@@ -2326,6 +2327,7 @@
                   type="button"
                   class="graph-port graph-port-out"
                   class:port-float={output.type === "float"}
+                  class:port-gate={output.type === "gate"}
                   class:port-audio={output.type === "audio"}
                   class:active={wireHover?.node === node.id &&
                     wireDrag?.side === "in"}
@@ -2383,6 +2385,7 @@
                   type="button"
                   class="graph-port graph-port-in"
                   class:port-float={input.type === "float"}
+                  class:port-gate={input.type === "gate"}
                   class:port-audio={input.type === "audio"}
                   style:top={`${portTop(node, index)}px`}
                   aria-label={t("graph.inputPort")}
@@ -2397,6 +2400,7 @@
                   type="button"
                   class="graph-port graph-port-out"
                   class:port-float={output.type === "float"}
+                  class:port-gate={output.type === "gate"}
                   class:port-audio={output.type === "audio"}
                   style:top={`${portTop(node, index)}px`}
                   aria-label={t("graph.startWire")}

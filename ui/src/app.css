@@ -2796,6 +2796,15 @@ button:disabled {
   text-transform: uppercase;
 }
 
+/* 输出行和输入行共用顶部坐标；输出容器不能挡住输入值控件的命中区域。 */
+.graph-socket-row.out {
+  pointer-events: none;
+}
+
+.graph-socket-row.out .graph-port {
+  pointer-events: auto;
+}
+
 .graph-socket-row.out .graph-socket-name {
   margin-left: auto;
   color: var(--ink);
