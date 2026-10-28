@@ -101,11 +101,20 @@
     commitValue(normalize(current + delta * step));
   }
 
+  function dragStepFor(valueToDrag: number): number {
+    if (step <= 0) return 1;
+    const magnitude = Math.abs(valueToDrag);
+    if (magnitude < 10) return step;
+    // 频率、时间这类大数值按数量级提高拖动灵敏度，否则 0.01 步进在 261.63 上几乎看不出变化。
+    return step * 10 ** Math.floor(Math.log10(magnitude));
+  }
+
   function handleMouseDown(event: MouseEvent) {
     if (disabled || event.button !== 0) return;
     event.preventDefault();
     drag = { startX: event.clientX, startValue: current, moved: false };
     dragging = false;
+    const dragStep = dragStepFor(current);
 
     const move = (moveEvent: MouseEvent) => {
       if (!drag) return;
@@ -113,7 +122,7 @@
       if (!drag.moved && Math.abs(delta) < 3) return;
       drag.moved = true;
       dragging = true;
-      current = normalize(drag.startValue + (delta / 4) * step);
+      current = normalize(drag.startValue + (delta / 4) * dragStep);
       moveEvent.preventDefault();
     };
 
