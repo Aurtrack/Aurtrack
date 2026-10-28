@@ -300,6 +300,9 @@ fn compile_audio_graph(
         let node = graph
             .node(&id)
             .ok_or_else(|| GraphError::UnknownNode(id.clone()))?;
+        if node.type_id == "audio.note" {
+            continue;
+        }
         match node.type_id.as_str() {
             "audio.group.input" => {
                 if interface.is_none() {
@@ -681,6 +684,16 @@ impl Track {
     ) -> Result<(Option<f64>, Option<aurtrack_graph::AdsrSettings>, GraphPlan), GraphError> {
         self.graph
             .validate_with_audio_groups(groups, audio_groups)?;
+        let has_note_source = |node_id: &aurtrack_graph::NodeId| {
+            self.graph.connections.iter().any(|connection| {
+                connection.to.node() == node_id
+                    && self
+                        .graph
+                        .nodes
+                        .get(connection.from.node())
+                        .is_some_and(|node| node.type_id == "audio.note")
+            })
+        };
         let mut group_id = None;
         let mut source_frequency = None;
         let mut adsr = None;
@@ -688,8 +701,10 @@ impl Track {
         for node in self.graph.nodes() {
             match node.type_id.as_str() {
                 "audio.group" => {
-                    if let Some(group) = &node.group {
-                        group_id = Some(group.clone());
+                    if has_note_source(node.id()) {
+                        if let Some(group) = &node.group {
+                            group_id = Some(group.clone());
+                        }
                     }
                 },
                 "audio.instrument.sine" => {
@@ -1302,6 +1317,7 @@ impl Session {
             "mix" | "audio.mix" => "audio.mix",
             "plugin" | "audio.plugin" => "audio.plugin",
             "value" | "audio.value" => "audio.value",
+            "note" | "audio.note" => "audio.note",
             "audio.lfo" => "audio.lfo",
             "audio.math.add" => "audio.math.add",
             "audio.math.multiply" => "audio.math.multiply",
@@ -4730,6 +4746,7 @@ fn device_kind(type_id: &str) -> &'static str {
         "audio.filter.lowpass" | "audio.filter.highpass" => "filter.lowpass",
         "audio.plugin" => "plugin",
         "audio.value"
+        | "audio.note"
         | "audio.lfo"
         | "audio.math.add"
         | "audio.math.multiply"
@@ -5146,6 +5163,7 @@ fn render_project(
             release: settings.release,
         });
         let piano = graph.piano.as_ref();
+        let explicit_piano = matches!(track.source(), Source::Piano);
         let piano_notes: Vec<NotePlan> = if piano.is_some() {
             track
                 .clips
@@ -5171,23 +5189,25 @@ fn render_project(
                 let mut sample = source_frequency.map_or(0.0, |frequency| {
                     (std::f64::consts::TAU * frequency * time).sin() * 0.25
                 });
-                for clip in &track.clips {
-                    for note in &clip.notes {
-                        let note_start =
-                            project.ticks_to_seconds(clip.start_tick + note.start_tick);
-                        let note_duration = project.ticks_to_seconds(note.duration_tick);
-                        let note_end = note_start + note_duration;
-                        if time >= note_start && time < note_end + release {
-                            let local = time - note_start;
-                            let envelope = adsr.map_or_else(
-                                || note_envelope(local, note_duration),
-                                |envelope| adsr_envelope(local, note_duration, envelope),
-                            );
-                            sample += (std::f64::consts::TAU * midi_to_hz(note.pitch) * local)
-                                .sin()
-                                * note.velocity
-                                * envelope
-                                * 0.25;
+                if !explicit_piano {
+                    for clip in &track.clips {
+                        for note in &clip.notes {
+                            let note_start =
+                                project.ticks_to_seconds(clip.start_tick + note.start_tick);
+                            let note_duration = project.ticks_to_seconds(note.duration_tick);
+                            let note_end = note_start + note_duration;
+                            if time >= note_start && time < note_end + release {
+                                let local = time - note_start;
+                                let envelope = adsr.map_or_else(
+                                    || note_envelope(local, note_duration),
+                                    |envelope| adsr_envelope(local, note_duration, envelope),
+                                );
+                                sample += (std::f64::consts::TAU * midi_to_hz(note.pitch) * local)
+                                    .sin()
+                                    * note.velocity
+                                    * envelope
+                                    * 0.25;
+                            }
                         }
                     }
                 }

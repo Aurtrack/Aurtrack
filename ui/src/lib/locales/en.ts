@@ -458,6 +458,7 @@ export const en: Record<MessageKey, Message> = {
   "node.audio.drive": "Drive",
   "node.audio.delay": "Delay",
   "node.audio.value": "Float",
+  "node.audio.note": "Note Input",
   "node.audio.lfo": "LFO",
   "node.audio.math.add": "Add",
   "node.audio.math.multiply": "Multiply",

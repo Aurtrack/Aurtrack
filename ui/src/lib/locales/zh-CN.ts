@@ -428,6 +428,7 @@ export const zhCN = {
   "node.audio.drive": "过载",
   "node.audio.delay": "延迟",
   "node.audio.value": "浮点值",
+  "node.audio.note": "音符输入",
   "node.audio.lfo": "低频振荡器",
   "node.audio.math.add": "加法",
   "node.audio.math.multiply": "乘法",

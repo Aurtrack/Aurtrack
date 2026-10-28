@@ -76,6 +76,12 @@ const FLOAT_OUT: [AudioSocketSpec; 1] = [AudioSocketSpec {
     ty: SocketType::Float,
     default: 0.0,
 }];
+const NOTE_OUT: [AudioSocketSpec; 1] = [AudioSocketSpec {
+    id: "out",
+    name: "Note",
+    ty: SocketType::Note,
+    default: 0.0,
+}];
 const GAIN_PARAMS: [ParamSpec; 1] = [ParamSpec {
     name: "gain",
     default: 1.0,
@@ -356,6 +362,14 @@ pub const AUDIO_NODE_TYPES: &[AudioNodeType] = &[
         ],
         outputs: &AUDIO_OUT,
         params: &DELAY_PARAMS,
+    },
+    AudioNodeType {
+        id: "audio.note",
+        name: "Note",
+        category: "Note",
+        inputs: &[],
+        outputs: &NOTE_OUT,
+        params: &[],
     },
     AudioNodeType {
         id: "audio.value",
@@ -739,20 +753,29 @@ impl AudioGraph {
     }
 
     pub fn empty_track(group: &str) -> Self {
+        let mut note = AudioNode::new(NodeId::fixed("note-input"), "audio.note");
+        note.position = Some([60.0, 80.0]);
         let mut instrument = AudioNode::new(NodeId::fixed("instrument"), "audio.group");
         instrument.group = Some(group.to_string());
-        instrument.position = Some([60.0, 220.0]);
+        instrument.position = Some([320.0, 220.0]);
         let mut output = AudioNode::new(NodeId::fixed("output"), "audio.output");
         output.position = Some([940.0, 220.0]);
         let mut nodes = BTreeMap::new();
+        nodes.insert(note.id.clone(), note);
         nodes.insert(instrument.id.clone(), instrument);
         nodes.insert(output.id.clone(), output);
         Self {
             nodes,
-            connections: vec![AudioConnection {
-                from: PortRef::fixed(NodeId::fixed("instrument"), "out"),
-                to: PortRef::fixed(NodeId::fixed("output"), "in"),
-            }],
+            connections: vec![
+                AudioConnection {
+                    from: PortRef::fixed(NodeId::fixed("note-input"), "out"),
+                    to: PortRef::fixed(NodeId::fixed("instrument"), "note"),
+                },
+                AudioConnection {
+                    from: PortRef::fixed(NodeId::fixed("instrument"), "out"),
+                    to: PortRef::fixed(NodeId::fixed("output"), "in"),
+                },
+            ],
             frames: BTreeMap::new(),
         }
     }
@@ -1333,7 +1356,7 @@ mod tests {
     fn default_audio_graph_validates() {
         let graph = AudioGraph::empty_track("piano.voice");
         graph.validate(&groups()).unwrap();
-        assert_eq!(graph.topological_order().unwrap().len(), 2);
+        assert_eq!(graph.topological_order().unwrap().len(), 3);
     }
 
     #[test]

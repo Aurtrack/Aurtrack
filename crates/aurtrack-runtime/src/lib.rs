@@ -531,20 +531,26 @@ fn build_plan(
                 sustain: settings.sustain,
                 release: settings.release,
             });
-            let notes = track
-                .clips
-                .iter()
-                .flat_map(|clip| {
-                    clip.notes.iter().map(move |note| NotePlan {
-                        start: project.ticks_to_seconds(clip.start_tick + note.start_tick),
-                        duration: project.ticks_to_seconds(note.duration_tick),
-                        frequency: midi_to_hz(note.pitch),
-                        velocity: note.velocity,
-                    })
-                })
-                .collect();
-            let plugin = graph.plugin.clone();
             let piano = graph.piano.clone();
+            let uses_implicit_notes =
+                !matches!(track.source(), aurtrack_session::Source::Piano) || piano.is_some();
+            let notes = if uses_implicit_notes {
+                track
+                    .clips
+                    .iter()
+                    .flat_map(|clip| {
+                        clip.notes.iter().map(move |note| NotePlan {
+                            start: project.ticks_to_seconds(clip.start_tick + note.start_tick),
+                            duration: project.ticks_to_seconds(note.duration_tick),
+                            frequency: midi_to_hz(note.pitch),
+                            velocity: note.velocity,
+                        })
+                    })
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let plugin = graph.plugin.clone();
             Ok(TrackPlan {
                 frequency,
                 gain: 1.0,

@@ -1777,11 +1777,64 @@ fn connecting_to_occupied_input_replaces_previous_link() {
     );
     let project = session.project().unwrap();
     let connections = &project.tracks[0].graph.connections;
-    assert_eq!(connections.len(), 1);
-    assert_eq!(connections[0].from.node().as_str(), node_id);
+    let output_source = connections
+        .iter()
+        .find(|connection| connection.to.node().as_str() == "output")
+        .unwrap();
+    assert_eq!(output_source.from.node().as_str(), node_id);
+    assert_eq!(connections.len(), 2);
     project.tracks[0]
         .playback_graph(&project.node_groups, &project.audio_groups)
         .unwrap();
+}
+
+#[test]
+fn piano_note_source_is_explicit() {
+    let mut session = Session::default();
+    run(
+        &mut session,
+        "project.create",
+        json!({ "name": "note-source" }),
+    );
+    run(
+        &mut session,
+        "track.create",
+        json!({ "name": "Piano", "source": "piano" }),
+    );
+    let project = session.project().unwrap();
+    assert!(
+        project.tracks[0]
+            .graph
+            .nodes
+            .contains_key(&aurtrack_graph::NodeId::new("note-input").unwrap())
+    );
+    let (_, _, plan) = project.tracks[0]
+        .playback_graph(&project.node_groups, &project.audio_groups)
+        .unwrap();
+    assert!(plan.piano.is_some());
+    run(
+        &mut session,
+        "node.disconnect",
+        json!({
+            "from": "/tracks/track-1/nodes/note-input",
+            "from_port": "out",
+            "to": "/tracks/track-1/nodes/instrument",
+            "to_port": "note"
+        }),
+    );
+    let project = session.project().unwrap();
+    let (_, _, plan) = project.tracks[0]
+        .playback_graph(&project.node_groups, &project.audio_groups)
+        .unwrap();
+    assert!(plan.piano.is_none());
+    let path = temp_path("no-note-source");
+    let rendered = run(
+        &mut session,
+        "render.segment",
+        json!({ "path": path, "duration_seconds": 0.5 }),
+    );
+    assert!(rendered["rms"].as_f64().unwrap() < 1e-9);
+    let _ = std::fs::remove_file(path);
 }
 
 #[test]

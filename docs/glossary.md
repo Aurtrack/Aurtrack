@@ -39,7 +39,9 @@
 | group input | 组输入 | Blender 的 Group Input 节点 |
 | group output | 组输出 | Blender 的 Group Output 节点 |
 | note event | 音符事件 | |
+| note input | 音符输入 | `audio.note`，当前轨道的钢琴卷帘事件源 |
 | note separate | 分离音符 | 把 Note 拆成 pitch、velocity、gate |
+| gate | 门 | 控制事件或声音是否通过 |
 | patch | 音色 | 与 preset 区分 |
 | preset | 预设 | |
 | parameter | 参数 | |

@@ -749,9 +749,13 @@ const NOISE_INPUTS: [VoiceSocketSpec; 3] = [
 
 const AUDIO_OUT: [VoiceSocketSpec; 1] = [VoiceSocketSpec::new("out", "Audio", SocketType::Audio)];
 const FLOAT_OUT: [VoiceSocketSpec; 1] = [VoiceSocketSpec::new("out", "Value", SocketType::Float)];
-const TWO_AUDIO_IN: [VoiceSocketSpec; 2] = [
+const VOICE_MIX_INPUTS: [VoiceSocketSpec; 3] = [
     VoiceSocketSpec::new("in1", "A", SocketType::Audio),
     VoiceSocketSpec::new("in2", "B", SocketType::Audio),
+    VoiceSocketSpec::new("gate", "Gate", SocketType::Gate)
+        .with_default(0.0)
+        .with_range(0.0, 1.0)
+        .with_step(1.0),
 ];
 const TWO_FLOAT_IN: [VoiceSocketSpec; 2] = [
     VoiceSocketSpec::new("a", "A", SocketType::Float)
@@ -868,7 +872,7 @@ pub const VOICE_NODE_TYPES: &[VoiceNodeType] = &[
         id: "voice.mix",
         name: "Mix",
         category: "Audio",
-        inputs: &TWO_AUDIO_IN,
+        inputs: &VOICE_MIX_INPUTS,
         outputs: &AUDIO_OUT,
         params: &[],
     },
@@ -1109,6 +1113,10 @@ impl VoiceGraph {
                 VoiceConnection::new(
                     PortRef::fixed(NodeId::fixed("voice-in"), "note"),
                     PortRef::fixed(NodeId::fixed("note-separate"), "note"),
+                ),
+                VoiceConnection::new(
+                    PortRef::fixed(NodeId::fixed("note-separate"), "gate"),
+                    PortRef::fixed(NodeId::fixed("mix"), "gate"),
                 ),
                 VoiceConnection::new(
                     PortRef::fixed(NodeId::fixed("note-separate"), "pitch"),
