@@ -875,6 +875,7 @@ export class SessionStore {
       interface: groupInterface,
     });
     await this.refreshProject();
+    await this.reloadIfPlaying();
     return result;
   }
 
@@ -887,6 +888,7 @@ export class SessionStore {
   ): Promise<unknown> {
     const result = await this.run("group.voice", { group_id: groupId, voice });
     await this.refreshProject();
+    await this.reloadIfPlaying();
     return result;
   }
 
@@ -981,6 +983,7 @@ export class SessionStore {
       interface: groupInterface,
     });
     await this.refreshProject();
+    await this.reloadIfPlaying();
     return result;
   }
 
@@ -993,6 +996,7 @@ export class SessionStore {
       graph,
     });
     await this.refreshProject();
+    await this.reloadIfPlaying();
     return result;
   }
 
