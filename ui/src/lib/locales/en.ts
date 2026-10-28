@@ -431,6 +431,8 @@ export const en: Record<MessageKey, Message> = {
   "node.piano.voice": "Piano Voice",
   "node.osc.partials": "Partials",
   "node.voice.envelope": "Percussive Envelope",
+  "node.voice.attack": "Attack",
+  "node.voice.decay": "Decay",
   "node.voice.noise": "Noise",
   "node.voice.vca": "VCA",
   "node.voice.add": "Add",

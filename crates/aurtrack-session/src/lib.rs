@@ -1000,10 +1000,8 @@ fn compile_voice_inner(
             "voice.iteration" => VoiceOp::Iteration,
             "voice.pitch" => VoiceOp::Pitch,
             "voice.velocity" => VoiceOp::Velocity,
-            "voice.envelope" => VoiceOp::Envelope {
-                attack: param("attack", 0.004),
-                decay: param("decay", 1.8),
-            },
+            "voice.attack" => VoiceOp::Attack,
+            "voice.decay" => VoiceOp::Decay,
             "voice.noise" => VoiceOp::Noise,
             "voice.vca" => VoiceOp::Vca,
             "voice.add" | "math.add" => VoiceOp::Add,

@@ -401,6 +401,8 @@ export const zhCN = {
   "node.piano.voice": "钢琴声部",
   "node.osc.partials": "泛音振荡器",
   "node.voice.envelope": "打击包络",
+  "node.voice.attack": "起音",
+  "node.voice.decay": "衰减",
   "node.voice.noise": "噪声",
   "node.voice.vca": "VCA",
   "node.voice.add": "加法",

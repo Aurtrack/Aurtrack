@@ -717,7 +717,7 @@ const MATH_PARAMS: [ParamSpec; 1] = [ParamSpec {
 
 const NOTE_IN: [VoiceSocketSpec; 1] = [VoiceSocketSpec::new("note", "Note", SocketType::Note)];
 
-const ENVELOPE_INPUTS: [VoiceSocketSpec; 3] = [
+const ATTACK_INPUTS: [VoiceSocketSpec; 2] = [
     VoiceSocketSpec::new("time", "Time", SocketType::Float)
         .with_default(0.0)
         .with_range(0.0, 1000.0)
@@ -725,6 +725,12 @@ const ENVELOPE_INPUTS: [VoiceSocketSpec; 3] = [
     VoiceSocketSpec::new("attack", "Attack", SocketType::Float)
         .with_default(0.004)
         .with_range(0.0, 1.0)
+        .with_step(0.001),
+];
+const DECAY_INPUTS: [VoiceSocketSpec; 2] = [
+    VoiceSocketSpec::new("time", "Time", SocketType::Float)
+        .with_default(0.0)
+        .with_range(0.0, 1000.0)
         .with_step(0.001),
     VoiceSocketSpec::new("decay", "Decay", SocketType::Float)
         .with_default(1.2)
@@ -961,10 +967,18 @@ pub const VOICE_NODE_TYPES: &[VoiceNodeType] = &[
         params: &[],
     },
     VoiceNodeType {
-        id: "voice.envelope",
-        name: "Percussive Envelope",
+        id: "voice.attack",
+        name: "Attack",
         category: "Envelope",
-        inputs: &ENVELOPE_INPUTS,
+        inputs: &ATTACK_INPUTS,
+        outputs: &FLOAT_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "voice.decay",
+        name: "Decay",
+        category: "Envelope",
+        inputs: &DECAY_INPUTS,
         outputs: &FLOAT_OUT,
         params: &[],
     },
@@ -1293,12 +1307,17 @@ impl VoiceGraph {
         let mut partials = VoiceNode::new(NodeId::fixed("partials"), "voice.repeat");
         partials.group = Some("piano.partial".to_string());
         partials.params.insert("count".to_string(), 10.0);
-        let env = VoiceNode::new(NodeId::fixed("env"), "voice.envelope");
+        let env_attack = VoiceNode::new(NodeId::fixed("env-attack"), "voice.attack");
+        let env_decay = VoiceNode::new(NodeId::fixed("env-decay"), "voice.decay");
+        let env_gain = VoiceNode::new(NodeId::fixed("env-gain"), "math.multiply");
         let osc_vca = VoiceNode::new(NodeId::fixed("osc-vca"), "voice.vca");
         let noise = VoiceNode::new(NodeId::fixed("noise"), "voice.noise");
-        let mut noise_env = VoiceNode::new(NodeId::fixed("noise-env"), "voice.envelope");
-        noise_env.params.insert("attack".to_string(), 0.001);
-        noise_env.params.insert("decay".to_string(), 0.008);
+        let mut noise_env_attack =
+            VoiceNode::new(NodeId::fixed("noise-env-attack"), "voice.attack");
+        noise_env_attack.params.insert("attack".to_string(), 0.001);
+        let mut noise_env_decay = VoiceNode::new(NodeId::fixed("noise-env-decay"), "voice.decay");
+        noise_env_decay.params.insert("decay".to_string(), 0.008);
+        let noise_env_gain = VoiceNode::new(NodeId::fixed("noise-env-gain"), "math.multiply");
         let noise_vca = VoiceNode::new(NodeId::fixed("noise-vca"), "voice.vca");
         let time = VoiceNode::new(NodeId::fixed("time"), "voice.time");
         let white_noise = VoiceNode::new(NodeId::fixed("white-noise"), "voice.white_noise");
@@ -1314,10 +1333,14 @@ impl VoiceGraph {
             input,
             separate,
             partials,
-            env,
+            env_attack,
+            env_decay,
+            env_gain,
             osc_vca,
             noise,
-            noise_env,
+            noise_env_attack,
+            noise_env_decay,
+            noise_env_gain,
             noise_vca,
             time,
             white_noise,
@@ -1333,20 +1356,24 @@ impl VoiceGraph {
         let positions = [
             ("voice-in", [30.0, 140.0]),
             ("note-separate", [280.0, 140.0]),
-            ("partials", [520.0, 40.0]),
-            ("env", [760.0, 40.0]),
-            ("osc-vca", [960.0, 40.0]),
-            ("noise", [520.0, 220.0]),
-            ("noise-env", [760.0, 220.0]),
-            ("noise-vca", [960.0, 220.0]),
-            ("time", [1040.0, 360.0]),
-            ("white-noise", [520.0, 360.0]),
-            ("vel-level", [520.0, 540.0]),
-            ("level", [280.0, 540.0]),
-            ("noise-gain", [760.0, 540.0]),
-            ("add", [1180.0, 140.0]),
-            ("gate", [1340.0, 140.0]),
-            ("out", [1500.0, 140.0]),
+            ("partials", [500.0, 40.0]),
+            ("env-attack", [720.0, 20.0]),
+            ("env-decay", [720.0, 110.0]),
+            ("env-gain", [940.0, 65.0]),
+            ("osc-vca", [1140.0, 40.0]),
+            ("noise", [500.0, 250.0]),
+            ("noise-env-attack", [720.0, 230.0]),
+            ("noise-env-decay", [720.0, 320.0]),
+            ("noise-env-gain", [940.0, 275.0]),
+            ("noise-vca", [1140.0, 230.0]),
+            ("time", [30.0, 700.0]),
+            ("white-noise", [280.0, 360.0]),
+            ("vel-level", [500.0, 560.0]),
+            ("level", [280.0, 560.0]),
+            ("noise-gain", [720.0, 560.0]),
+            ("add", [1360.0, 150.0]),
+            ("gate", [1540.0, 150.0]),
+            ("out", [1720.0, 150.0]),
         ];
         for (id, position) in positions {
             if let Some(node) = nodes.get_mut(&NodeId::fixed(id)) {
@@ -1373,7 +1400,7 @@ impl VoiceGraph {
                     PortRef::fixed(NodeId::fixed("noise-gain"), "a"),
                 ),
                 VoiceConnection::new(
-                    PortRef::fixed(NodeId::fixed("noise-env"), "out"),
+                    PortRef::fixed(NodeId::fixed("noise-env-gain"), "out"),
                     PortRef::fixed(NodeId::fixed("noise-gain"), "b"),
                 ),
                 VoiceConnection::new(
@@ -1393,7 +1420,7 @@ impl VoiceGraph {
                     PortRef::fixed(NodeId::fixed("osc-vca"), "in"),
                 ),
                 VoiceConnection::new(
-                    PortRef::fixed(NodeId::fixed("env"), "out"),
+                    PortRef::fixed(NodeId::fixed("env-gain"), "out"),
                     PortRef::fixed(NodeId::fixed("osc-vca"), "gain"),
                 ),
                 VoiceConnection::new(
@@ -1402,11 +1429,35 @@ impl VoiceGraph {
                 ),
                 VoiceConnection::new(
                     PortRef::fixed(NodeId::fixed("time"), "out"),
-                    PortRef::fixed(NodeId::fixed("env"), "time"),
+                    PortRef::fixed(NodeId::fixed("env-attack"), "time"),
                 ),
                 VoiceConnection::new(
                     PortRef::fixed(NodeId::fixed("time"), "out"),
-                    PortRef::fixed(NodeId::fixed("noise-env"), "time"),
+                    PortRef::fixed(NodeId::fixed("env-decay"), "time"),
+                ),
+                VoiceConnection::new(
+                    PortRef::fixed(NodeId::fixed("env-attack"), "out"),
+                    PortRef::fixed(NodeId::fixed("env-gain"), "a"),
+                ),
+                VoiceConnection::new(
+                    PortRef::fixed(NodeId::fixed("env-decay"), "out"),
+                    PortRef::fixed(NodeId::fixed("env-gain"), "b"),
+                ),
+                VoiceConnection::new(
+                    PortRef::fixed(NodeId::fixed("time"), "out"),
+                    PortRef::fixed(NodeId::fixed("noise-env-attack"), "time"),
+                ),
+                VoiceConnection::new(
+                    PortRef::fixed(NodeId::fixed("time"), "out"),
+                    PortRef::fixed(NodeId::fixed("noise-env-decay"), "time"),
+                ),
+                VoiceConnection::new(
+                    PortRef::fixed(NodeId::fixed("noise-env-attack"), "out"),
+                    PortRef::fixed(NodeId::fixed("noise-env-gain"), "a"),
+                ),
+                VoiceConnection::new(
+                    PortRef::fixed(NodeId::fixed("noise-env-decay"), "out"),
+                    PortRef::fixed(NodeId::fixed("noise-env-gain"), "b"),
                 ),
                 VoiceConnection::new(
                     PortRef::fixed(NodeId::fixed("time"), "out"),
@@ -2773,7 +2824,7 @@ mod tests {
         let group = NodeGroup::piano_default();
         assert_eq!(group.interface.inputs.len(), 1);
         assert_eq!(group.interface.inputs[0].ty, NodeGroupSocketType::Note);
-        assert_eq!(group.graph.nodes.len(), 16);
+        assert_eq!(group.graph.nodes.len(), 20);
     }
 
     #[test]

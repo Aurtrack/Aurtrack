@@ -100,6 +100,8 @@ pub enum VoiceOp {
     WhiteNoise,
     Constant(f64),
     Partial,
+    Attack,
+    Decay,
     Repeat {
         body: Box<VoicePlan>,
         count: usize,
@@ -212,6 +214,22 @@ impl VoicePlan {
                         brightness,
                         decay,
                     )
+                },
+                VoiceOp::Attack => {
+                    let time = node
+                        .inputs
+                        .first()
+                        .map_or(context.local_time, |input| values[*input]);
+                    let attack = node.inputs.get(1).map_or(0.004, |input| values[*input]);
+                    (time / attack.max(0.0001)).min(1.0)
+                },
+                VoiceOp::Decay => {
+                    let time = node
+                        .inputs
+                        .first()
+                        .map_or(context.local_time, |input| values[*input]);
+                    let decay = node.inputs.get(1).map_or(1.2, |input| values[*input]);
+                    (-time / decay.max(0.01)).exp()
                 },
                 VoiceOp::Envelope { attack, decay } => {
                     let time = node

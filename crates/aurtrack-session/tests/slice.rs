@@ -1502,7 +1502,7 @@ fn group_from_nodes_rewires_boundaries() {
         "group.from_nodes",
         json!({
             "source_group_id": "piano.voice",
-            "node_ids": ["partials", "env"],
+            "node_ids": ["partials", "env-gain"],
             "name": "Partials Env"
         }),
     );
@@ -1517,7 +1517,13 @@ fn group_from_nodes_rewires_boundaries() {
             .keys()
             .any(|id| id.to_string() == "partials")
     );
-    assert!(!parent.graph.nodes.keys().any(|id| id.to_string() == "env"));
+    assert!(
+        !parent
+            .graph
+            .nodes
+            .keys()
+            .any(|id| id.to_string() == "env-gain")
+    );
     let group_node = parent
         .graph
         .nodes
@@ -1528,7 +1534,7 @@ fn group_from_nodes_rewires_boundaries() {
     assert_eq!(group_node.type_id, "voice.group");
     assert_eq!(group_node.group.as_deref(), Some(group_id));
     let child = &project.node_groups[group_id];
-    assert_eq!(child.interface.inputs.len(), 1);
+    assert_eq!(child.interface.inputs.len(), 2);
     assert_eq!(child.interface.outputs.len(), 2);
     assert!(
         child
@@ -1537,7 +1543,13 @@ fn group_from_nodes_rewires_boundaries() {
             .keys()
             .any(|id| id.to_string() == "partials")
     );
-    assert!(child.graph.nodes.keys().any(|id| id.to_string() == "env"));
+    assert!(
+        child
+            .graph
+            .nodes
+            .keys()
+            .any(|id| id.to_string() == "env-gain")
+    );
     let plan = project.tracks[0]
         .playback_graph(&project.node_groups, &project.audio_groups)
         .unwrap()
@@ -1565,7 +1577,13 @@ fn group_from_nodes_rewires_boundaries() {
             .keys()
             .any(|id| id.to_string() == "partials")
     );
-    assert!(parent.graph.nodes.keys().any(|id| id.to_string() == "env"));
+    assert!(
+        parent
+            .graph
+            .nodes
+            .keys()
+            .any(|id| id.to_string() == "env-gain")
+    );
     let plan = project.tracks[0]
         .playback_graph(&project.node_groups, &project.audio_groups)
         .unwrap()

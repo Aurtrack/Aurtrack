@@ -55,6 +55,8 @@
 | repeat | 重复 | Repeat Zone，引用循环体组并执行 count 次 |
 | iteration | 迭代 | 循环内部当前迭代序号 |
 | partial | 泛音 | 单次生成一个泛音的音频 |
+| attack | 起音 | `min(time / attack, 1)` 控制曲线 |
+| decay | 衰减 | `exp(-time / decay)` 控制曲线 |
 | patch | 音色 | 与 preset 区分 |
 | preset | 预设 | |
 | parameter | 参数 | |
