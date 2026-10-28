@@ -406,7 +406,6 @@ export const zhCN = {
   "node.voice.mix": "混合",
   "node.voice.gate": "门",
   "node.voice.time": "时间",
-  "node.voice.note_index": "音符序号",
   "node.voice.white_noise": "白噪声",
   "node.math.add": "加法",
   "node.math.multiply": "乘法",

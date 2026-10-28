@@ -436,7 +436,6 @@ export const en: Record<MessageKey, Message> = {
   "node.voice.mix": "Mix",
   "node.voice.gate": "Gate",
   "node.voice.time": "Time",
-  "node.voice.note_index": "Note Index",
   "node.voice.white_noise": "White Noise",
   "node.math.add": "Add",
   "node.math.multiply": "Multiply",

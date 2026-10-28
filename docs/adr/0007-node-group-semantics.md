@@ -29,7 +29,7 @@
 - Voice 组内部的 `Group Input` 输出 `Note`，由 `Separate Note` 节点拆成 `pitch`、`velocity`、`gate`，再进入振荡器、包络等节点。
 - `voice.add` 是纯加法，`A + B`；`voice.mix` 是 Blender 式混合，`Factor` 在第一个输入，按 `A*(1-Factor)+B*Factor` 插值。
 - `voice.gate` 有显式 `gate` 输入；默认钢琴图用 `Add → Gate → Output`，断开 gate 后输出为 0。
-- `voice.time` 输出逐音符时间；`voice.note_index` 输出音符序号，经 `voice.white_noise` 的 1D `W` 输入转换成确定性种子。
+- `voice.time` 输出逐音符时间；`Separate Note` 的 `index` 输出经 `voice.white_noise` 的 1D `W` 输入转换成确定性种子。
 - 包络和噪声从 `time`、`seed` 输入读取，不再直接读 `VoiceContext`。
 - 嵌套 Voice 组的 Note 输入未接线时绑定为禁用，不会从父级上下文偷音符。
 - 轨道里的 `audio.group.instance` 是**Audio 组实例**，端口由 `AudioGroup.interface` 动态生成。

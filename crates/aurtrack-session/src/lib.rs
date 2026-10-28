@@ -874,6 +874,7 @@ fn compile_voice_inner(
                 ("pitch", VoiceOp::Pitch),
                 ("velocity", VoiceOp::Velocity),
                 ("gate", VoiceOp::Gate),
+                ("index", VoiceOp::NoteIndex),
             ] {
                 let op = if note_connected {
                     op
@@ -969,7 +970,6 @@ fn compile_voice_inner(
             "voice.mix" => VoiceOp::Mix,
             "voice.gate" => VoiceOp::GateNode,
             "voice.time" => VoiceOp::Time,
-            "voice.note_index" => VoiceOp::NoteIndex,
             "voice.white_noise" => VoiceOp::WhiteNoise,
             "math.multiply" => VoiceOp::Multiply,
             "math.map_range" => VoiceOp::MapRange,

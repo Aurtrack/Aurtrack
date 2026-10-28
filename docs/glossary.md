@@ -47,7 +47,7 @@
 | factor | 系数 | 混合节点中 A 到 B 的插值位置 |
 | time | 时间 | 当前音符内的局部时间 |
 | seed | 种子 | 当前音符的确定性随机种子，由序号经白噪声转换 |
-| note index | 音符序号 | 当前音符在轨道事件列表中的序号 |
+| note index | 音符序号 | `Separate Note` 的 index 输出，当前音符在轨道事件列表中的序号 |
 | white noise | 白噪声 | 1D 确定性哈希，输入相同则输出相同 |
 | patch | 音色 | 与 preset 区分 |
 | preset | 预设 | |

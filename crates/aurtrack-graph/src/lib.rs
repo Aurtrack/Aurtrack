@@ -785,11 +785,6 @@ const VOICE_TIME_OUT: [VoiceSocketSpec; 1] =
         .with_default(0.0)
         .with_range(0.0, 1000.0)
         .with_step(0.001)];
-const VOICE_INDEX_OUT: [VoiceSocketSpec; 1] =
-    [VoiceSocketSpec::new("out", "Index", SocketType::Float)
-        .with_default(0.0)
-        .with_range(0.0, 1_000_000.0)
-        .with_step(1.0)];
 const WHITE_NOISE_INPUTS: [VoiceSocketSpec; 1] =
     [VoiceSocketSpec::new("w", "W", SocketType::Float)
         .with_default(0.0)
@@ -876,6 +871,10 @@ pub const VOICE_NODE_TYPES: &[VoiceNodeType] = &[
             VoiceSocketSpec::new("pitch", "Pitch", SocketType::Float),
             VoiceSocketSpec::new("velocity", "Velocity", SocketType::Float),
             VoiceSocketSpec::new("gate", "Gate", SocketType::Gate),
+            VoiceSocketSpec::new("index", "Index", SocketType::Float)
+                .with_default(0.0)
+                .with_range(0.0, 1_000_000.0)
+                .with_step(1.0),
         ],
         params: &[],
     },
@@ -941,14 +940,6 @@ pub const VOICE_NODE_TYPES: &[VoiceNodeType] = &[
         category: "Input",
         inputs: &[],
         outputs: &VOICE_TIME_OUT,
-        params: &[],
-    },
-    VoiceNodeType {
-        id: "voice.note_index",
-        name: "Note Index",
-        category: "Input",
-        inputs: &[],
-        outputs: &VOICE_INDEX_OUT,
         params: &[],
     },
     VoiceNodeType {
@@ -1172,7 +1163,6 @@ impl VoiceGraph {
         let env = VoiceNode::new(NodeId::fixed("env"), "env.percussive");
         let noise = VoiceNode::new(NodeId::fixed("noise"), "noise.burst");
         let time = VoiceNode::new(NodeId::fixed("time"), "voice.time");
-        let index = VoiceNode::new(NodeId::fixed("note-index"), "voice.note_index");
         let white_noise = VoiceNode::new(NodeId::fixed("white-noise"), "voice.white_noise");
         let add = VoiceNode::new(NodeId::fixed("add"), "voice.add");
         let gate = VoiceNode::new(NodeId::fixed("gate"), "voice.gate");
@@ -1185,7 +1175,6 @@ impl VoiceGraph {
             env,
             noise,
             time,
-            index,
             white_noise,
             add,
             gate,
@@ -1200,8 +1189,7 @@ impl VoiceGraph {
             ("env", [760.0, 40.0]),
             ("noise", [520.0, 220.0]),
             ("time", [800.0, 300.0]),
-            ("note-index", [520.0, 380.0]),
-            ("white-noise", [760.0, 440.0]),
+            ("white-noise", [760.0, 400.0]),
             ("add", [990.0, 140.0]),
             ("gate", [1160.0, 140.0]),
             ("out", [1350.0, 140.0]),
@@ -1243,7 +1231,7 @@ impl VoiceGraph {
                     PortRef::fixed(NodeId::fixed("noise"), "time"),
                 ),
                 VoiceConnection::new(
-                    PortRef::fixed(NodeId::fixed("note-index"), "out"),
+                    PortRef::fixed(NodeId::fixed("note-separate"), "index"),
                     PortRef::fixed(NodeId::fixed("white-noise"), "w"),
                 ),
                 VoiceConnection::new(
@@ -2613,7 +2601,7 @@ mod tests {
         let group = NodeGroup::piano_default();
         assert_eq!(group.interface.inputs.len(), 1);
         assert_eq!(group.interface.inputs[0].ty, NodeGroupSocketType::Note);
-        assert_eq!(group.graph.nodes.len(), 11);
+        assert_eq!(group.graph.nodes.len(), 10);
     }
 
     #[test]
