@@ -861,11 +861,19 @@ fn compile_voice_inner(
             continue;
         }
         if node.type_id == "note.separate" {
+            let note_connected = incoming
+                .iter()
+                .any(|connection| connection.to.port() == "note");
             for (port, op) in [
                 ("pitch", VoiceOp::Pitch),
                 ("velocity", VoiceOp::Velocity),
                 ("gate", VoiceOp::Gate),
             ] {
+                let op = if note_connected {
+                    op
+                } else {
+                    VoiceOp::Constant(0.0)
+                };
                 let index = nodes.len();
                 nodes.push(VoiceNodePlan::new(op, Vec::new()));
                 indices.insert((id.clone(), port.to_string()), index);
@@ -946,8 +954,9 @@ fn compile_voice_inner(
                 level: param("level", 0.15),
                 duration: param("duration", 0.008),
             },
+            "voice.add" | "math.add" => VoiceOp::Add,
             "voice.mix" => VoiceOp::Mix,
-            "math.add" => VoiceOp::Add,
+            "voice.gate" => VoiceOp::GateNode,
             "math.multiply" => VoiceOp::Multiply,
             "math.map_range" => VoiceOp::MapRange,
             "math.clamp" => VoiceOp::Clamp,

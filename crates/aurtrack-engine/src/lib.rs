@@ -107,6 +107,7 @@ pub enum VoiceOp {
         duration: f64,
     },
     Mix,
+    GateNode,
     Add,
     Multiply,
     MapRange,
@@ -186,14 +187,15 @@ impl VoicePlan {
                     }
                 },
                 VoiceOp::Mix => {
-                    let gate = node.inputs.get(2).map_or(1.0, |input| values[*input]);
-                    let sum = node
-                        .inputs
-                        .iter()
-                        .take(2)
-                        .map(|input| values[*input])
-                        .sum::<f64>();
-                    sum * gate
+                    let factor = node.inputs.first().map_or(0.5, |input| values[*input]);
+                    let a = node.inputs.get(1).map_or(0.0, |input| values[*input]);
+                    let b = node.inputs.get(2).map_or(0.0, |input| values[*input]);
+                    a * (1.0 - factor) + b * factor
+                },
+                VoiceOp::GateNode => {
+                    let signal = node.inputs.first().map_or(0.0, |input| values[*input]);
+                    let gate = node.inputs.get(1).map_or(0.0, |input| values[*input]);
+                    signal * gate
                 },
                 VoiceOp::Add => node.inputs.iter().map(|input| values[*input]).sum(),
                 VoiceOp::Multiply => node
@@ -1308,7 +1310,7 @@ mod tests {
                     },
                     vec![],
                 ),
-                VoiceNodePlan::new(VoiceOp::Mix, vec![1, 2]),
+                VoiceNodePlan::new(VoiceOp::Add, vec![1, 2]),
                 VoiceNodePlan::new(VoiceOp::Output, vec![3]),
             ],
             4,
@@ -1324,7 +1326,7 @@ mod tests {
     }
 
     #[test]
-    fn voice_mix_uses_explicit_gate_input() {
+    fn voice_gate_node_uses_explicit_gate_input() {
         let context = VoiceContext {
             pitch: 261.63,
             velocity: 0.8,
@@ -1335,9 +1337,33 @@ mod tests {
         for (gate, expected) in [(0.0, 0.0), (1.0, 0.5)] {
             let plan = VoicePlan::new(
                 vec![
-                    VoiceNodePlan::new(VoiceOp::Constant(0.25), vec![]),
-                    VoiceNodePlan::new(VoiceOp::Constant(0.25), vec![]),
+                    VoiceNodePlan::new(VoiceOp::Constant(0.5), vec![]),
                     VoiceNodePlan::new(VoiceOp::Constant(gate), vec![]),
+                    VoiceNodePlan::new(VoiceOp::GateNode, vec![0, 1]),
+                    VoiceNodePlan::new(VoiceOp::Output, vec![2]),
+                ],
+                3,
+            );
+            let sample = plan.sample(context);
+            assert!((sample - expected).abs() < 1e-9);
+        }
+    }
+
+    #[test]
+    fn voice_mix_uses_factor_input() {
+        let context = VoiceContext {
+            pitch: 261.63,
+            velocity: 0.8,
+            local_time: 0.0,
+            gate: true,
+            seed: 7,
+        };
+        for (factor, expected) in [(0.0, 0.25), (0.25, 0.375), (1.0, 0.75)] {
+            let plan = VoicePlan::new(
+                vec![
+                    VoiceNodePlan::new(VoiceOp::Constant(factor), vec![]),
+                    VoiceNodePlan::new(VoiceOp::Constant(0.25), vec![]),
+                    VoiceNodePlan::new(VoiceOp::Constant(0.75), vec![]),
                     VoiceNodePlan::new(VoiceOp::Mix, vec![0, 1, 2]),
                     VoiceNodePlan::new(VoiceOp::Output, vec![3]),
                 ],

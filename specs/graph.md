@@ -73,10 +73,17 @@ group.input(note)
   └─ note.separate
        ├─ pitch ──→ osc.pitch
        ├─ velocity ─→ osc.velocity / noise.velocity
-       └─ gate ───→ mix.gate
+       └─ gate ───→ gate.gate
+
+osc/env ──→ add.A
+noise   ──→ add.B
+add     ──→ gate.in
+gate    ──→ out.audio
 ```
 
-钢琴轨的 Audio 图默认把 `audio.note` 音符输入节点连到 `audio.group.note`。断开这条线即停止音符事件；断开 `mix.gate` 即静音混音输出。
+钢琴轨的 Audio 图默认把 `audio.note` 音符输入节点连到 `audio.group.note`。断开这条线即停止音符事件；断开 `gate.gate` 即静音输出。
+
+`voice.add` 是纯加法；`voice.mix` 是带 `Factor` 的 Blender 式混合，输入顺序固定为 `Factor, A, B`。
 
 组节点只引用组 ID；同一个组可以被多条轨道复用。
 

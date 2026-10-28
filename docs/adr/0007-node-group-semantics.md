@@ -27,7 +27,8 @@
 - 轨道里的 `audio.group` 是**音色乐器**，只引用 Voice 组，默认接口只有 `Note → Audio`。
 - 钢琴轨的 Audio 图默认有一个 `audio.note` 音符输入节点，连到乐器的 `Note` 端口；断开这条线就没有音符事件。
 - Voice 组内部的 `Group Input` 输出 `Note`，由 `Separate Note` 节点拆成 `pitch`、`velocity`、`gate`，再进入振荡器、包络等节点。
-- `voice.mix` 有显式 `gate` 输入，默认钢琴图把 `note-separate.gate` 接过去；断开 gate 后混音输出为 0。
+- `voice.add` 是纯加法，`A + B`；`voice.mix` 是 Blender 式混合，`Factor` 在第一个输入，按 `A*(1-Factor)+B*Factor` 插值。
+- `voice.gate` 有显式 `gate` 输入；默认钢琴图用 `Add → Gate → Output`，断开 gate 后输出为 0。
 - 轨道里的 `audio.group.instance` 是**Audio 组实例**，端口由 `AudioGroup.interface` 动态生成。
 - Voice 图里的 `voice.group` 继续是真正的 Voice 组实例。
 
@@ -77,7 +78,7 @@
 - 轨道中的音色乐器和 Audio 组实例在数据和 UI 上都能区分。
 - 组接口默认值、范围、面板和说明可编辑并参与编译。
 - 音色乐器只暴露一个 `Note` 输入，逐音符拆分在 Voice 组内部完成。
-- Note 源和 Gate 都是显式连线，拔掉后引擎立即停止对应事件/声音。
+- Note 源、Note 连线和 Gate 都是显式连线，拔掉后引擎立即停止对应事件/声音。
 - Audio 组可嵌套、可展开、可保存、可撤销。
 
 ## 剩余限制

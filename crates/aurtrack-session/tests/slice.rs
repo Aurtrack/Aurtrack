@@ -1403,18 +1403,18 @@ fn math_nodes_flow_into_voice_engine() {
     });
     connections.push(json!({
         "from": { "node": "note-separate", "port": "pitch" },
-        "to": { "node": "add", "port": "a" }
+        "to": { "node": "sum", "port": "a" }
     }));
     connections.push(json!({
         "from": { "node": "offset", "port": "out" },
-        "to": { "node": "add", "port": "b" }
+        "to": { "node": "sum", "port": "b" }
     }));
     connections.push(json!({
-        "from": { "node": "add", "port": "out" },
+        "from": { "node": "sum", "port": "out" },
         "to": { "node": "osc", "port": "pitch" }
     }));
-    voice["nodes"]["add"] = json!({
-        "id": "add",
+    voice["nodes"]["sum"] = json!({
+        "id": "sum",
         "type_id": "math.add",
         "params": {}
     });
@@ -1828,6 +1828,61 @@ fn piano_note_source_is_explicit() {
         .unwrap();
     assert!(plan.piano.is_none());
     let path = temp_path("no-note-source");
+    let rendered = run(
+        &mut session,
+        "render.segment",
+        json!({ "path": path, "duration_seconds": 0.5 }),
+    );
+    assert!(rendered["rms"].as_f64().unwrap() < 1e-9);
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn piano_note_wire_is_explicit() {
+    let mut session = Session::default();
+    run(
+        &mut session,
+        "project.create",
+        json!({ "name": "note-wire" }),
+    );
+    run(
+        &mut session,
+        "track.create",
+        json!({ "name": "Piano", "source": "piano" }),
+    );
+    run(
+        &mut session,
+        "clip.create",
+        json!({ "track_id": "track-1", "start": 0.0, "duration": 1.0 }),
+    );
+    run(
+        &mut session,
+        "note.add",
+        json!({
+            "path": "/tracks/track-1/clips/clip-1",
+            "pitch": 60,
+            "start": 0.0,
+            "duration": 0.5,
+            "velocity": 0.8
+        }),
+    );
+    let project = session.project().unwrap().clone();
+    let mut voice = serde_json::to_value(&project.node_groups["piano.voice"].graph).unwrap();
+    voice["connections"]
+        .as_array_mut()
+        .unwrap()
+        .retain(|connection| {
+            !(connection["from"]["node"] == "voice-in"
+                && connection["from"]["port"] == "note"
+                && connection["to"]["node"] == "note-separate"
+                && connection["to"]["port"] == "note")
+        });
+    run(
+        &mut session,
+        "group.voice",
+        json!({ "group_id": "piano.voice", "voice": voice }),
+    );
+    let path = temp_path("note-wire");
     let rendered = run(
         &mut session,
         "render.segment",

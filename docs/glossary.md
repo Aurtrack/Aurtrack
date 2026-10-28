@@ -42,6 +42,9 @@
 | note input | 音符输入 | `audio.note`，当前轨道的钢琴卷帘事件源 |
 | note separate | 分离音符 | 把 Note 拆成 pitch、velocity、gate |
 | gate | 门 | 控制事件或声音是否通过 |
+| add | 加法 | 两个输入相加，没有系数 |
+| mix | 混合 | Blender 式混合，`Factor` 在第一个输入 |
+| factor | 系数 | 混合节点中 A 到 B 的插值位置 |
 | patch | 音色 | 与 preset 区分 |
 | preset | 预设 | |
 | parameter | 参数 | |

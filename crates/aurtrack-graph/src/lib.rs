@@ -749,9 +749,20 @@ const NOISE_INPUTS: [VoiceSocketSpec; 3] = [
 
 const AUDIO_OUT: [VoiceSocketSpec; 1] = [VoiceSocketSpec::new("out", "Audio", SocketType::Audio)];
 const FLOAT_OUT: [VoiceSocketSpec; 1] = [VoiceSocketSpec::new("out", "Value", SocketType::Float)];
-const VOICE_MIX_INPUTS: [VoiceSocketSpec; 3] = [
+const VOICE_ADD_INPUTS: [VoiceSocketSpec; 2] = [
     VoiceSocketSpec::new("in1", "A", SocketType::Audio),
     VoiceSocketSpec::new("in2", "B", SocketType::Audio),
+];
+const VOICE_MIX_INPUTS: [VoiceSocketSpec; 3] = [
+    VoiceSocketSpec::new("factor", "Factor", SocketType::Float)
+        .with_default(0.5)
+        .with_range(0.0, 1.0)
+        .with_step(0.01),
+    VoiceSocketSpec::new("in1", "A", SocketType::Audio),
+    VoiceSocketSpec::new("in2", "B", SocketType::Audio),
+];
+const VOICE_GATE_INPUTS: [VoiceSocketSpec; 2] = [
+    VoiceSocketSpec::new("in", "Audio", SocketType::Audio),
     VoiceSocketSpec::new("gate", "Gate", SocketType::Gate)
         .with_default(0.0)
         .with_range(0.0, 1.0)
@@ -869,10 +880,26 @@ pub const VOICE_NODE_TYPES: &[VoiceNodeType] = &[
         params: &[],
     },
     VoiceNodeType {
+        id: "voice.add",
+        name: "Add",
+        category: "Audio",
+        inputs: &VOICE_ADD_INPUTS,
+        outputs: &AUDIO_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
         id: "voice.mix",
         name: "Mix",
         category: "Audio",
         inputs: &VOICE_MIX_INPUTS,
+        outputs: &AUDIO_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "voice.gate",
+        name: "Gate",
+        category: "Audio",
+        inputs: &VOICE_GATE_INPUTS,
         outputs: &AUDIO_OUT,
         params: &[],
     },
@@ -1087,10 +1114,11 @@ impl VoiceGraph {
         let osc = VoiceNode::new(NodeId::fixed("osc"), "osc.partials");
         let env = VoiceNode::new(NodeId::fixed("env"), "env.percussive");
         let noise = VoiceNode::new(NodeId::fixed("noise"), "noise.burst");
-        let mix = VoiceNode::new(NodeId::fixed("mix"), "voice.mix");
+        let add = VoiceNode::new(NodeId::fixed("add"), "voice.add");
+        let gate = VoiceNode::new(NodeId::fixed("gate"), "voice.gate");
         let output = VoiceNode::new(NodeId::fixed("out"), "group.output");
         let mut nodes = BTreeMap::new();
-        for node in [input, separate, osc, env, noise, mix, output] {
+        for node in [input, separate, osc, env, noise, add, gate, output] {
             nodes.insert(node.id.clone(), node);
         }
         let positions = [
@@ -1099,8 +1127,9 @@ impl VoiceGraph {
             ("osc", [520.0, 40.0]),
             ("env", [760.0, 40.0]),
             ("noise", [520.0, 220.0]),
-            ("mix", [990.0, 120.0]),
-            ("out", [1220.0, 120.0]),
+            ("add", [990.0, 140.0]),
+            ("gate", [1160.0, 140.0]),
+            ("out", [1350.0, 140.0]),
         ];
         for (id, position) in positions {
             if let Some(node) = nodes.get_mut(&NodeId::fixed(id)) {
@@ -1113,10 +1142,6 @@ impl VoiceGraph {
                 VoiceConnection::new(
                     PortRef::fixed(NodeId::fixed("voice-in"), "note"),
                     PortRef::fixed(NodeId::fixed("note-separate"), "note"),
-                ),
-                VoiceConnection::new(
-                    PortRef::fixed(NodeId::fixed("note-separate"), "gate"),
-                    PortRef::fixed(NodeId::fixed("mix"), "gate"),
                 ),
                 VoiceConnection::new(
                     PortRef::fixed(NodeId::fixed("note-separate"), "pitch"),
@@ -1136,14 +1161,22 @@ impl VoiceGraph {
                 ),
                 VoiceConnection::new(
                     PortRef::fixed(NodeId::fixed("env"), "out"),
-                    PortRef::fixed(NodeId::fixed("mix"), "in1"),
+                    PortRef::fixed(NodeId::fixed("add"), "in1"),
                 ),
                 VoiceConnection::new(
                     PortRef::fixed(NodeId::fixed("noise"), "out"),
-                    PortRef::fixed(NodeId::fixed("mix"), "in2"),
+                    PortRef::fixed(NodeId::fixed("add"), "in2"),
                 ),
                 VoiceConnection::new(
-                    PortRef::fixed(NodeId::fixed("mix"), "out"),
+                    PortRef::fixed(NodeId::fixed("add"), "out"),
+                    PortRef::fixed(NodeId::fixed("gate"), "in"),
+                ),
+                VoiceConnection::new(
+                    PortRef::fixed(NodeId::fixed("note-separate"), "gate"),
+                    PortRef::fixed(NodeId::fixed("gate"), "gate"),
+                ),
+                VoiceConnection::new(
+                    PortRef::fixed(NodeId::fixed("gate"), "out"),
                     PortRef::fixed(NodeId::fixed("out"), "audio"),
                 ),
             ],
@@ -2489,7 +2522,7 @@ mod tests {
         let group = NodeGroup::piano_default();
         assert_eq!(group.interface.inputs.len(), 1);
         assert_eq!(group.interface.inputs[0].ty, NodeGroupSocketType::Note);
-        assert_eq!(group.graph.nodes.len(), 7);
+        assert_eq!(group.graph.nodes.len(), 8);
     }
 
     #[test]
