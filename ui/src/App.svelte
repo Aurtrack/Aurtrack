@@ -73,6 +73,9 @@
       void session.deleteSelected();
     } else if (key === " ") {
       event.preventDefault();
+      if (document.activeElement instanceof HTMLElement) {
+        document.activeElement.blur();
+      }
       if (session.playing) void session.stop();
       else void session.play();
     }
