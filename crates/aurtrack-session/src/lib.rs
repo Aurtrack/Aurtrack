@@ -209,12 +209,13 @@ fn incoming_ref(
 fn compile_audio_inputs(
     graph: &AudioGraph,
     node: &AudioNode,
+    voice_groups: &BTreeMap<String, NodeGroup>,
     audio_groups: &BTreeMap<String, AudioGroup>,
     interface: Option<&NodeGroupInterface>,
     indices: &BTreeMap<(NodeId, String), usize>,
     nodes: &mut Vec<GraphNodePlan>,
 ) -> Result<Vec<usize>, GraphError> {
-    let ports = AudioGraph::inputs_with_groups(node, audio_groups, interface)?;
+    let ports = AudioGraph::inputs_with_all_groups(node, voice_groups, audio_groups, interface)?;
     let mut inputs = Vec::new();
     for port in ports
         .iter()
@@ -249,12 +250,13 @@ fn compile_audio_inputs(
 fn compile_audio_controls(
     graph: &AudioGraph,
     node: &AudioNode,
+    voice_groups: &BTreeMap<String, NodeGroup>,
     audio_groups: &BTreeMap<String, AudioGroup>,
     interface: Option<&NodeGroupInterface>,
     indices: &BTreeMap<(NodeId, String), usize>,
     nodes: &mut Vec<GraphNodePlan>,
 ) -> Result<Vec<usize>, GraphError> {
-    let ports = AudioGraph::inputs_with_groups(node, audio_groups, interface)?;
+    let ports = AudioGraph::inputs_with_all_groups(node, voice_groups, audio_groups, interface)?;
     let mut controls = Vec::new();
     for port in ports
         .iter()
@@ -284,6 +286,7 @@ fn compile_audio_controls(
 
 fn compile_audio_graph(
     graph: &AudioGraph,
+    voice_groups: &BTreeMap<String, NodeGroup>,
     audio_groups: &BTreeMap<String, AudioGroup>,
     interface: Option<&NodeGroupInterface>,
     input_bindings: Option<&BTreeMap<String, usize>>,
@@ -302,7 +305,12 @@ fn compile_audio_graph(
                 if interface.is_none() {
                     return Err(GraphError::GroupBoundaryOutsideGroup);
                 }
-                let ports = AudioGraph::outputs_with_groups(node, audio_groups, interface)?;
+                let ports = AudioGraph::outputs_with_all_groups(
+                    node,
+                    voice_groups,
+                    audio_groups,
+                    interface,
+                )?;
                 for port in ports {
                     let index = input_bindings
                         .and_then(|bindings| bindings.get(&port.id))
@@ -316,7 +324,12 @@ fn compile_audio_graph(
                 if interface.is_none() {
                     return Err(GraphError::GroupBoundaryOutsideGroup);
                 }
-                let ports = AudioGraph::inputs_with_groups(node, audio_groups, interface)?;
+                let ports = AudioGraph::inputs_with_all_groups(
+                    node,
+                    voice_groups,
+                    audio_groups,
+                    interface,
+                )?;
                 for port in ports {
                     if let Some(reference) = incoming_ref(graph, &origins, &id, &port.id) {
                         compiled.outputs.insert(port.id, reference);
@@ -343,7 +356,12 @@ fn compile_audio_graph(
                     continue;
                 }
                 let mut bindings = BTreeMap::new();
-                let ports = AudioGraph::inputs_with_groups(node, audio_groups, interface)?;
+                let ports = AudioGraph::inputs_with_all_groups(
+                    node,
+                    voice_groups,
+                    audio_groups,
+                    interface,
+                )?;
                 for port in ports {
                     let index =
                         incoming_index(graph, &indices, &id, &port.id).unwrap_or_else(|| {
@@ -354,6 +372,7 @@ fn compile_audio_graph(
                 stack.push(group_id.to_string());
                 let child = compile_audio_graph(
                     &group.graph,
+                    voice_groups,
                     audio_groups,
                     Some(&group.interface),
                     Some(&bindings),
@@ -391,6 +410,7 @@ fn compile_audio_graph(
                 let inputs = compile_audio_inputs(
                     graph,
                     node,
+                    voice_groups,
                     audio_groups,
                     interface,
                     &indices,
@@ -411,13 +431,19 @@ fn compile_audio_graph(
                 let inputs = compile_audio_inputs(
                     graph,
                     node,
+                    voice_groups,
                     audio_groups,
                     interface,
                     &indices,
                     &mut nodes,
                 )?;
                 if node.muted {
-                    let ports = AudioGraph::inputs_with_groups(node, audio_groups, interface)?;
+                    let ports = AudioGraph::inputs_with_all_groups(
+                        node,
+                        voice_groups,
+                        audio_groups,
+                        interface,
+                    )?;
                     let reference = ports
                         .iter()
                         .find(|port| port.ty == NodeGroupSocketType::Audio)
@@ -426,7 +452,12 @@ fn compile_audio_graph(
                     let target = match reference {
                         AudioOutputRef::Parent(index) | AudioOutputRef::Local(index) => index,
                     };
-                    let outputs = AudioGraph::outputs_with_groups(node, audio_groups, interface)?;
+                    let outputs = AudioGraph::outputs_with_all_groups(
+                        node,
+                        voice_groups,
+                        audio_groups,
+                        interface,
+                    )?;
                     for port in outputs {
                         indices.insert((id.clone(), port.id.clone()), target);
                         origins.insert((id.clone(), port.id), reference);
@@ -436,6 +467,7 @@ fn compile_audio_graph(
                 let controls = compile_audio_controls(
                     graph,
                     node,
+                    voice_groups,
                     audio_groups,
                     interface,
                     &indices,
@@ -679,7 +711,14 @@ impl Track {
                 _ => {},
             }
         }
-        let compiled = compile_audio_graph(&self.graph, audio_groups, None, None, &mut Vec::new())?;
+        let compiled = compile_audio_graph(
+            &self.graph,
+            groups,
+            audio_groups,
+            None,
+            None,
+            &mut Vec::new(),
+        )?;
         let nodes = compiled.nodes;
         let output = compiled.output.ok_or(GraphError::AudioOutputCount(0))?;
         if nodes.len() > aurtrack_engine::MAX_GRAPH_NODES {
@@ -1369,26 +1408,36 @@ impl Session {
             .and_then(|project| project.tracks.iter().find(|track| track.id == track_id))
             .and_then(|track| track.graph.node(&node_id))
             .ok_or_else(|| CommandError::not_found(format!("找不到参数：{path}")))?;
-        if node.type_id == "audio.group.instance" {
+        if matches!(
+            node.type_id.as_str(),
+            "audio.group.instance" | "audio.group"
+        ) {
             let group_id = node
                 .group
                 .clone()
-                .ok_or_else(|| CommandError::invalid_args("组实例缺少 group"))?;
+                .ok_or_else(|| CommandError::invalid_args("组节点缺少 group"))?;
             let project = self
                 .project
                 .as_ref()
                 .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
-            let socket = project
-                .audio_groups
-                .get(&group_id)
-                .and_then(|group| {
+            let socket = if node.type_id == "audio.group" {
+                project.node_groups.get(&group_id).and_then(|group| {
                     group
                         .interface
                         .inputs
                         .iter()
                         .find(|socket| socket.id == name)
                 })
-                .ok_or_else(|| CommandError::not_found(format!("找不到参数：{path}")))?;
+            } else {
+                project.audio_groups.get(&group_id).and_then(|group| {
+                    group
+                        .interface
+                        .inputs
+                        .iter()
+                        .find(|socket| socket.id == name)
+                })
+            }
+            .ok_or_else(|| CommandError::not_found(format!("找不到参数：{path}")))?;
             if socket.ty == NodeGroupSocketType::Audio {
                 return Err(CommandError::invalid_args("Audio 接口不能设置数值参数"));
             }

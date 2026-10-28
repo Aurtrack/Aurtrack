@@ -339,13 +339,29 @@
   });
 
   function groupHeaderHeight(node: GraphNode): number {
-    if (nodeTypeId(node) === "audio.group.instance") return 18;
-    if (nodeTypeId(node) !== "audio.group") return 0;
-    return groupFor(node) ? 42 : 18;
+    if (
+      nodeTypeId(node) === "audio.group.instance" ||
+      nodeTypeId(node) === "audio.group"
+    ) {
+      return 18;
+    }
+    return 0;
   }
 
   function groupPorts(node: GraphNode, side: "inputs" | "outputs") {
     const type = nodeTypeId(node);
+    if (type === "audio.group") {
+      if (side === "outputs") return undefined;
+      const group = node.group ? session.nodeGroups[node.group] : undefined;
+      if (!group) return [];
+      return group.interface.inputs.map((socket) => ({
+        id: socket.id,
+        name: socket.name,
+        type: socket.type,
+        default: socket.default,
+        panel: socket.panel,
+      }));
+    }
     if (type === "audio.group.input") {
       const group = track ? session.audioGroups[track.id] : undefined;
       if (side !== "outputs") return [];
@@ -390,20 +406,36 @@
     return groupPorts(node, "outputs") ?? nodeType(node)?.outputs ?? [];
   }
 
+  function socketFallback(socket: { id: string; type: string }): number {
+    const key = socket.id.toLowerCase();
+    if (key === "pitch") return 261.63;
+    if (key === "velocity") return 0.8;
+    if (key === "gate") return 1;
+    return 0;
+  }
+
   function matchingParam(node: GraphNode, portId: string) {
     const declared = nodeType(node)?.params.find(
       (param) => param.name === portId,
     );
     if (declared) return declared;
-    if (nodeTypeId(node) !== "audio.group.instance") return undefined;
-    const group = node.group ? session.audioGroups[node.group] : undefined;
-    const socket = group?.interface.inputs.find(
+    const type = nodeTypeId(node);
+    const group =
+      type === "audio.group.instance"
+        ? node.group
+          ? session.audioGroups[node.group]
+          : undefined
+        : type === "audio.group" && node.group
+          ? session.nodeGroups[node.group]
+          : undefined;
+    if (!group) return undefined;
+    const socket = group.interface.inputs.find(
       (candidate) => candidate.id === portId,
     );
     if (!socket || socket.type === "audio") return undefined;
     return {
       name: socket.id,
-      default: socket.default ?? 0,
+      default: socket.default ?? socketFallback(socket),
       minimum: socket.minimum ?? -Infinity,
       maximum: socket.maximum ?? Infinity,
       step: socket.step ?? 0.01,
@@ -625,8 +657,16 @@
 
   function sidebarParams(node: GraphNode) {
     const params = [...(nodeType(node)?.params ?? [])];
-    if (nodeTypeId(node) === "audio.group.instance") {
-      const group = node.group ? session.audioGroups[node.group] : undefined;
+    const type = nodeTypeId(node);
+    if (type === "audio.group.instance" || type === "audio.group") {
+      const group =
+        type === "audio.group"
+          ? node.group
+            ? session.nodeGroups[node.group]
+            : undefined
+          : node.group
+            ? session.audioGroups[node.group]
+            : undefined;
       for (const socket of group?.interface.inputs ?? []) {
         if (socket.type === "audio") continue;
         const param = matchingParam(node, socket.id);
@@ -2229,32 +2269,6 @@
                   </button>
                 {/if}
               </div>
-              {#if groupFor(node)}
-                <div class="graph-group-interface">
-                  {#each groupFor(node)?.interface.inputs ?? [] as port (port.id)}
-                    <span
-                      class="graph-group-chip"
-                      class:port-audio={port.type === "audio"}
-                      class:port-float={port.type === "float"}
-                      class:port-gate={port.type === "gate"}
-                      title={t("graph.noteDriven")}
-                    >
-                      <i></i>{socketLabel(port.name)}
-                    </span>
-                  {/each}
-                  <span class="graph-group-arrow">→</span>
-                  {#each groupFor(node)?.interface.outputs ?? [] as port (port.id)}
-                    <span
-                      class="graph-group-chip out"
-                      class:port-audio={port.type === "audio"}
-                      class:port-float={port.type === "float"}
-                      class:port-gate={port.type === "gate"}
-                    >
-                      <i></i>{socketLabel(port.name)}
-                    </span>
-                  {/each}
-                </div>
-              {/if}
             {/if}
 
             {#each nodeInputs(node) as input, index (input.id)}

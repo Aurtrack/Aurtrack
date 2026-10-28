@@ -1070,15 +1070,29 @@ impl AudioGraph {
             .ok_or_else(|| GraphError::UnknownAudioNodeType(node.type_id.clone()))
     }
 
-    /// 解析 Audio 端口，组实例和组边界按接口动态生成。
-    pub fn inputs_with_groups(
+    /// 解析 Audio 端口，组实例、组边界和音色乐器按接口动态生成。
+    pub fn inputs_with_all_groups(
         node: &AudioNode,
-        groups: &BTreeMap<String, AudioGroup>,
+        voice_groups: &BTreeMap<String, crate::NodeGroup>,
+        audio_groups: &BTreeMap<String, AudioGroup>,
         interface: Option<&NodeGroupInterface>,
     ) -> Result<Vec<AudioPort>, GraphError> {
         match node.type_id.as_str() {
             "audio.group.instance" => {
-                let group = groups
+                let group = audio_groups
+                    .get(node.group.as_deref().ok_or(GraphError::EmptyGroupId)?)
+                    .ok_or_else(|| {
+                        GraphError::GroupMissing(node.group.clone().unwrap_or_default())
+                    })?;
+                Ok(group
+                    .interface
+                    .inputs
+                    .iter()
+                    .map(audio_port_from_socket)
+                    .collect())
+            },
+            "audio.group" => {
+                let group = voice_groups
                     .get(node.group.as_deref().ok_or(GraphError::EmptyGroupId)?)
                     .ok_or_else(|| {
                         GraphError::GroupMissing(node.group.clone().unwrap_or_default())
@@ -1101,15 +1115,25 @@ impl AudioGraph {
         }
     }
 
-    /// 解析 Audio 输出端口，组实例和组边界按接口动态生成。
-    pub fn outputs_with_groups(
+    /// 解析 Audio 端口，组实例和组边界按接口动态生成。
+    pub fn inputs_with_groups(
         node: &AudioNode,
         groups: &BTreeMap<String, AudioGroup>,
         interface: Option<&NodeGroupInterface>,
     ) -> Result<Vec<AudioPort>, GraphError> {
+        Self::inputs_with_all_groups(node, &BTreeMap::new(), groups, interface)
+    }
+
+    /// 解析 Audio 输出端口，组实例、组边界和音色乐器按接口动态生成。
+    pub fn outputs_with_all_groups(
+        node: &AudioNode,
+        _voice_groups: &BTreeMap<String, crate::NodeGroup>,
+        audio_groups: &BTreeMap<String, AudioGroup>,
+        interface: Option<&NodeGroupInterface>,
+    ) -> Result<Vec<AudioPort>, GraphError> {
         match node.type_id.as_str() {
             "audio.group.instance" => {
-                let group = groups
+                let group = audio_groups
                     .get(node.group.as_deref().ok_or(GraphError::EmptyGroupId)?)
                     .ok_or_else(|| {
                         GraphError::GroupMissing(node.group.clone().unwrap_or_default())
@@ -1130,6 +1154,15 @@ impl AudioGraph {
             "audio.group.output" => Ok(Vec::new()),
             _ => Self::outputs(node),
         }
+    }
+
+    /// 解析 Audio 输出端口，组实例和组边界按接口动态生成。
+    pub fn outputs_with_groups(
+        node: &AudioNode,
+        groups: &BTreeMap<String, AudioGroup>,
+        interface: Option<&NodeGroupInterface>,
+    ) -> Result<Vec<AudioPort>, GraphError> {
+        Self::outputs_with_all_groups(node, &BTreeMap::new(), groups, interface)
     }
 
     pub fn validate(&self, groups: &BTreeMap<String, crate::NodeGroup>) -> Result<(), GraphError> {
@@ -1237,8 +1270,10 @@ impl AudioGraph {
                 .nodes
                 .get(&connection.to.node)
                 .ok_or_else(|| GraphError::UnknownNode(connection.to.node.clone()))?;
-            let source_ports = Self::outputs_with_groups(source, audio_groups, interface)?;
-            let target_ports = Self::inputs_with_groups(target, audio_groups, interface)?;
+            let source_ports =
+                Self::outputs_with_all_groups(source, voice_groups, audio_groups, interface)?;
+            let target_ports =
+                Self::inputs_with_all_groups(target, voice_groups, audio_groups, interface)?;
             let Some(source_port) = source_ports
                 .iter()
                 .find(|port| port.id == connection.from.port)

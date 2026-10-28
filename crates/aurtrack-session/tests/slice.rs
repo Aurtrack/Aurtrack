@@ -1745,6 +1745,65 @@ fn audio_groups_create_persist_and_delete() {
 }
 
 #[test]
+fn piano_instrument_exposes_voice_interface_ports() {
+    let mut session = Session::default();
+    run(
+        &mut session,
+        "project.create",
+        json!({ "name": "piano-ports" }),
+    );
+    run(
+        &mut session,
+        "track.create",
+        json!({ "name": "Piano", "source": "piano" }),
+    );
+    let value = run(
+        &mut session,
+        "node.add",
+        json!({
+            "track_id": "track-1",
+            "kind": "audio.value",
+            "position": [300.0, 300.0]
+        }),
+    );
+    let value_id = value["node_id"].as_str().unwrap();
+    run(
+        &mut session,
+        "node.connect",
+        json!({
+            "from": format!("/tracks/track-1/nodes/{value_id}"),
+            "from_port": "out",
+            "to": "/tracks/track-1/nodes/instrument",
+            "to_port": "pitch"
+        }),
+    );
+    run(
+        &mut session,
+        "param.set",
+        json!({
+            "path": "/tracks/track-1/nodes/instrument/params/velocity",
+            "value": 0.5
+        }),
+    );
+    let project = session.project().unwrap();
+    let instrument = project.tracks[0]
+        .graph
+        .nodes
+        .values()
+        .find(|node| node.id.as_str() == "instrument")
+        .unwrap();
+    assert_eq!(instrument.params.get("velocity"), Some(&0.5));
+    let (_, _, plan) = project.tracks[0]
+        .playback_graph(&project.node_groups, &project.audio_groups)
+        .unwrap();
+    assert!(
+        plan.nodes
+            .iter()
+            .any(|node| matches!(node.op, aurtrack_engine::GraphOp::Voice))
+    );
+}
+
+#[test]
 fn audio_group_from_nodes_packs_effect_chain() {
     let mut session = Session::default();
     run(
