@@ -273,6 +273,26 @@
     return result;
   });
 
+  let wireBounds = $derived.by(() => {
+    let minX = 0;
+    let minY = 0;
+    let maxX = CANVAS_WIDTH;
+    let maxY = CANVAS_HEIGHT;
+    for (const position of Object.values(positions)) {
+      minX = Math.min(minX, position.x);
+      minY = Math.min(minY, position.y);
+      maxX = Math.max(maxX, position.x + NODE_WIDTH);
+      maxY = Math.max(maxY, position.y + 300);
+    }
+    const padding = 240;
+    return {
+      x: minX - padding,
+      y: minY - padding,
+      width: maxX - minX + padding * 2,
+      height: maxY - minY + padding * 2,
+    };
+  });
+
   function groupHeaderHeight(node: VoiceNode): number {
     return node.type_id === "voice.group" ? 18 : 0;
   }
@@ -2054,7 +2074,15 @@
           ></div>
         </div>
       {/each}
-      <svg class="voice-editor-wires" viewBox={`0 0 ${CANVAS_WIDTH} ${CANVAS_HEIGHT}`}>
+      <svg
+        class="voice-editor-wires"
+        viewBox={`${wireBounds.x} ${wireBounds.y} ${wireBounds.width} ${wireBounds.height}`}
+        style:left={`${wireBounds.x}px`}
+        style:top={`${wireBounds.y}px`}
+        style:width={`${wireBounds.width}px`}
+        style:height={`${wireBounds.height}px`}
+        style:overflow="visible"
+      >
         {#each voice.connections as connection (connection.from.node + connection.from.port + connection.to.node + connection.to.port)}
           <path
             class="voice-wire-hit"
