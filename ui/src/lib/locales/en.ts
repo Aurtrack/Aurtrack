@@ -545,6 +545,7 @@ export const en: Record<MessageKey, Message> = {
   "param.min": "Min",
   "param.max": "Max",
   "socket.audio": "Audio",
+  "socket.count": "Iterations",
   "socket.note": "Note",
   "socket.value": "Value",
   "socket.gate": "Gate",

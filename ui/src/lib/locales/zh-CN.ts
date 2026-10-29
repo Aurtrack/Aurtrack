@@ -515,6 +515,7 @@ export const zhCN = {
   "param.min": "最小",
   "param.max": "最大",
   "socket.audio": "音频",
+  "socket.count": "迭代",
   "socket.note": "音符",
   "socket.value": "值",
   "socket.gate": "门",

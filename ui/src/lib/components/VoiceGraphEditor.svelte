@@ -125,11 +125,7 @@
   }
 
   function isZoneChrome(node: VoiceNode): boolean {
-    return (
-      node.type_id === "voice.zone.repeat" ||
-      node.type_id === "voice.zone.input" ||
-      node.type_id === "voice.zone.output"
-    );
+    return node.type_id === "voice.zone.repeat";
   }
 
   function zoneHeaders(): VoiceNode[] {
@@ -317,22 +313,86 @@
     syncZoneInterface(header);
   }
 
+  function zoneBoundaryPortY(node: VoiceNode, index: number): number {
+    const offset = node.type_id === "voice.zone.input" ? 1 : 0;
+    return (
+      NODE_HEADER +
+      NODE_BODY_TOP +
+      (index + offset) * NODE_ROW +
+      NODE_ROW / 2
+    );
+  }
+
+  function zoneHeaderProxyPoint(
+    header: VoiceNode,
+    portId: string,
+    side: "in" | "out",
+  ): Point | null {
+    if (side === "in") {
+      const inputNode = zoneBoundary(header, "voice.zone.input");
+      if (!inputNode) return null;
+      const sockets = zoneSocketPorts(header.zone_inputs, {
+        id: "out",
+        name: "Audio",
+      });
+      const field = sockets.findIndex((port) => port.id === portId);
+      if (portId !== "count" && field < 0) return null;
+      const index = portId === "count" ? 0 : field + 1;
+      return {
+        x: inputNode.position?.[0] ?? 0,
+        y: (inputNode.position?.[1] ?? 0) + zoneHeaderProxyY(index),
+      };
+    }
+    const outputNode = zoneBoundary(header, "voice.zone.output");
+    if (!outputNode) return null;
+    const sockets = zoneSocketPorts(header.zone_outputs, {
+      id: "in",
+      name: "Audio",
+    });
+    const index = sockets.findIndex((port) => port.id === portId);
+    if (index < 0) return null;
+    return {
+      x: (outputNode.position?.[0] ?? 0) + nodeWidth(outputNode),
+      y: (outputNode.position?.[1] ?? 0) + zoneHeaderProxyY(index),
+    };
+  }
+
+  function zoneHeaderProxyY(index: number): number {
+    return NODE_HEADER + NODE_BODY_TOP + index * NODE_ROW + NODE_ROW / 2;
+  }
+
   function zonePortPoint(
     node: VoiceNode,
     portId: string,
     side: "in" | "out",
   ): Point | null {
-    const headerId =
-      node.type_id === "voice.zone.repeat" ? node.id : node.zone;
+    if (node.type_id === "voice.zone.repeat") {
+      return zoneHeaderProxyPoint(node, portId, side);
+    }
+    if (node.type_id === "voice.zone.input" || node.type_id === "voice.zone.output") {
+      const outputs = outputList(node);
+      const inputs = inputList(node);
+      const index =
+        side === "out"
+          ? outputs.findIndex((port) => port.id === portId)
+          : inputs.findIndex((port) => port.id === portId);
+      if (index < 0) return null;
+      return {
+        x:
+          side === "out"
+            ? (node.position?.[0] ?? 0) + nodeWidth(node)
+            : (node.position?.[0] ?? 0),
+        y: (node.position?.[1] ?? 0) + zoneBoundaryPortY(node, index),
+      };
+    }
+    const headerId = node.zone;
     if (!headerId) return null;
     const header = voice.nodes[headerId];
     if (!header) return null;
     const top = zonePortTop(node, portId, side);
     if (top === null) return null;
     const bounds = zoneBounds(header);
-    const left =
-      node.type_id === "voice.zone.input" ||
-      (node.type_id === "voice.zone.repeat" && side === "in");
+    const left = node.type_id === "voice.zone.input" || side === "in";
     return {
       x: left ? bounds.left + 5 : bounds.left + bounds.width - 5,
       y: bounds.top + top,
@@ -474,11 +534,11 @@
     ) {
       return tLoose("node.voice.repeat", "REPEAT").toUpperCase();
     }
-    if (node.type_id === "voice.zone.input") {
-      return tLoose("node.voice.zone.input", "ZONE INPUT").toUpperCase();
-    }
-    if (node.type_id === "voice.zone.output") {
-      return tLoose("node.voice.zone.output", "ZONE OUTPUT").toUpperCase();
+    if (
+      node.type_id === "voice.zone.input" ||
+      node.type_id === "voice.zone.output"
+    ) {
+      return tLoose("node.voice.repeat", "REPEAT").toUpperCase();
     }
     if (isGroupNode(node)) {
       return nodeGroup(node)?.name ?? node.group ?? tLoose("node.voice.group", "VOICE GROUP");
@@ -905,6 +965,20 @@
 
   function nodeHeight(node: VoiceNode): number {
     if (node.collapsed) return collapsedNodeHeight(collapsedRows(node));
+    if (node.type_id === "voice.zone.input") {
+      const header = node.zone ? voice.nodes[node.zone] : undefined;
+      const count = header
+        ? zoneSocketPorts(header.zone_inputs, { id: "out", name: "Audio" }).length
+        : 0;
+      return expandedNodeHeight(count + 1, 0);
+    }
+    if (node.type_id === "voice.zone.output") {
+      const header = node.zone ? voice.nodes[node.zone] : undefined;
+      const count = header
+        ? zoneSocketPorts(header.zone_outputs, { id: "in", name: "Audio" }).length
+        : 0;
+      return expandedNodeHeight(count, 0);
+    }
     return expandedNodeHeight(rowCount(node), groupHeaderHeight(node));
   }
 
@@ -3340,15 +3414,6 @@
       {/each}
       {#each zoneHeaders() as header (header.id)}
         {@const bounds = zoneBounds(header)}
-        {@const countPort = inputList(header).find((port) => port.id === "count")}
-        {@const zoneInputs = zoneSocketPorts(header.zone_inputs, {
-          id: "out",
-          name: "Audio",
-        })}
-        {@const zoneOutputs = zoneSocketPorts(header.zone_outputs, {
-          id: "in",
-          name: "Audio",
-        })}
         <div
           class="voice-zone"
           class:selected={selected.has(header.id)}
@@ -3372,88 +3437,7 @@
               onclick={() => toggleZoneCollapsed(header)}
             >{header.collapsed ? "+" : "−"}</button>
             <span class="voice-zone-label">{t("voice.repeatZone")}</span>
-            {#if countPort}
-              <span class="voice-zone-count">
-                {countPort.name}
-                {#if isLinked(header, "count")}
-                  <span class="voice-zone-linked">↗</span>
-                {:else}
-                  <NumberField
-                    value={header.params.count ?? countPort.default ?? 10}
-                    min={countPort.minimum ?? 1}
-                    max={countPort.maximum ?? 64}
-                    step={countPort.step ?? 1}
-                    precision={countPort.ty === "int" ? 0 : undefined}
-                    onchange={(value) => {
-                      setParam(header, "count", value);
-                      touchVoice();
-                    }}
-                  />
-                {/if}
-              </span>
-            {/if}
           </div>
-          {#each zoneInputs as port, index (port.id)}
-            <span class="voice-zone-port-label in" style:top={`${52 + index * 14}px`}>
-              {port.name}
-            </span>
-            <button
-              class="voice-port in zone-port zone-left"
-              class:port-audio={port.ty === "audio"}
-              class:port-int={port.ty === "int"}
-              class:port-float={port.ty === "float"}
-              class:port-gate={port.ty === "gate"}
-              style:top={`${58 + index * 14}px`}
-              title={`${port.id} (${port.ty})`}
-              aria-label={port.id}
-              data-port-node={header.id}
-              data-port-id={port.id}
-              data-port-side="in"
-              data-port-type={port.ty}
-              onmousedown={(event) =>
-                zoneSocketDown(event, header, "input", port)}
-              onmouseup={(event) =>
-                zoneSocketUp(event, header, "input", port)}
-            ></button>
-          {/each}
-          {#each zoneOutputs as port, index (port.id)}
-            <span class="voice-zone-port-label out" style:top={`${32 + index * 14}px`}>
-              {port.name}
-            </span>
-            <button
-              class="voice-port out zone-port zone-port-head zone-right"
-              class:port-audio={port.ty === "audio"}
-              class:port-int={port.ty === "int"}
-              class:port-float={port.ty === "float"}
-              class:port-gate={port.ty === "gate"}
-              style:top={`${38 + index * 14}px`}
-              title={`${port.id} (${port.ty})`}
-              aria-label={port.id}
-              data-port-node={header.id}
-              data-port-id={port.id}
-              data-port-side="out"
-              data-port-type={port.ty}
-              onmousedown={(event) =>
-                zoneSocketDown(event, header, "output", port)}
-              onmouseup={(event) =>
-                zoneSocketUp(event, header, "output", port)}
-            ></button>
-          {/each}
-          {#if countPort}
-            <button
-              class="voice-port in zone-port zone-port-head zone-left"
-              class:port-int={countPort.ty === "int"}
-              class:port-float={countPort.ty === "float"}
-              style:top="38px"
-              title={`${countPort.id} (${countPort.ty})`}
-              aria-label={countPort.id}
-              data-port-node={header.id}
-              data-port-id={countPort.id}
-              data-port-side="in"
-              data-port-type={countPort.ty}
-              onmousedown={(event) => startWire(event, header, countPort, "in")}
-            ></button>
-          {/if}
 
           {#if !header.collapsed}
             <div
@@ -3565,6 +3549,136 @@
             </div>
           {/if}
 
+          {#if node.type_id === "voice.zone.input"}
+            {@const header = node.zone ? voice.nodes[node.zone] : undefined}
+            {@const countPort = header
+              ? inputList(header).find((port) => port.id === "count")
+              : undefined}
+            {@const sockets = header
+              ? zoneSocketPorts(header.zone_inputs, { id: "out", name: "Audio" })
+              : []}
+            {#if header && countPort}
+              <div
+                class="voice-socket-row in"
+                style:top={`${NODE_HEADER + NODE_BODY_TOP}px`}
+              >
+                <button
+                  class="voice-port in"
+                  class:port-int={countPort.ty === "int"}
+                  class:port-float={countPort.ty === "float"}
+                  style:top={`${NODE_ROW / 2 - 4}px`}
+                  title={`${countPort.id} (${countPort.ty})`}
+                  aria-label={countPort.id}
+                  data-port-node={header.id}
+                  data-port-id={countPort.id}
+                  data-port-side="in"
+                  data-port-type={countPort.ty}
+                  onmousedown={(event) => startWire(event, header, countPort, "in")}
+                ></button>
+                <span class="voice-socket-name in">{socketLabel(countPort.name)}</span>
+                {#if isLinked(header, "count")}
+                  <span class="voice-zone-linked">↗</span>
+                {:else}
+                  <div class="voice-socket-value">
+                    <NumberField
+                      value={header.params.count ?? countPort.default ?? 10}
+                      min={countPort.minimum ?? 1}
+                      max={countPort.maximum ?? 64}
+                      step={countPort.step ?? 1}
+                      precision={countPort.ty === "int" ? 0 : undefined}
+                      onchange={(value) => {
+                        setParam(header, "count", value);
+                        touchVoice();
+                      }}
+                    />
+                  </div>
+                {/if}
+              </div>
+            {/if}
+            {#each sockets as port, index (port.id)}
+              <div
+                class="voice-socket-row in"
+                style:top={`${NODE_HEADER + NODE_BODY_TOP + (index + 1) * NODE_ROW}px`}
+              >
+                <button
+                  class="voice-port in"
+                  class:port-audio={port.ty === "audio"}
+                  class:port-int={port.ty === "int"}
+                  class:port-float={port.ty === "float"}
+                  class:port-gate={port.ty === "gate"}
+                  style:top={`${NODE_ROW / 2 - 4}px`}
+                  title={`${port.id} (${port.ty})`}
+                  aria-label={port.id}
+                  data-port-node={header?.id}
+                  data-port-id={port.id}
+                  data-port-side="in"
+                  data-port-type={port.ty}
+                  onmousedown={(event) => header && startWire(event, header, port, "in")}
+                ></button>
+                <span class="voice-socket-name in">{socketLabel(port.name)}</span>
+                <span class="voice-socket-name out">{socketLabel(port.name)}</span>
+                <button
+                  class="voice-port out"
+                  class:port-audio={port.ty === "audio"}
+                  class:port-int={port.ty === "int"}
+                  class:port-float={port.ty === "float"}
+                  class:port-gate={port.ty === "gate"}
+                  style:top={`${NODE_ROW / 2 - 4}px`}
+                  title={`${port.id} (${port.ty})`}
+                  aria-label={port.id}
+                  data-port-node={node.id}
+                  data-port-id={port.id}
+                  data-port-side="out"
+                  data-port-type={port.ty}
+                  onmousedown={(event) => startWire(event, node, port, "out")}
+                ></button>
+              </div>
+            {/each}
+          {:else if node.type_id === "voice.zone.output"}
+            {@const header = node.zone ? voice.nodes[node.zone] : undefined}
+            {@const sockets = header
+              ? zoneSocketPorts(header.zone_outputs, { id: "in", name: "Audio" })
+              : []}
+            {#each sockets as port, index (port.id)}
+              <div
+                class="voice-socket-row in"
+                style:top={`${NODE_HEADER + NODE_BODY_TOP + index * NODE_ROW}px`}
+              >
+                <button
+                  class="voice-port in"
+                  class:port-audio={port.ty === "audio"}
+                  class:port-int={port.ty === "int"}
+                  class:port-float={port.ty === "float"}
+                  class:port-gate={port.ty === "gate"}
+                  style:top={`${NODE_ROW / 2 - 4}px`}
+                  title={`${port.id} (${port.ty})`}
+                  aria-label={port.id}
+                  data-port-node={node.id}
+                  data-port-id={port.id}
+                  data-port-side="in"
+                  data-port-type={port.ty}
+                  onmousedown={(event) => startWire(event, node, port, "in")}
+                ></button>
+                <span class="voice-socket-name in">{socketLabel(port.name)}</span>
+                <span class="voice-socket-name out">{socketLabel(port.name)}</span>
+                <button
+                  class="voice-port out"
+                  class:port-audio={port.ty === "audio"}
+                  class:port-int={port.ty === "int"}
+                  class:port-float={port.ty === "float"}
+                  class:port-gate={port.ty === "gate"}
+                  style:top={`${NODE_ROW / 2 - 4}px`}
+                  title={`${port.id} (${port.ty})`}
+                  aria-label={port.id}
+                  data-port-node={header?.id}
+                  data-port-id={port.id}
+                  data-port-side="out"
+                  data-port-type={port.ty}
+                  onmousedown={(event) => header && startWire(event, header, port, "out")}
+                ></button>
+              </div>
+            {/each}
+          {:else}
           {#each inputList(node) as port, index (port.id)}
             {@const param = matchingParam(node, port.id)}
             {@const linked = isLinked(node, port.id)}
@@ -3633,6 +3747,7 @@
             </div>
           {/each}
 
+          {/if}
           {#each extraParams(node) as param, index (param.name)}
             {@const top =
               NODE_HEADER +
