@@ -126,6 +126,9 @@
     if (node.type_id === "group.output") {
       return tLoose("node.group.output", "GROUP OUTPUT").toUpperCase();
     }
+    if (node.type_id === "voice.repeat") {
+      return tLoose("node.voice.repeat", "REPEAT").toUpperCase();
+    }
     if (isGroupNode(node)) {
       return nodeGroup(node)?.name ?? node.group ?? tLoose("node.voice.group", "VOICE GROUP");
     }

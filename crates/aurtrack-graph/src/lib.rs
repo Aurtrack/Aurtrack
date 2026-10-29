@@ -828,12 +828,11 @@ const PARTIAL_INPUTS: [VoiceSocketSpec; 7] = [
         .with_range(0.05, 8.0)
         .with_step(0.01),
 ];
-const REPEAT_PARAMS: [ParamSpec; 1] = [ParamSpec {
-    name: "count",
-    default: 10.0,
-    minimum: 1.0,
-    maximum: 32.0,
-}];
+const REPEAT_INPUTS: [VoiceSocketSpec; 1] =
+    [VoiceSocketSpec::new("count", "Count", SocketType::Float)
+        .with_default(10.0)
+        .with_range(1.0, 64.0)
+        .with_step(1.0)];
 const CONTEXT_PITCH_OUT: [VoiceSocketSpec; 1] =
     [VoiceSocketSpec::new("out", "Pitch", SocketType::Float)];
 const CONTEXT_VELOCITY_OUT: [VoiceSocketSpec; 1] =
@@ -1082,9 +1081,9 @@ pub const VOICE_NODE_TYPES: &[VoiceNodeType] = &[
         id: "voice.repeat",
         name: "Repeat",
         category: "Group",
-        inputs: &[],
+        inputs: &REPEAT_INPUTS,
         outputs: &AUDIO_OUT,
-        params: &REPEAT_PARAMS,
+        params: &[],
     },
     VoiceNodeType {
         id: "voice.iteration",

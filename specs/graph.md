@@ -75,7 +75,7 @@ group.input(note)
        ├─ index ───→ white-noise.w ──→ noise.seed
        └─ gate ────→ gate.gate
 
-repeat("Piano Partial", count=10) ──→ osc-vca.in
+repeat("Piano Partial", count) ──→ osc-vca.in
 env-attack × env-decay ──→ env-gain ──→ osc-vca.gain
 osc-vca ──→ add.A
 
@@ -93,7 +93,7 @@ gate ──→ out.audio
 
 `Attack` 输出 `min(time / attack, 1)`，`Decay` 输出 `exp(-time / decay)`；两者显式相乘，不再有固定公式的包络宏节点。`VCA` 负责音频乘控制值，`Noise` 只输出噪声源。
 
-`voice.repeat` 引用一个循环体组，重复执行 `count` 次。循环体必须有一个 `in` 音频输入和一个 `audio` 输出；`voice.iteration` 输出当前迭代序号。默认循环体 `piano.partial` 是：
+`voice.repeat` 引用一个循环体组，重复执行 `count` 次。`count` 是一个 Float 输入 socket，可连接控制信号；未连接时使用节点自己的值，运行时限制在 1–64。节点标题固定为 Repeat，循环体组名单独显示。循环体必须有一个 `in` 音频输入和一个 `audio` 输出；`voice.iteration` 输出当前迭代序号。默认循环体 `piano.partial` 是：
 
 ```text
 voice-in.in ──→ add.A

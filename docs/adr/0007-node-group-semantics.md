@@ -32,7 +32,7 @@
 - `voice.time` 输出逐音符时间；`Separate Note` 的 `index` 输出经 `voice.white_noise` 的 1D `W` 输入转换成确定性种子。
 - 包络和噪声从 `time`、`seed` 输入读取，不再直接读 `VoiceContext`。
 - `voice.attack` 与 `voice.decay` 是两个独立控制曲线，默认通过 `math.multiply` 相乘；不再使用固定公式的包络宏节点。`voice.vca` 负责音频乘控制值；`voice.noise` 只输出噪声源，不再内置包络和电平。
-- `voice.repeat` 是 Repeat Zone：引用一个循环体组，按 `count` 重复执行；循环体有一个音频累加器输入 `in` 和一个音频输出 `audio`，内部用 `voice.iteration` 获取迭代序号。
+- `voice.repeat` 是 Repeat Zone：引用一个循环体组，按 `count` 输入重复执行。`count` 是 Float socket，不再是静态参数；运行时钳制到 1–64。循环体有一个音频累加器输入 `in` 和一个音频输出 `audio`，内部用 `voice.iteration` 获取迭代序号。节点标题显示 Repeat，循环体组名只作为说明。
 - `voice.partial` 是单个泛音的原子节点；默认 `Partials` 由 `Repeat("piano.partial") + Partial` 组成，不再有单体 `osc.partials` 节点。
 - 节点可以有显示用的 `label`、`color` 和 `width`；帧可以有 `color`；连线可以有 `muted`。这些字段不参与 DSP。静音连线在编译时等价于不存在，输入回退到 socket 默认值。
 - 组输入 socket 未连接时使用接口的 `default`，不再固定为 0 或偷父级上下文。

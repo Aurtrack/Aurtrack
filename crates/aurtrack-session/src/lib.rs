@@ -943,16 +943,12 @@ fn compile_voice_inner(
                 &[VoiceNodePlan::new(VoiceOp::Input(0), Vec::new())],
             )?;
             stack.pop();
-            #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-            let count =
-                (node.params.get("count").copied().unwrap_or(10.0).round() as usize).clamp(1, 32);
             let index = nodes.len();
             nodes.push(VoiceNodePlan::new(
                 VoiceOp::Repeat {
                     body: Box::new(body),
-                    count,
                 },
-                Vec::new(),
+                inputs.first().copied().into_iter().collect(),
             ));
             indices.insert((id.clone(), "out".to_string()), index);
             continue;

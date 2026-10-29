@@ -124,7 +124,6 @@ pub enum VoiceOp {
     Decay,
     Repeat {
         body: Box<VoicePlan>,
-        count: usize,
     },
     OscPartials {
         partials: usize,
@@ -346,7 +345,13 @@ impl VoicePlan {
                     let max = node.inputs.get(2).map_or(1.0, |input| values[*input]);
                     value.clamp(min, max)
                 },
-                VoiceOp::Repeat { ref body, count } => {
+                VoiceOp::Repeat { ref body } => {
+                    let count = node
+                        .inputs
+                        .first()
+                        .map_or(1.0, |input| values[*input])
+                        .round()
+                        .clamp(1.0, 64.0) as usize;
                     let mut audio = 0.0;
                     for iteration in 0..count {
                         let mut loop_context = context;
@@ -1666,16 +1671,16 @@ mod tests {
         );
         let plan = VoicePlan::new(
             vec![
+                VoiceNodePlan::new(VoiceOp::Constant(4.0), vec![]),
                 VoiceNodePlan::new(
                     VoiceOp::Repeat {
                         body: Box::new(body),
-                        count: 4,
                     },
-                    vec![],
+                    vec![0],
                 ),
-                VoiceNodePlan::new(VoiceOp::Output, vec![0]),
+                VoiceNodePlan::new(VoiceOp::Output, vec![1]),
             ],
-            1,
+            2,
         );
         let context = VoiceContext {
             pitch: 261.63,
