@@ -3054,6 +3054,32 @@ button:disabled {
   height: 20px;
 }
 
+.zone-interface-editor {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid var(--line);
+  padding: 6px;
+}
+
+.zone-interface-row {
+  display: grid;
+  grid-template-columns: 1fr 62px 24px;
+  gap: 4px;
+}
+
+.zone-interface-row input,
+.zone-interface-row select {
+  min-width: 0;
+  height: 22px;
+  border: 1px solid var(--line-strong);
+  padding: 0 4px;
+  background: var(--field);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 9px;
+}
+
 .node-preview {
   display: flex;
   flex-direction: column;
