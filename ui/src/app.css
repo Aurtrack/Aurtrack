@@ -2419,6 +2419,12 @@ button:disabled {
   border-radius: 0;
   background: #f2e7cf;
 }
+.voice-port.port-multi {
+  left: -9px;
+  width: 18px;
+  height: 9px;
+  border-radius: 999px;
+}
 .graph-port.port-audio {
   background: #dce8f4;
 }

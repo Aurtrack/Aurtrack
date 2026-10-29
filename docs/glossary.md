@@ -56,6 +56,9 @@
 | iteration | 迭代 | 循环内部当前迭代序号 |
 | partial | 泛音 | 单次生成一个泛音的音频 |
 | switch | 切换 | 按控制值在 false/true 两路音频中选择 |
+| index switch | 索引切换 | 按索引在 8 路音频中选择 |
+| sum | 求和 | 多输入音频求和 |
+| broadcast | 广播 | 显式把控制值作为逐采样音频使用 |
 | attack | 起音 | `min(time / attack, 1)` 控制曲线 |
 | decay | 衰减 | `exp(-time / decay)` 控制曲线 |
 | mute link | 静音连线 | 保留连线但不参与编译，输入回退默认值 |

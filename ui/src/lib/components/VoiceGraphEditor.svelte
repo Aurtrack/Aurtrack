@@ -92,6 +92,7 @@
     maximum?: number;
     step?: number;
     panel?: string;
+    multi?: boolean;
   };
 
   let typeById = $derived(
@@ -142,6 +143,7 @@
       maximum: socket.maximum,
       step: socket.step,
       panel: socket.panel,
+      multi: false,
     }));
   }
 
@@ -157,6 +159,7 @@
       minimum: socket.minimum,
       maximum: socket.maximum,
       step: socket.step,
+      multi: socket.multi,
     }));
   }
 
@@ -383,6 +386,10 @@
         connection.to.node === node.id &&
         connection.to.port === portId,
     );
+  }
+
+  function inputIsMulti(node: VoiceNode, portId: string): boolean {
+    return allInputList(node).find((port) => port.id === portId)?.multi === true;
   }
 
   function removeConnection(event: Event, connection: VoiceConnection): void {
@@ -823,6 +830,12 @@
     );
     if (exists) {
       restoreMovingWire();
+      return;
+    }
+    if (port.multi) {
+      voice.connections.push({ from, to });
+      movingWire = null;
+      touchVoice();
       return;
     }
     const displaced = voice.connections.filter(
@@ -1489,10 +1502,15 @@
     if (link.side === "out") {
       const target = inputList(node).find((port) => port.ty === link.ty);
       if (!target) return;
-      voice.connections = voice.connections.filter(
-        (connection) =>
-          !(connection.to.node === node.id && connection.to.port === target.id),
-      );
+      if (!target.multi) {
+        voice.connections = voice.connections.filter(
+          (connection) =>
+            !(
+              connection.to.node === node.id &&
+              connection.to.port === target.id
+            ),
+        );
+      }
       voice.connections.push({
         from: { node: link.node, port: link.port },
         to: { node: node.id, port: target.id },
@@ -1500,15 +1518,25 @@
     } else {
       const source = outputList(node).find((port) => port.ty === link.ty);
       if (!source) return;
-      voice.connections = voice.connections.filter(
-        (connection) =>
-          !(connection.to.node === link.node && connection.to.port === link.port),
-      );
+      const targetNode = voice.nodes[link.node];
+      const target = targetNode
+        ? inputList(targetNode).find((port) => port.id === link.port)
+        : undefined;
+      if (!target?.multi) {
+        voice.connections = voice.connections.filter(
+          (connection) =>
+            !(
+              connection.to.node === link.node &&
+              connection.to.port === link.port
+            ),
+        );
+      }
       voice.connections.push({
         from: { node: node.id, port: source.id },
         to: { node: link.node, port: link.port },
       });
     }
+    touchVoice();
   }
 
   function addNode(kind: string) {
@@ -1620,7 +1648,11 @@
     if (ordered.length < 2) return;
     const occupied = new Set(
       voice.connections
-        .filter((connection) => !connection.muted)
+        .filter((connection) => {
+          if (connection.muted) return false;
+          const target = voice.nodes[connection.to.node];
+          return target ? !inputIsMulti(target, connection.to.port) : false;
+        })
         .map((connection) => `${connection.to.node}\u0000${connection.to.port}`),
     );
     for (let sourceIndex = 0; sourceIndex < ordered.length; sourceIndex += 1) {
@@ -1647,7 +1679,8 @@
         if (!best) continue;
         const chosen = best;
         const key = `${target.id}\u0000${chosen.input.id}`;
-        if (occupied.has(key) && !replace) continue;
+        const multi = chosen.input.multi === true;
+        if (!multi && occupied.has(key) && !replace) continue;
         if (replace) {
           voice.connections = voice.connections.filter(
             (connection) =>
@@ -1661,7 +1694,7 @@
           from: { node: source.id, port: chosen.port.id },
           to: { node: target.id, port: chosen.input.id },
         });
-        occupied.add(key);
+        if (!multi) occupied.add(key);
       }
     }
     touchVoice();
@@ -1674,12 +1707,19 @@
     if (removed.size === 0) return;
     const targetBusy = new Set(
       voice.connections
-        .filter(
-          (connection) =>
-            !connection.muted &&
-            !removed.has(connection.from.node) &&
-            !removed.has(connection.to.node),
-        )
+        .filter((connection) => {
+          if (
+            connection.muted ||
+            removed.has(connection.from.node) ||
+            removed.has(connection.to.node)
+          ) {
+            return false;
+          }
+          const target = voice.nodes[connection.to.node];
+          return target
+            ? !inputIsMulti(target, connection.to.port)
+            : false;
+        })
         .map((connection) => `${connection.to.node}\u0000${connection.to.port}`),
     );
     const upstream = voice.connections.filter(
@@ -1713,13 +1753,14 @@
         );
         if (!inputPort || inputPort.ty !== outputPort.ty) continue;
         const key = `${target.id}\u0000${inputPort.id}`;
-        if (targetBusy.has(key)) continue;
+        const multi = inputPort.multi === true;
+        if (!multi && targetBusy.has(key)) continue;
         if (target.id === source.id) continue;
         next.push({
           from: { ...input.from },
           to: { node: target.id, port: inputPort.id },
         });
-        targetBusy.add(key);
+        if (!multi) targetBusy.add(key);
         break;
       }
     }
@@ -1755,7 +1796,14 @@
     const result: VoiceConnection[] = [];
     const indexes = new Map<string, number>();
     for (const connection of connections) {
-      const key = `${connection.to.node}\u0000${connection.to.port}\u0000${connection.muted ? "muted" : "active"}`;
+      const target = voice.nodes[connection.to.node];
+      const multi =
+        target !== undefined &&
+        allInputList(target).find((port) => port.id === connection.to.port)
+          ?.multi === true;
+      const key = multi
+        ? `${connection.to.node}\u0000${connection.to.port}\u0000${connection.from.node}\u0000${connection.from.port}\u0000${connection.muted ? "muted" : "active"}`
+        : `${connection.to.node}\u0000${connection.to.port}\u0000${connection.muted ? "muted" : "active"}`;
       const existing = indexes.get(key);
       if (existing === undefined) {
         indexes.set(key, result.length);
@@ -2728,8 +2776,9 @@
                 class:port-float={port.ty === "float"}
                 class:port-gate={port.ty === "gate"}
                 class:port-note={port.ty === "note"}
+                class:port-multi={port.multi}
                 style:top={`${NODE_ROW / 2 - 4}px`}
-                title={`${port.id} (${port.ty})`}
+                title={`${port.id} (${port.ty})${port.multi ? " · multi" : ""}`}
                 aria-label={port.id}
                 data-port-node={node.id}
                 data-port-id={port.id}
@@ -2767,8 +2816,9 @@
                 class:port-float={port.ty === "float"}
                 class:port-gate={port.ty === "gate"}
                 class:port-note={port.ty === "note"}
+                class:port-multi={port.multi}
                 style:top={`${NODE_ROW / 2 - 4}px`}
-                title={`${port.id} (${port.ty})`}
+                title={`${port.id} (${port.ty})${port.multi ? " · multi" : ""}`}
                 aria-label={port.id}
                 data-port-node={node.id}
                 data-port-id={port.id}
@@ -2808,8 +2858,9 @@
                 class:port-float={port.ty === "float"}
                 class:port-gate={port.ty === "gate"}
                 class:port-note={port.ty === "note"}
+                class:port-multi={port.multi}
                 style:top={`${portTop(node, index)}px`}
-                title={`${port.id} (${port.ty})`}
+                title={`${port.id} (${port.ty})${port.multi ? " · multi" : ""}`}
                 aria-label={port.id}
                 data-port-node={node.id}
                 data-port-id={port.id}
@@ -2825,8 +2876,9 @@
                 class:port-float={port.ty === "float"}
                 class:port-gate={port.ty === "gate"}
                 class:port-note={port.ty === "note"}
+                class:port-multi={port.multi}
                 style:top={`${portTop(node, index)}px`}
-                title={`${port.id} (${port.ty})`}
+                title={`${port.id} (${port.ty})${port.multi ? " · multi" : ""}`}
                 aria-label={port.id}
                 data-port-node={node.id}
                 data-port-id={port.id}

@@ -45,36 +45,90 @@
     return [...result.entries()];
   });
 
+  function subsequence(text: string, needle: string): boolean {
+    let cursor = 0;
+    for (const character of text) {
+      if (character === needle[cursor]) cursor += 1;
+      if (cursor === needle.length) return true;
+    }
+    return needle.length === 0;
+  }
+
+  function score(needle: string, values: string[]): number {
+    const tokens = needle.split(/\s+/).filter(Boolean);
+    if (tokens.length === 0) return 0;
+    let total = 0;
+    for (const token of tokens) {
+      let best = 0;
+      for (const [index, value] of values.entries()) {
+        if (value === token) best = Math.max(best, 120);
+        else if (value.startsWith(token)) best = Math.max(best, 90);
+        else if (value.includes(token)) best = Math.max(best, 65);
+        else if (index === 0 && token.length > 2 && subsequence(value, token)) {
+          best = Math.max(best, 30);
+        }
+      }
+      if (best === 0) return 0;
+      total += best;
+    }
+    if (values[0] === needle) total += 40;
+    else if (values[0]?.startsWith(needle)) total += 20;
+    return total;
+  }
+
+  function ranked<T>(
+    needle: string,
+    items: T[],
+    fields: (item: T) => string[],
+    name: (item: T) => string,
+  ): T[] {
+    return items
+      .map((item) => ({ item, score: score(needle, fields(item)) }))
+      .filter((entry) => entry.score > 0)
+      .sort(
+        (left, right) =>
+          right.score - left.score ||
+          name(left.item).localeCompare(name(right.item)),
+      )
+      .map((entry) => entry.item);
+  }
+
   const results = $derived.by(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) return [];
-    return nodeTypes.filter(
-      (nodeType) =>
-        nodeType.name.toLowerCase().includes(needle) ||
-        nodeType.id.toLowerCase().includes(needle) ||
-        nodeType.category.toLowerCase().includes(needle) ||
-        nodeTypeLabel(nodeType).toLowerCase().includes(needle) ||
-        nodeCategoryLabel(nodeType.category).toLowerCase().includes(needle),
+    return ranked(
+      needle,
+      nodeTypes,
+      (nodeType) => [
+        nodeType.name.toLowerCase(),
+        nodeType.id.toLowerCase(),
+        nodeTypeLabel(nodeType).toLowerCase(),
+        nodeCategoryLabel(nodeType.category).toLowerCase(),
+        nodeType.category.toLowerCase(),
+      ],
+      (nodeType) => nodeType.name,
     );
   });
 
   const groupResults = $derived.by(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) return [];
-    return groups.filter(
-      (group) =>
-        group.name.toLowerCase().includes(needle) ||
-        group.id.toLowerCase().includes(needle),
+    return ranked(
+      needle,
+      groups,
+      (group) => [group.name.toLowerCase(), group.id.toLowerCase()],
+      (group) => group.name,
     );
   });
 
   const audioGroupResults = $derived.by(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) return [];
-    return audioGroups.filter(
-      (group) =>
-        group.name.toLowerCase().includes(needle) ||
-        group.id.toLowerCase().includes(needle),
+    return ranked(
+      needle,
+      audioGroups,
+      (group) => [group.name.toLowerCase(), group.id.toLowerCase()],
+      (group) => group.name,
     );
   });
 

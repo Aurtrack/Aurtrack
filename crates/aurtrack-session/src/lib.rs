@@ -791,27 +791,37 @@ fn compile_voice_inner(
         let mut incoming = Vec::new();
         let mut inputs = Vec::new();
         for port in &input_ports {
-            let Some(connection) = voice.connections.iter().find(|connection| {
-                !connection.muted
-                    && connection.to.node() == &id
-                    && connection.to.port() == port.id.as_str()
-            }) else {
+            let mut matches: Vec<&VoiceConnection> = voice
+                .connections
+                .iter()
+                .filter(|connection| {
+                    !connection.muted
+                        && connection.to.node() == &id
+                        && connection.to.port() == port.id.as_str()
+                })
+                .collect();
+            if !port.multi {
+                matches.truncate(1);
+            }
+            if matches.is_empty() {
                 let value = node.params.get(&port.id).copied().unwrap_or(port.default);
                 let index = nodes.len();
                 nodes.push(VoiceNodePlan::new(VoiceOp::Constant(value), Vec::new()));
                 inputs.push(index);
                 continue;
-            };
-            incoming.push(connection);
-            inputs.push(
-                indices
-                    .get(&(
-                        connection.from.node().clone(),
-                        connection.from.port().to_string(),
-                    ))
-                    .copied()
-                    .ok_or(GraphError::VoiceUnknownNode)?,
-            );
+            }
+            for connection in matches {
+                incoming.push(connection);
+                inputs.push(
+                    indices
+                        .get(&(
+                            connection.from.node().clone(),
+                            connection.from.port().to_string(),
+                        ))
+                        .copied()
+                        .ok_or(GraphError::VoiceUnknownNode)?,
+                );
+            }
         }
         if node.type_id == "group.input" {
             for socket in &interface.inputs {
@@ -1006,10 +1016,12 @@ fn compile_voice_inner(
             "voice.decay" => VoiceOp::Decay,
             "voice.noise" => VoiceOp::Noise,
             "voice.vca" => VoiceOp::Vca,
-            "voice.add" | "math.add" => VoiceOp::Add,
+            "voice.add" | "voice.sum" | "math.add" => VoiceOp::Add,
             "voice.mix" => VoiceOp::Mix,
             "voice.gate" => VoiceOp::GateNode,
             "voice.switch" => VoiceOp::Switch,
+            "voice.index_switch" => VoiceOp::IndexSwitch,
+            "voice.broadcast" => VoiceOp::Broadcast,
             "voice.time" => VoiceOp::Time,
             "voice.white_noise" => VoiceOp::WhiteNoise,
             "math.multiply" => VoiceOp::Multiply,
@@ -4753,6 +4765,7 @@ fn voice_types_json() -> Vec<Value> {
                     "minimum": socket.minimum,
                     "maximum": socket.maximum,
                     "step": socket.step,
+                    "multi": socket.multi,
                 })).collect::<Vec<_>>(),
                 "outputs": node_type.outputs.iter().map(|socket| json!({
                     "id": socket.id,

@@ -121,6 +121,8 @@ pub enum VoiceOp {
     Mix,
     GateNode,
     Switch,
+    IndexSwitch,
+    Broadcast,
     Add,
     Multiply,
     MapRange,
@@ -269,6 +271,13 @@ impl VoicePlan {
                     let index = if switch > 0.5 { 2 } else { 1 };
                     node.inputs.get(index).map_or(0.0, |input| values[*input])
                 },
+                VoiceOp::IndexSwitch => {
+                    let index = node.inputs.first().map_or(0.0, |input| values[*input]);
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    let slot = (index.round().max(0.0) as usize).min(7) + 1;
+                    node.inputs.get(slot).map_or(0.0, |input| values[*input])
+                },
+                VoiceOp::Broadcast => node.inputs.first().map_or(0.0, |input| values[*input]),
                 VoiceOp::GateNode => {
                     let signal = node.inputs.first().map_or(0.0, |input| values[*input]);
                     let gate = node.inputs.get(1).map_or(0.0, |input| values[*input]);
@@ -1531,6 +1540,53 @@ mod tests {
             };
             assert!((plan.sample(context) - expected).abs() < 1e-9);
         }
+    }
+
+    #[test]
+    fn broadcast_passes_control_value_as_audio() {
+        let plan = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Constant(0.25), vec![]),
+                VoiceNodePlan::new(VoiceOp::Broadcast, vec![0]),
+                VoiceNodePlan::new(VoiceOp::Output, vec![1]),
+            ],
+            2,
+        );
+        let context = VoiceContext {
+            pitch: 261.63,
+            velocity: 0.8,
+            local_time: 0.0,
+            gate: true,
+            seed: 0,
+            note_index: 0,
+            iteration: 0,
+        };
+        assert!((plan.sample(context) - 0.25).abs() < 1e-9);
+    }
+
+    #[test]
+    fn index_switch_selects_numbered_input() {
+        let plan = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Constant(2.0), vec![]),
+                VoiceNodePlan::new(VoiceOp::Constant(0.1), vec![]),
+                VoiceNodePlan::new(VoiceOp::Constant(0.2), vec![]),
+                VoiceNodePlan::new(VoiceOp::Constant(0.3), vec![]),
+                VoiceNodePlan::new(VoiceOp::IndexSwitch, vec![0, 1, 2, 3]),
+                VoiceNodePlan::new(VoiceOp::Output, vec![4]),
+            ],
+            5,
+        );
+        let context = VoiceContext {
+            pitch: 261.63,
+            velocity: 0.8,
+            local_time: 0.0,
+            gate: true,
+            seed: 0,
+            note_index: 0,
+            iteration: 0,
+        };
+        assert!((plan.sample(context) - 0.3).abs() < 1e-9);
     }
 
     #[test]

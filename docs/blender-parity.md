@@ -52,10 +52,10 @@
 | N 侧栏 | 节点/组属性 | 已有 | 已对齐 |
 | 搜索菜单 | `F3` | `F3` / `Shift+A` 共用添加菜单 | 已对齐 |
 | 节点组进入/离开 | `Tab` / `Ctrl+Tab` | 同左 | 已对齐 |
-| 数组 / 字段 | Geometry Nodes Field | 无 | 不适用（当前音频域） |
-| 多输入 socket | Join Geometry 等 | 无 | 缺失 |
+| 数组 / 字段 | Geometry Nodes Field | Float 本身逐采样；`voice.broadcast` 显式 Float→Audio；无向量数组 | 部分 |
+| 多输入 socket | Join Geometry 等 | `voice.sum` 音频多输入；控制域未做 | 部分 |
 | 向量/颜色/几何 socket | 有 | 只有 Float/Gate/Audio/Note | 不适用 |
-| Switch / Index Switch | 有 | `voice.switch` 二选一；无 Index Switch | 部分 |
+| Switch / Index Switch | 有 | `voice.switch` 二选一；`voice.index_switch` 固定 8 路 | 已对齐 |
 | Simulation Zone | 有 | 无 | 缺失 |
 | For Each / 并行 | 有 | 无 | 缺失 |
 
@@ -86,13 +86,21 @@
 6. **节点宽度调整**：右上角拖动，多选联动，写入 `VoiceNode.width`。
 7. **Alt+拖动连线交换**：拖动已连接输入到另一个输入，交换两条连线的目标。
 
-## 下一批 P2
+## 已完成的 P2
 
-1. **Index Switch**：在二选一之外增加多路索引选择。
-2. **节点组接口面板**：让组输入的默认值按 panel 分组显示。
-3. **多输入 socket**：先做音频求和，再做控制求和。
-4. **字段化参数**：把当前的逐采样 Float 扩展为可广播字段。
-5. **节点搜索 F3 的模糊评分**，而非纯包含匹配。
+1. **Index Switch**：`voice.index_switch` 固定 8 路音频输入。
+2. **节点组接口面板**：沿用 `NodeGroupSocket.panel` 分组。
+3. **多输入 socket**：`voice.sum` 的音频输入允许多条连线，编译为加法。
+4. **字段化参数**：Float 本身就是逐采样字段；新增 `voice.broadcast` 显式把控制值转成音频。
+5. **F3 模糊评分**：精确、前缀、包含、子序列分级排序。
+
+## 下一批 P3
+
+1. **控制域多输入**：把 `voice.sum` 扩展为 Float/Gate 求和。
+2. **动态 Index Switch**：按节点参数生成输入槽，而不是固定 8 路。
+3. **通用字段/数组**：向量、索引数组和多输出 socket。
+4. **仿真 Zone**：跨采样状态，而不是纯函数式逐采样求值。
+5. **节点预览**：低开销波形缩略图。
 
 ## 不做的部分
 

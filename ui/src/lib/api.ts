@@ -119,6 +119,7 @@ export type NodeTypeSocket = {
   maximum?: number;
   step?: number;
   panel?: string;
+  multi?: boolean;
 };
 
 export type NodeTypeParam = {

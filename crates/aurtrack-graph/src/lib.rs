@@ -393,6 +393,7 @@ pub struct VoicePort {
     pub minimum: f64,
     pub maximum: f64,
     pub step: f64,
+    pub multi: bool,
 }
 
 fn interface_ports(sockets: &[NodeGroupSocket]) -> Vec<VoicePort> {
@@ -406,6 +407,7 @@ fn interface_ports(sockets: &[NodeGroupSocket]) -> Vec<VoicePort> {
             minimum: socket.minimum.unwrap_or(f64::NEG_INFINITY),
             maximum: socket.maximum.unwrap_or(f64::INFINITY),
             step: socket.step.unwrap_or(0.01),
+            multi: false,
         })
         .collect()
 }
@@ -421,6 +423,7 @@ fn static_ports(sockets: &[VoiceSocketSpec]) -> Vec<VoicePort> {
             minimum: socket.minimum,
             maximum: socket.maximum,
             step: socket.step,
+            multi: socket.multi,
         })
         .collect()
 }
@@ -662,6 +665,7 @@ pub struct VoiceSocketSpec {
     pub minimum: f64,
     pub maximum: f64,
     pub step: f64,
+    pub multi: bool,
 }
 
 impl VoiceSocketSpec {
@@ -674,7 +678,14 @@ impl VoiceSocketSpec {
             minimum: f64::NEG_INFINITY,
             maximum: f64::INFINITY,
             step: 0.01,
+            multi: false,
         }
+    }
+
+    #[must_use]
+    pub const fn multi(mut self) -> Self {
+        self.multi = true;
+        self
     }
 
     #[must_use]
@@ -798,6 +809,27 @@ const CONTEXT_VELOCITY_OUT: [VoiceSocketSpec; 1] =
     [VoiceSocketSpec::new("out", "Velocity", SocketType::Float)];
 const CONTEXT_ITERATION_OUT: [VoiceSocketSpec; 1] =
     [VoiceSocketSpec::new("out", "Iteration", SocketType::Float)];
+const BROADCAST_INPUTS: [VoiceSocketSpec; 1] =
+    [VoiceSocketSpec::new("value", "Value", SocketType::Float)
+        .with_default(0.0)
+        .with_range(0.0, 1.0)
+        .with_step(0.01)];
+const SUM_INPUTS: [VoiceSocketSpec; 1] =
+    [VoiceSocketSpec::new("in", "Audio", SocketType::Audio).multi()];
+const INDEX_SWITCH_INPUTS: [VoiceSocketSpec; 9] = [
+    VoiceSocketSpec::new("index", "Index", SocketType::Float)
+        .with_default(0.0)
+        .with_range(0.0, 7.0)
+        .with_step(1.0),
+    VoiceSocketSpec::new("0", "0", SocketType::Audio),
+    VoiceSocketSpec::new("1", "1", SocketType::Audio),
+    VoiceSocketSpec::new("2", "2", SocketType::Audio),
+    VoiceSocketSpec::new("3", "3", SocketType::Audio),
+    VoiceSocketSpec::new("4", "4", SocketType::Audio),
+    VoiceSocketSpec::new("5", "5", SocketType::Audio),
+    VoiceSocketSpec::new("6", "6", SocketType::Audio),
+    VoiceSocketSpec::new("7", "7", SocketType::Audio),
+];
 const SWITCH_INPUTS: [VoiceSocketSpec; 3] = [
     VoiceSocketSpec::new("switch", "Switch", SocketType::Float)
         .with_default(0.0)
@@ -947,6 +979,30 @@ pub const VOICE_NODE_TYPES: &[VoiceNodeType] = &[
         name: "Switch",
         category: "Utility",
         inputs: &SWITCH_INPUTS,
+        outputs: &AUDIO_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "voice.sum",
+        name: "Sum",
+        category: "Math",
+        inputs: &SUM_INPUTS,
+        outputs: &AUDIO_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "voice.index_switch",
+        name: "Index Switch",
+        category: "Utility",
+        inputs: &INDEX_SWITCH_INPUTS,
+        outputs: &AUDIO_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "voice.broadcast",
+        name: "Broadcast",
+        category: "Utility",
+        inputs: &BROADCAST_INPUTS,
         outputs: &AUDIO_OUT,
         params: &[],
     },
@@ -1590,7 +1646,7 @@ impl VoiceGraph {
                     to: target_port.ty,
                 });
             }
-            if connection.muted {
+            if connection.muted || target_port.multi {
                 continue;
             }
             let key = (connection.to.node.clone(), connection.to.port.clone());
@@ -2828,6 +2884,40 @@ mod tests {
             .validate_with_groups(&interface, &BTreeMap::new())
             .unwrap_err();
         assert!(matches!(error, GraphError::VoiceTypeMismatch { .. }));
+    }
+
+    #[test]
+    fn multi_input_accepts_multiple_audio_links() {
+        let interface = NodeGroupInterface::piano();
+        let mut graph = VoiceGraph::shell(&interface);
+        for id in ["noise-a", "noise-b", "sum"] {
+            let node_id = NodeId::new(id).unwrap();
+            let type_id = if id == "sum" {
+                "voice.sum"
+            } else {
+                "voice.noise"
+            };
+            graph
+                .nodes
+                .insert(node_id.clone(), VoiceNode::new(node_id, type_id));
+        }
+        graph.connections = vec![
+            VoiceConnection::new(
+                PortRef::fixed(NodeId::fixed("noise-a"), "out"),
+                PortRef::fixed(NodeId::fixed("sum"), "in"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(NodeId::fixed("noise-b"), "out"),
+                PortRef::fixed(NodeId::fixed("sum"), "in"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(NodeId::fixed("sum"), "out"),
+                PortRef::fixed(NodeId::fixed("out"), "audio"),
+            ),
+        ];
+        graph
+            .validate_with_groups(&interface, &BTreeMap::new())
+            .unwrap();
     }
 
     #[test]
