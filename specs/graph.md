@@ -93,7 +93,7 @@ gate ──→ out.audio
 
 `Attack` 输出 `min(time / attack, 1)`，`Decay` 输出 `exp(-time / decay)`；两者显式相乘，不再有固定公式的包络宏节点。`VCA` 负责音频乘控制值，`Noise` 只输出噪声源。
 
-默认循环是内联 Repeat Zone：`voice.zone.repeat` 是区间头节点，`count` 是 Float 输入；同一 `zone` 字段下的 `voice.zone.input`、`voice.zone.output` 和普通节点构成循环体。区块在编辑器里直接画成带边框的 Zone，不再跳进独立组。`voice.iteration` 输出当前迭代序号。
+默认循环是内联 Repeat Zone：`voice.zone.repeat` 是区间头节点，`count` 是 Float 输入；同一 `zone` 字段下的 `voice.zone.input`、`voice.zone.output` 和普通节点构成循环体。区块在编辑器里直接画成带边框的 Zone，不再跳进独立组。区间头保存可选的 `width` / `height`，用于手动缩放边界；标题栏可以折叠循环体。`voice.iteration` 输出当前迭代序号。
 
 旧的 `voice.repeat` 组引用仍然能编译，但不再出现在添加菜单里。内联循环体必须恰好有一个 Zone Input 和一个 Zone Output，边界节点不能直接连到 Zone 外部。默认循环体是：
 

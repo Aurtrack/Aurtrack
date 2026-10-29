@@ -22,7 +22,7 @@
 | 节点图 | Shader / Geometry / Compositor | Voice / Audio | 已对齐 |
 | 节点组 | Group Input/Output、嵌套、复用 | `voice.group`、组接口、嵌套组 | 已对齐 |
 | 组接口 | 输入/输出 socket、默认值、面板 | `NodeGroupSocket` 默认值、`panel` | 已对齐 |
-| 循环 Zone | Repeat Zone，输入/输出 bake items | `voice.zone.repeat` 内联 Zone，单音频累加器 | 部分 |
+| 循环 Zone | Repeat Zone，输入/输出 bake items | 内联 Zone、可缩放/折叠、单音频累加器 | 部分 |
 | 循环序号 | Index 节点 | `voice.iteration` | 已对齐 |
 | 单泛音 | 由多个 Math/Var 节点搭建 | `voice.partial` 原子节点 | 已对齐 |
 | 包络 | Math 节点组合 | `voice.attack` × `voice.decay` | 已对齐 |

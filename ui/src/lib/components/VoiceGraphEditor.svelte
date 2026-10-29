@@ -182,6 +182,24 @@
     width: number;
     height: number;
   } {
+    if (header.collapsed) {
+      const [x, y] = header.position ?? [0, 0];
+      return {
+        left: x - 24,
+        top: y - 34,
+        width: Math.max(320, header.width ?? 360),
+        height: 96,
+      };
+    }
+    if (!excludeId && header.width && header.height) {
+      const [x, y] = header.position ?? [0, 0];
+      return {
+        left: x - 24,
+        top: y - 34,
+        width: Math.max(320, header.width),
+        height: Math.max(160, header.height),
+      };
+    }
     const nodes = [
       header,
       ...zoneMemberIds(header.id)
@@ -217,6 +235,31 @@
       }
     }
     return expanded;
+  }
+
+  function isInCollapsedZone(node: VoiceNode): boolean {
+    let zone = node.zone;
+    while (zone) {
+      const header = voice.nodes[zone];
+      if (!header) return false;
+      if (header.collapsed) return true;
+      zone = header.zone;
+    }
+    return false;
+  }
+
+  function isCollapsedConnection(connection: VoiceConnection): boolean {
+    const source = voice.nodes[connection.from.node];
+    const target = voice.nodes[connection.to.node];
+    return (
+      (source !== undefined && isInCollapsedZone(source)) ||
+      (target !== undefined && isInCollapsedZone(target))
+    );
+  }
+
+  function toggleZoneCollapsed(header: VoiceNode): void {
+    header.collapsed = !header.collapsed;
+    touchVoice();
   }
 
   function zoneAtPoint(
@@ -485,6 +528,13 @@
     startX: number;
     startY: number;
     size: [number, number];
+  } | null>(null);
+  let zoneResize = $state<{
+    id: string;
+    startX: number;
+    startY: number;
+    width: number;
+    height: number;
   } | null>(null);
   let wire = $state<Wire | null>(null);
   let error = $state("");
@@ -1271,6 +1321,20 @@
       }
       return;
     }
+    if (zoneResize) {
+      const header = voice.nodes[zoneResize.id];
+      if (header) {
+        header.width = Math.max(
+          320,
+          zoneResize.width + (event.clientX - zoneResize.startX) / view.scale,
+        );
+        header.height = Math.max(
+          160,
+          zoneResize.height + (event.clientY - zoneResize.startY) / view.scale,
+        );
+      }
+      return;
+    }
     if (frameResize) {
       const frame = voice.frames?.[frameResize.id];
       if (frame) {
@@ -1579,7 +1643,13 @@
     ) {
       insertNodeOnLink(voice.nodes[drag.ids[0] ?? ""]!, insertTarget);
     }
-    const layoutChanged = !!(drag || frameDrag || frameResize || nodeResize);
+    const layoutChanged = !!(
+      drag ||
+      frameDrag ||
+      frameResize ||
+      zoneResize ||
+      nodeResize
+    );
     if (drag?.moved) {
       for (const id of drag.ids) {
         const node = voice.nodes[id];
@@ -1605,6 +1675,7 @@
     drag = null;
     frameDrag = null;
     frameResize = null;
+    zoneResize = null;
     nodeResize = null;
     wire = null;
     if (layoutChanged) touchVoice();
@@ -1802,6 +1873,8 @@
       type_id: "voice.zone.repeat",
       params: { count: 10 },
       position,
+      width: 560,
+      height: 320,
     };
     voice.nodes[id] = header;
     const input: VoiceNode = {
@@ -2297,6 +2370,21 @@
     }
     if (voice.frames) delete voice.frames[frame.id];
     touchVoice();
+  }
+
+  function zoneResizeDown(event: MouseEvent, header: VoiceNode) {
+    if (circleMode) return;
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const bounds = zoneBounds(header);
+    zoneResize = {
+      id: header.id,
+      startX: event.clientX,
+      startY: event.clientY,
+      width: bounds.width,
+      height: bounds.height,
+    };
   }
 
   function frameResizeDown(event: MouseEvent, frame: VoiceFrame) {
@@ -2982,6 +3070,12 @@
             data-zone-id={header.id}
             onmousedown={(event) => zoneMouseDown(event, header)}
           >
+            <button
+              class="voice-zone-toggle"
+              type="button"
+              aria-label={t("graph.collapse")}
+              onclick={() => toggleZoneCollapsed(header)}
+            >{header.collapsed ? "+" : "−"}</button>
             <span class="voice-zone-label">{t("voice.repeatZone")}</span>
             {#if countPort}
               <span class="voice-zone-count">
@@ -3003,6 +3097,17 @@
               </span>
             {/if}
           </div>
+          <span class="voice-zone-port-label out" style:top="29px">
+            {t("voice.audioSocket")}
+          </span>
+          {#if !header.collapsed}
+            <span class="voice-zone-port-label in" style:top="67px">
+              {t("voice.audioSocket")}
+            </span>
+            <span class="voice-zone-port-label out" style:top="67px">
+              {t("voice.audioSocket")}
+            </span>
+          {/if}
           {#if countPort}
             <button
               class="voice-port in zone-port zone-port-head"
@@ -3032,7 +3137,7 @@
                 startWire(event, header, headerOutput, "out")}
             ></button>
           {/if}
-          {#if inputNode}
+          {#if !header.collapsed && inputNode}
             {@const inputPort = outputList(inputNode)[0]}
             {#if inputPort}
               <button
@@ -3050,7 +3155,7 @@
               ></button>
             {/if}
           {/if}
-          {#if outputNode}
+          {#if !header.collapsed && outputNode}
             {@const outputPort = inputList(outputNode)[0]}
             {#if outputPort}
               <button
@@ -3068,6 +3173,15 @@
               ></button>
             {/if}
           {/if}
+          {#if !header.collapsed}
+            <div
+              class="voice-zone-resize"
+              role="button"
+              tabindex="0"
+              aria-label={t("voice.resizeFrame")}
+              onmousedown={(event) => zoneResizeDown(event, header)}
+            ></div>
+          {/if}
         </div>
       {/each}
       <svg
@@ -3079,7 +3193,7 @@
         style:height={`${wireBounds.height}px`}
         style:overflow="visible"
       >
-        {#each voice.connections as connection (connection.from.node + connection.from.port + connection.to.node + connection.to.port)}
+        {#each voice.connections.filter((connection) => !isCollapsedConnection(connection)) as connection (connection.from.node + connection.from.port + connection.to.node + connection.to.port)}
           <path
             class="voice-wire-hit"
             d={wirePath(connection)}
@@ -3118,7 +3232,7 @@
 
       {#each nodes as node (node.id)}
         {@const position = positions[node.id]}
-        {#if !isZoneChrome(node)}
+        {#if !isZoneChrome(node) && !isInCollapsedZone(node)}
         <div
           class="voice-node"
           class:selected={selected.has(node.id)}

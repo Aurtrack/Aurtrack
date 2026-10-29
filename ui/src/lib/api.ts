@@ -72,6 +72,7 @@ export type VoiceNode = {
   label?: string;
   color?: string;
   width?: number;
+  height?: number;
 };
 
 export type VoiceFrame = {

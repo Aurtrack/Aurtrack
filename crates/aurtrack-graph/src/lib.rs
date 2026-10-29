@@ -1971,6 +1971,8 @@ pub struct VoiceNode {
     pub color: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width: Option<f64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub height: Option<f64>,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)]
@@ -2003,6 +2005,7 @@ impl VoiceNode {
             label: None,
             color: None,
             width: None,
+            height: None,
         }
     }
 

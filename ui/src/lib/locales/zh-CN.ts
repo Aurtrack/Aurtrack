@@ -414,6 +414,7 @@ export const zhCN = {
   "node.voice.zone.input": "区域输入",
   "node.voice.zone.output": "区域输出",
   "voice.repeatZone": "重复区域",
+  "voice.audioSocket": "音频",
   "node.voice.partial": "泛音",
   "node.voice.switch": "切换",
   "node.voice.index_switch": "索引切换",
