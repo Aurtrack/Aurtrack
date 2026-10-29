@@ -833,6 +833,10 @@ const REPEAT_INPUTS: [VoiceSocketSpec; 1] =
         .with_default(10.0)
         .with_range(1.0, 64.0)
         .with_step(1.0)];
+const ZONE_INPUT_OUTPUTS: [VoiceSocketSpec; 1] =
+    [VoiceSocketSpec::new("out", "Audio", SocketType::Audio)];
+const ZONE_OUTPUT_INPUTS: [VoiceSocketSpec; 1] =
+    [VoiceSocketSpec::new("in", "Audio", SocketType::Audio)];
 const CONTEXT_PITCH_OUT: [VoiceSocketSpec; 1] =
     [VoiceSocketSpec::new("out", "Pitch", SocketType::Float)];
 const CONTEXT_VELOCITY_OUT: [VoiceSocketSpec; 1] =
@@ -1083,6 +1087,30 @@ pub const VOICE_NODE_TYPES: &[VoiceNodeType] = &[
         category: "Group",
         inputs: &REPEAT_INPUTS,
         outputs: &AUDIO_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "voice.zone.repeat",
+        name: "Repeat Zone",
+        category: "Group",
+        inputs: &REPEAT_INPUTS,
+        outputs: &AUDIO_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "voice.zone.input",
+        name: "Zone Input",
+        category: "Group",
+        inputs: &[],
+        outputs: &ZONE_INPUT_OUTPUTS,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "voice.zone.output",
+        name: "Zone Output",
+        category: "Group",
+        inputs: &ZONE_OUTPUT_INPUTS,
+        outputs: &[],
         params: &[],
     },
     VoiceNodeType {
@@ -1459,9 +1487,28 @@ impl VoiceGraph {
     pub fn piano_default() -> Self {
         let input = VoiceNode::new(NodeId::fixed("voice-in"), "group.input");
         let separate = VoiceNode::new(NodeId::fixed("note-separate"), "note.separate");
-        let mut partials = VoiceNode::new(NodeId::fixed("partials"), "voice.repeat");
-        partials.group = Some("piano.partial".to_string());
+        let mut partials = VoiceNode::new(NodeId::fixed("partials"), "voice.zone.repeat");
         partials.params.insert("count".to_string(), 10.0);
+        let mut zone_in = VoiceNode::new(NodeId::fixed("p-in"), "voice.zone.input");
+        let mut zone_out = VoiceNode::new(NodeId::fixed("p-out"), "voice.zone.output");
+        let mut partial = VoiceNode::new(NodeId::fixed("p-partial"), "voice.partial");
+        let mut partial_add = VoiceNode::new(NodeId::fixed("p-add"), "voice.add");
+        let mut partial_pitch = VoiceNode::new(NodeId::fixed("p-pitch"), "voice.pitch");
+        let mut partial_velocity = VoiceNode::new(NodeId::fixed("p-velocity"), "voice.velocity");
+        let mut partial_time = VoiceNode::new(NodeId::fixed("p-time"), "voice.time");
+        let mut partial_index = VoiceNode::new(NodeId::fixed("p-index"), "voice.iteration");
+        for node in [
+            &mut zone_in,
+            &mut zone_out,
+            &mut partial,
+            &mut partial_add,
+            &mut partial_pitch,
+            &mut partial_velocity,
+            &mut partial_time,
+            &mut partial_index,
+        ] {
+            node.zone = Some("partials".to_string());
+        }
         let env_attack = VoiceNode::new(NodeId::fixed("env-attack"), "voice.attack");
         let env_decay = VoiceNode::new(NodeId::fixed("env-decay"), "voice.decay");
         let env_gain = VoiceNode::new(NodeId::fixed("env-gain"), "math.multiply");
@@ -1505,6 +1552,14 @@ impl VoiceGraph {
             add,
             gate,
             output,
+            zone_in,
+            zone_out,
+            partial,
+            partial_add,
+            partial_pitch,
+            partial_velocity,
+            partial_time,
+            partial_index,
         ] {
             nodes.insert(node.id.clone(), node);
         }
@@ -1529,6 +1584,15 @@ impl VoiceGraph {
             ("add", [1360.0, 150.0]),
             ("gate", [1540.0, 150.0]),
             ("out", [1720.0, 150.0]),
+            ("partials", [470.0, 760.0]),
+            ("p-in", [500.0, 820.0]),
+            ("p-partial", [700.0, 820.0]),
+            ("p-add", [940.0, 820.0]),
+            ("p-out", [1140.0, 820.0]),
+            ("p-pitch", [500.0, 940.0]),
+            ("p-velocity", [500.0, 1020.0]),
+            ("p-time", [500.0, 1100.0]),
+            ("p-index", [500.0, 1180.0]),
         ];
         for (id, position) in positions {
             if let Some(node) = nodes.get_mut(&NodeId::fixed(id)) {
@@ -1638,6 +1702,34 @@ impl VoiceGraph {
                     PortRef::fixed(NodeId::fixed("gate"), "out"),
                     PortRef::fixed(NodeId::fixed("out"), "audio"),
                 ),
+                VoiceConnection::new(
+                    PortRef::fixed(NodeId::fixed("p-in"), "out"),
+                    PortRef::fixed(NodeId::fixed("p-add"), "in1"),
+                ),
+                VoiceConnection::new(
+                    PortRef::fixed(NodeId::fixed("p-pitch"), "out"),
+                    PortRef::fixed(NodeId::fixed("p-partial"), "pitch"),
+                ),
+                VoiceConnection::new(
+                    PortRef::fixed(NodeId::fixed("p-velocity"), "out"),
+                    PortRef::fixed(NodeId::fixed("p-partial"), "velocity"),
+                ),
+                VoiceConnection::new(
+                    PortRef::fixed(NodeId::fixed("p-time"), "out"),
+                    PortRef::fixed(NodeId::fixed("p-partial"), "time"),
+                ),
+                VoiceConnection::new(
+                    PortRef::fixed(NodeId::fixed("p-index"), "out"),
+                    PortRef::fixed(NodeId::fixed("p-partial"), "index"),
+                ),
+                VoiceConnection::new(
+                    PortRef::fixed(NodeId::fixed("p-partial"), "out"),
+                    PortRef::fixed(NodeId::fixed("p-add"), "in2"),
+                ),
+                VoiceConnection::new(
+                    PortRef::fixed(NodeId::fixed("p-add"), "out"),
+                    PortRef::fixed(NodeId::fixed("p-out"), "in"),
+                ),
             ],
             frames: BTreeMap::new(),
         }
@@ -1654,6 +1746,108 @@ impl VoiceGraph {
         self.validate_with_groups(interface, &BTreeMap::new())
     }
 
+    pub fn zone_headers(&self) -> Vec<&VoiceNode> {
+        self.nodes
+            .values()
+            .filter(|node| node.type_id == "voice.zone.repeat")
+            .collect()
+    }
+
+    fn zone_members(&self, zone_id: &str, seen: &mut BTreeSet<NodeId>) -> BTreeSet<NodeId> {
+        let mut members = BTreeSet::new();
+        for node in self
+            .nodes
+            .values()
+            .filter(|node| node.zone.as_deref() == Some(zone_id))
+        {
+            if !seen.insert(node.id.clone()) {
+                continue;
+            }
+            members.insert(node.id.clone());
+            if node.type_id == "voice.zone.repeat" {
+                members.extend(self.zone_members(node.id.as_str(), seen));
+            }
+        }
+        members
+    }
+
+    pub fn zone_body_ids(&self) -> BTreeSet<NodeId> {
+        let mut ids = BTreeSet::new();
+        for header in self.zone_headers() {
+            ids.extend(self.zone_members(header.id.as_str(), &mut BTreeSet::new()));
+        }
+        ids
+    }
+
+    pub fn zone_body(
+        &self,
+        header: &VoiceNode,
+    ) -> Result<(VoiceGraph, NodeGroupInterface), GraphError> {
+        let ids = self.zone_members(header.id.as_str(), &mut BTreeSet::new());
+        let mut nodes = BTreeMap::new();
+        let mut inputs = 0;
+        let mut outputs = 0;
+        let mut input_node = None;
+        let mut output_node = None;
+        for id in &ids {
+            let Some(node) = self.nodes.get(id) else {
+                continue;
+            };
+            let mut node = node.clone();
+            if node.type_id == "voice.zone.input" {
+                node.type_id = "group.input".to_string();
+                inputs += 1;
+                input_node = Some(id.clone());
+            } else if node.type_id == "voice.zone.output" {
+                node.type_id = "group.output".to_string();
+                outputs += 1;
+                output_node = Some(id.clone());
+            }
+            nodes.insert(id.clone(), node);
+        }
+        if inputs != 1 || outputs != 1 {
+            return Err(GraphError::ZoneTerminals);
+        }
+        let input_node = input_node.ok_or(GraphError::ZoneTerminals)?;
+        let output_node = output_node.ok_or(GraphError::ZoneTerminals)?;
+        let mut connections: Vec<VoiceConnection> = self
+            .connections
+            .iter()
+            .filter(|connection| {
+                ids.contains(&connection.from.node) && ids.contains(&connection.to.node)
+            })
+            .cloned()
+            .collect();
+        for connection in &mut connections {
+            if connection.from.node == input_node && connection.from.port == "out" {
+                connection.from.port = "in".to_string();
+            }
+            if connection.to.node == output_node && connection.to.port == "in" {
+                connection.to.port = "audio".to_string();
+            }
+        }
+        let interface = NodeGroupInterface {
+            inputs: vec![NodeGroupSocket::new(
+                "in",
+                "Audio",
+                NodeGroupSocketType::Audio,
+            )],
+            outputs: vec![NodeGroupSocket::new(
+                "audio",
+                "Audio",
+                NodeGroupSocketType::Audio,
+            )],
+        };
+        Ok((
+            VoiceGraph {
+                nodes,
+                connections,
+                frames: BTreeMap::new(),
+            },
+            interface,
+        ))
+    }
+
     pub fn validate_with_groups(
         &self,
         interface: &NodeGroupInterface,
@@ -1662,20 +1856,25 @@ impl VoiceGraph {
         if self.nodes.is_empty() {
             return Err(GraphError::EmptyVoiceGraph);
         }
+        let body_ids = self.zone_body_ids();
         let inputs = self
             .nodes
             .values()
-            .filter(|node| node.type_id == "group.input")
+            .filter(|node| !body_ids.contains(&node.id) && node.type_id == "group.input")
             .count();
         let outputs = self
             .nodes
             .values()
-            .filter(|node| node.type_id == "group.output")
+            .filter(|node| !body_ids.contains(&node.id) && node.type_id == "group.output")
             .count();
         if inputs != 1 || outputs != 1 {
             return Err(GraphError::VoiceTerminals);
         }
-        for node in self.nodes.values() {
+        for node in self
+            .nodes
+            .values()
+            .filter(|node| !body_ids.contains(&node.id))
+        {
             if !matches!(
                 node.type_id.as_str(),
                 "group.input" | "group.output" | "voice.group"
@@ -1689,6 +1888,18 @@ impl VoiceGraph {
         }
         let mut occupied = BTreeSet::new();
         for connection in &self.connections {
+            let from_body = body_ids.contains(&connection.from.node);
+            let to_body = body_ids.contains(&connection.to.node);
+            if from_body && to_body {
+                continue;
+            }
+            if from_body || to_body {
+                return Err(GraphError::ZoneLeak(if from_body {
+                    connection.from.node.clone()
+                } else {
+                    connection.to.node.clone()
+                }));
+            }
             let source = self
                 .nodes
                 .get(&connection.from.node)
@@ -1725,6 +1936,10 @@ impl VoiceGraph {
                 return Err(GraphError::PortOccupied);
             }
         }
+        for header in self.zone_headers() {
+            let (body, interface) = self.zone_body(header)?;
+            body.validate_with_groups(&interface, groups)?;
+        }
         self.topological_order()?;
         Ok(())
     }
@@ -1744,6 +1959,8 @@ pub struct VoiceNode {
     pub group: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frame: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub zone: Option<String>,
     #[serde(default, skip_serializing_if = "is_false")]
     pub muted: bool,
     #[serde(default, skip_serializing_if = "is_false")]
@@ -1780,6 +1997,7 @@ impl VoiceNode {
             position: None,
             group: None,
             frame: None,
+            zone: None,
             muted: false,
             collapsed: false,
             label: None,
@@ -2862,6 +3080,10 @@ pub enum GraphError {
     InvalidPosition,
     #[error("找不到这条连接")]
     MissingConnection,
+    #[error("Repeat Zone 必须恰好有一个 Zone Input 和一个 Zone Output")]
+    ZoneTerminals,
+    #[error("Repeat Zone 内部节点不能连到外部：{0}")]
+    ZoneLeak(NodeId),
     #[error("图存在环")]
     Cycle,
     #[error("节点没有接上输出：{0}")]
@@ -3045,6 +3267,27 @@ mod tests {
     }
 
     #[test]
+    fn inline_zone_requires_exactly_one_boundary_pair() {
+        let mut graph = VoiceGraph::piano_default();
+        graph.nodes.remove(&NodeId::fixed("p-out"));
+        graph.connections.retain(|connection| {
+            connection.from.node != NodeId::fixed("p-out")
+                && connection.to.node != NodeId::fixed("p-out")
+        });
+        assert!(matches!(graph.validate(), Err(GraphError::ZoneTerminals)));
+    }
+
+    #[test]
+    fn inline_zone_body_cannot_connect_outside() {
+        let mut graph = VoiceGraph::piano_default();
+        graph.connections.push(VoiceConnection::new(
+            PortRef::fixed(NodeId::fixed("p-add"), "out"),
+            PortRef::fixed(NodeId::fixed("out"), "audio"),
+        ));
+        assert!(matches!(graph.validate(), Err(GraphError::ZoneLeak(_))));
+    }
+
+    #[test]
     fn piano_group_node_references_voice_group() {
         let graph = Graph::group_track("piano.voice").unwrap();
         graph.validate().unwrap();
@@ -3053,7 +3296,7 @@ mod tests {
         let group = NodeGroup::piano_default();
         assert_eq!(group.interface.inputs.len(), 1);
         assert_eq!(group.interface.inputs[0].ty, NodeGroupSocketType::Note);
-        assert_eq!(group.graph.nodes.len(), 20);
+        assert_eq!(group.graph.nodes.len(), 28);
     }
 
     #[test]

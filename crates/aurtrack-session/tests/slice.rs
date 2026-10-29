@@ -1502,8 +1502,8 @@ fn group_from_nodes_rewires_boundaries() {
         "group.from_nodes",
         json!({
             "source_group_id": "piano.voice",
-            "node_ids": ["partials", "env-gain"],
-            "name": "Partials Env"
+            "node_ids": ["env-gain", "osc-vca"],
+            "name": "Amp Stage"
         }),
     );
     let group_id = result["group_id"].as_str().unwrap();
@@ -1515,14 +1515,14 @@ fn group_from_nodes_rewires_boundaries() {
             .graph
             .nodes
             .keys()
-            .any(|id| id.to_string() == "partials")
+            .any(|id| id.to_string() == "env-gain")
     );
     assert!(
         !parent
             .graph
             .nodes
             .keys()
-            .any(|id| id.to_string() == "env-gain")
+            .any(|id| id.to_string() == "osc-vca")
     );
     let group_node = parent
         .graph
@@ -1534,14 +1534,11 @@ fn group_from_nodes_rewires_boundaries() {
     assert_eq!(group_node.type_id, "voice.group");
     assert_eq!(group_node.group.as_deref(), Some(group_id));
     let child = &project.node_groups[group_id];
-    assert_eq!(child.interface.inputs.len(), 2);
-    assert_eq!(child.interface.outputs.len(), 2);
-    assert!(
-        child
-            .graph
-            .nodes
-            .keys()
-            .any(|id| id.to_string() == "partials")
+    assert_eq!(child.interface.inputs.len(), 3);
+    assert_eq!(child.interface.outputs.len(), 1);
+    assert_eq!(
+        child.interface.outputs[0].ty,
+        aurtrack_graph::NodeGroupSocketType::Audio
     );
     assert!(
         child
@@ -1549,6 +1546,13 @@ fn group_from_nodes_rewires_boundaries() {
             .nodes
             .keys()
             .any(|id| id.to_string() == "env-gain")
+    );
+    assert!(
+        child
+            .graph
+            .nodes
+            .keys()
+            .any(|id| id.to_string() == "osc-vca")
     );
     let plan = project.tracks[0]
         .playback_graph(&project.node_groups, &project.audio_groups)
@@ -2427,20 +2431,22 @@ fn default_piano_partial_loop_is_explicit() {
         .values()
         .find(|node| node.id.to_string() == "partials")
         .unwrap();
-    assert_eq!(repeat.type_id, "voice.repeat");
-    assert_eq!(repeat.group.as_deref(), Some("piano.partial"));
-    let body = &project.node_groups["piano.partial"];
+    assert_eq!(repeat.type_id, "voice.zone.repeat");
+    assert_eq!(repeat.group, None);
     assert!(
-        body.graph
+        voice
+            .graph
             .nodes
             .values()
-            .any(|node| node.type_id == "voice.partial")
+            .any(|node| node.type_id == "voice.partial" && node.zone.as_deref() == Some("partials"))
     );
     assert!(
-        body.graph
+        voice
+            .graph
             .nodes
             .values()
-            .any(|node| node.type_id == "voice.iteration")
+            .any(|node| node.type_id == "voice.iteration"
+                && node.zone.as_deref() == Some("partials"))
     );
     let plan = project.tracks[0]
         .playback_graph(&project.node_groups, &project.audio_groups)

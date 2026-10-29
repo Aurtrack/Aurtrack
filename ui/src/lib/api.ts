@@ -66,6 +66,7 @@ export type VoiceNode = {
   position?: [number, number];
   group?: string;
   frame?: string;
+  zone?: string;
   muted?: boolean;
   collapsed?: boolean;
   label?: string;

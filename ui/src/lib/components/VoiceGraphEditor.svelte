@@ -103,11 +103,14 @@
       (nodeType) =>
         nodeType.id !== "group.input" &&
         nodeType.id !== "group.output" &&
-        nodeType.id !== "voice.group",
+        nodeType.id !== "voice.group" &&
+        nodeType.id !== "voice.repeat" &&
+        nodeType.id !== "voice.zone.input" &&
+        nodeType.id !== "voice.zone.output",
     ),
   );
   let swapTypes = $derived(
-    menuTypes.filter((nodeType) => nodeType.id !== "voice.repeat"),
+    menuTypes.filter((nodeType) => nodeType.id !== "voice.zone.repeat"),
   );
 
   function nodeGroup(node: VoiceNode): NodeGroup | undefined {
@@ -118,6 +121,90 @@
     return node?.type_id === "voice.group" || node?.type_id === "voice.repeat";
   }
 
+  function zoneHeaders(): VoiceNode[] {
+    return Object.values(voice.nodes).filter(
+      (node) => node.type_id === "voice.zone.repeat",
+    );
+  }
+
+  function zoneMemberIds(zoneId: string, seen = new Set<string>()): string[] {
+    const ids: string[] = [];
+    for (const node of Object.values(voice.nodes)) {
+      if (node.zone !== zoneId || seen.has(node.id)) continue;
+      seen.add(node.id);
+      ids.push(node.id);
+      if (node.type_id === "voice.zone.repeat") {
+        ids.push(...zoneMemberIds(node.id, seen));
+      }
+    }
+    return ids;
+  }
+
+  function zoneBounds(
+    header: VoiceNode,
+    excludeId?: string,
+  ): {
+    left: number;
+    top: number;
+    width: number;
+    height: number;
+  } {
+    const nodes = [
+      header,
+      ...zoneMemberIds(header.id)
+        .filter((id) => id !== excludeId)
+        .map((id) => voice.nodes[id])
+        .filter((node): node is VoiceNode => node !== undefined),
+    ].filter((node) => node.id !== excludeId);
+    let minX = Infinity;
+    let minY = Infinity;
+    let maxX = -Infinity;
+    let maxY = -Infinity;
+    for (const node of nodes) {
+      const [x, y] = node.position ?? [0, 0];
+      minX = Math.min(minX, x);
+      minY = Math.min(minY, y);
+      maxX = Math.max(maxX, x + nodeWidth(node));
+      maxY = Math.max(maxY, y + nodeHeight(node));
+    }
+    const pad = 24;
+    return {
+      left: minX - pad,
+      top: minY - 34,
+      width: Math.max(260, maxX - minX + pad * 2),
+      height: Math.max(180, maxY - minY + 34 + pad),
+    };
+  }
+
+  function expandZoneSelection(ids: Iterable<string>): Set<string> {
+    const expanded = new Set(ids);
+    for (const id of [...expanded]) {
+      if (voice.nodes[id]?.type_id === "voice.zone.repeat") {
+        for (const member of zoneMemberIds(id)) expanded.add(member);
+      }
+    }
+    return expanded;
+  }
+
+  function zoneAtPoint(
+    point: [number, number],
+    excludeId?: string,
+  ): string | undefined {
+    for (const header of zoneHeaders()) {
+      if (header.id === excludeId) continue;
+      const bounds = zoneBounds(header, excludeId);
+      if (
+        point[0] >= bounds.left &&
+        point[0] <= bounds.left + bounds.width &&
+        point[1] >= bounds.top &&
+        point[1] <= bounds.top + bounds.height
+      ) {
+        return header.id;
+      }
+    }
+    return undefined;
+  }
+
   function nodeLabel(node: VoiceNode): string {
     if (node.label?.trim()) return node.label.trim();
     if (node.type_id === "group.input") {
@@ -126,8 +213,17 @@
     if (node.type_id === "group.output") {
       return tLoose("node.group.output", "GROUP OUTPUT").toUpperCase();
     }
-    if (node.type_id === "voice.repeat") {
+    if (
+      node.type_id === "voice.repeat" ||
+      node.type_id === "voice.zone.repeat"
+    ) {
       return tLoose("node.voice.repeat", "REPEAT").toUpperCase();
+    }
+    if (node.type_id === "voice.zone.input") {
+      return tLoose("node.voice.zone.input", "ZONE INPUT").toUpperCase();
+    }
+    if (node.type_id === "voice.zone.output") {
+      return tLoose("node.voice.zone.output", "ZONE OUTPUT").toUpperCase();
     }
     if (isGroupNode(node)) {
       return nodeGroup(node)?.name ?? node.group ?? tLoose("node.voice.group", "VOICE GROUP");
@@ -1007,13 +1103,19 @@
           !selected.has(connection.to.node),
       );
     }
+    const dragIds = new Set(selected);
+    for (const id of [...dragIds]) {
+      if (voice.nodes[id]?.type_id === "voice.zone.repeat") {
+        for (const member of zoneMemberIds(id)) dragIds.add(member);
+      }
+    }
     const origins: Record<string, Point> = {};
-    for (const id of selected) {
+    for (const id of dragIds) {
       const position = positions[id];
       if (position) origins[id] = { ...position };
     }
     drag = {
-      ids: [...selected],
+      ids: [...dragIds],
       startX: event.clientX,
       startY: event.clientY,
       origins,
@@ -1415,6 +1517,26 @@
       insertNodeOnLink(voice.nodes[drag.ids[0] ?? ""]!, insertTarget);
     }
     const layoutChanged = !!(drag || frameDrag || frameResize || nodeResize);
+    if (drag?.moved) {
+      for (const id of drag.ids) {
+        const node = voice.nodes[id];
+        if (
+          !node ||
+          node.type_id === "voice.zone.repeat" ||
+          node.type_id === "voice.zone.input" ||
+          node.type_id === "voice.zone.output"
+        ) {
+          continue;
+        }
+        const [x, y] = node.position ?? [0, 0];
+        const zone = zoneAtPoint(
+          [x + nodeWidth(node) / 2, y + nodeHeight(node) / 2],
+          id,
+        );
+        if (zone) node.zone = zone;
+        else delete node.zone;
+      }
+    }
     insertTarget = null;
     pan = null;
     drag = null;
@@ -1609,17 +1731,55 @@
     touchVoice();
   }
 
+  function createZone() {
+    const id = `zone-${Date.now().toString(36)}`;
+    const position = addPosition();
+    const header: VoiceNode = {
+      id,
+      type_id: "voice.zone.repeat",
+      params: { count: 10 },
+      position,
+    };
+    voice.nodes[id] = header;
+    const input: VoiceNode = {
+      id: `${id}-in`,
+      type_id: "voice.zone.input",
+      params: {},
+      position: [position[0] + 24, position[1] + 78],
+      zone: id,
+    };
+    const output: VoiceNode = {
+      id: `${id}-out`,
+      type_id: "voice.zone.output",
+      params: {},
+      position: [position[0] + 360, position[1] + 78],
+      zone: id,
+    };
+    voice.nodes[input.id] = input;
+    voice.nodes[output.id] = output;
+    touchVoice();
+    selectOnly(id);
+    addMenu = null;
+  }
+
   function addNode(kind: string) {
+    if (kind === "voice.zone.repeat") {
+      createZone();
+      return;
+    }
     const id = `voice-${Date.now().toString(36)}`;
     const params: Record<string, number> = {};
     for (const param of typeById.get(kind)?.params ?? []) {
       params[param.name] = param.default;
     }
+    const position = addPosition();
+    const zone = zoneAtPoint(position);
     const node: VoiceNode = {
       id,
       type_id: kind,
       params,
-      position: addPosition(),
+      position,
+      zone,
     };
     voice.nodes[id] = node;
     connectPending(node);
@@ -1772,7 +1932,9 @@
 
   function deleteSelectedWithReconnect(): void {
     const removed = new Set(
-      [...selected].filter((id) => id !== "voice-in" && id !== "out"),
+      [...expandZoneSelection(selected)].filter(
+        (id) => id !== "voice-in" && id !== "out",
+      ),
     );
     if (removed.size === 0) return;
     const targetBusy = new Set(
@@ -1842,7 +2004,7 @@
   }
 
   function removeSelected() {
-    const removable = [...selected].filter(
+    const removable = [...expandZoneSelection(selected)].filter(
       (id) => id !== "voice-in" && id !== "out",
     );
     if (removable.length === 0) return;
@@ -2733,6 +2895,18 @@
             aria-label={t("voice.resizeFrame")}
             onmousedown={(event) => frameResizeDown(event, frame)}
           ></div>
+        </div>
+      {/each}
+      {#each zoneHeaders() as header (header.id)}
+        {@const bounds = zoneBounds(header)}
+        <div
+          class="voice-zone"
+          style:left={`${bounds.left}px`}
+          style:top={`${bounds.top}px`}
+          style:width={`${bounds.width}px`}
+          style:height={`${bounds.height}px`}
+        >
+          <span class="voice-zone-label">{t("voice.repeatZone")}</span>
         </div>
       {/each}
       <svg

@@ -782,10 +782,14 @@ fn compile_voice_inner(
     initial_nodes: &[VoiceNodePlan],
 ) -> Result<VoicePlan, GraphError> {
     let order = voice.topological_order()?;
+    let zone_body_ids = voice.zone_body_ids();
     let mut indices = BTreeMap::<(NodeId, String), usize>::new();
     let mut nodes = initial_nodes.to_vec();
     let mut output = None;
     for id in order {
+        if zone_body_ids.contains(&id) {
+            continue;
+        }
         let node = voice.node(&id).ok_or(GraphError::VoiceUnknownNode)?;
         let input_ports = aurtrack_graph::node_inputs(node, interface, groups)?;
         let mut incoming = Vec::new();
@@ -909,6 +913,28 @@ fn compile_voice_inner(
                 nodes.push(VoiceNodePlan::new(op, Vec::new()));
                 indices.insert((id.clone(), port.to_string()), index);
             }
+            continue;
+        }
+        if node.type_id == "voice.zone.repeat" {
+            let (body_graph, body_interface) = voice.zone_body(node)?;
+            let mut bindings = BTreeMap::new();
+            bindings.insert("in".to_string(), 0);
+            let body = compile_voice_inner(
+                &body_graph,
+                &body_interface,
+                groups,
+                stack,
+                Some(&bindings),
+                &[VoiceNodePlan::new(VoiceOp::Input(0), Vec::new())],
+            )?;
+            let index = nodes.len();
+            nodes.push(VoiceNodePlan::new(
+                VoiceOp::Repeat {
+                    body: Box::new(body),
+                },
+                inputs.first().copied().into_iter().collect(),
+            ));
+            indices.insert((id.clone(), "out".to_string()), index);
             continue;
         }
         if node.type_id == "voice.repeat" {
@@ -2091,6 +2117,9 @@ impl Session {
                 .ok_or_else(|| CommandError::not_found(format!("找不到节点：{id}")))?;
             if matches!(node.type_id.as_str(), "group.input" | "group.output") {
                 return Err(CommandError::invalid_args("不能把组输入/输出打成组"));
+            }
+            if node.type_id.starts_with("voice.zone.") || node.zone.is_some() {
+                return Err(CommandError::invalid_args("不能把 Repeat Zone 节点打成组"));
             }
             if node.group.as_deref() == Some(args.source_group_id.as_str()) {
                 return Err(CommandError::invalid_args("不能把组自身放进子组"));

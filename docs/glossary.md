@@ -61,6 +61,7 @@
 | broadcast | 广播 | 显式把控制值作为逐采样音频使用 |
 | vector add | 向量加法 | 六路 Float 输入、三路 X/Y/Z 输出 |
 | sample hold | 采样保持 | 保存上一采样值，构成最简单的状态节点 |
+| Repeat Zone | 重复区域 | 内联循环体，带 Zone Input/Output 和 Count 输入 |
 | preview | 预览 | 编译组并采样目标节点，在 UI 显示曲线 |
 | attack | 起音 | `min(time / attack, 1)` 控制曲线 |
 | decay | 衰减 | `exp(-time / decay)` 控制曲线 |

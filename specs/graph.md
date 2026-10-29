@@ -93,7 +93,9 @@ gate ──→ out.audio
 
 `Attack` 输出 `min(time / attack, 1)`，`Decay` 输出 `exp(-time / decay)`；两者显式相乘，不再有固定公式的包络宏节点。`VCA` 负责音频乘控制值，`Noise` 只输出噪声源。
 
-`voice.repeat` 引用一个循环体组，重复执行 `count` 次。`count` 是一个 Float 输入 socket，可连接控制信号；未连接时使用节点自己的值，运行时限制在 1–64。节点标题固定为 Repeat，循环体组名单独显示。循环体必须有一个 `in` 音频输入和一个 `audio` 输出；`voice.iteration` 输出当前迭代序号。默认循环体 `piano.partial` 是：
+默认循环是内联 Repeat Zone：`voice.zone.repeat` 是区间头节点，`count` 是 Float 输入；同一 `zone` 字段下的 `voice.zone.input`、`voice.zone.output` 和普通节点构成循环体。区块在编辑器里直接画成带边框的 Zone，不再跳进独立组。`voice.iteration` 输出当前迭代序号。
+
+旧的 `voice.repeat` 组引用仍然能编译，但不再出现在添加菜单里。内联循环体必须恰好有一个 Zone Input 和一个 Zone Output，边界节点不能直接连到 Zone 外部。默认循环体是：
 
 ```text
 voice-in.in ──→ add.A
@@ -128,7 +130,7 @@ Voice 节点实例用 `type_id` 引用注册表，端口和参数由 `node.types
 
 Audio 节点类型：`audio.group`、`audio.group.instance`、`audio.instrument.sine`、`audio.instrument.silence`、`audio.adsr`、`audio.plugin`、`audio.gain`、`audio.mix`、`audio.filter.lowpass`、`audio.filter.highpass`、`audio.drive`、`audio.delay`、`audio.value`、`audio.note`、`audio.output`。`audio.instrument.sine` 的频率是 `frequency` 输入 socket，可连接控制信号。
 
-工程视图同时输出 `type_id` 和 UI 用的 `kind`；写入只认 `type_id`。当前 Voice 类型以 `node.types` 注册表为准，包含 `voice.repeat`、`voice.partial`、`voice.switch`、`voice.index_switch`、`voice.index_switch_float`、`voice.vector_add`、`voice.broadcast`、`voice.sample_hold`、`voice.sum`、`voice.sum_float`、`voice.iteration`、`voice.pitch`、`voice.velocity`、`voice.attack`、`voice.decay`、`voice.noise`、`voice.vca`、`voice.add`、`voice.mix`、`voice.gate`、`note.separate` 等原子节点。`voice.sum` 和 `voice.sum_float` 的 `in` 是多输入 socket，可接多条线；它们编译成把所有输入相加。`voice.index_switch` / `voice.index_switch_float` 按 `count` 动态生成端口。`voice.vector_add` 编译成三路独立加法，输出 X/Y/Z。`voice.sample_hold` 每个音符保存上一采样值。
+工程视图同时输出 `type_id` 和 UI 用的 `kind`；写入只认 `type_id`。当前 Voice 类型以 `node.types` 注册表为准，包含 `voice.repeat`、`voice.zone.repeat`、`voice.zone.input`、`voice.zone.output`、`voice.partial`、`voice.switch`、`voice.index_switch`、`voice.index_switch_float`、`voice.vector_add`、`voice.broadcast`、`voice.sample_hold`、`voice.sum`、`voice.sum_float`、`voice.iteration`、`voice.pitch`、`voice.velocity`、`voice.attack`、`voice.decay`、`voice.noise`、`voice.vca`、`voice.add`、`voice.mix`、`voice.gate`、`note.separate` 等原子节点。`voice.sum` 和 `voice.sum_float` 的 `in` 是多输入 socket，可接多条线；它们编译成把所有输入相加。`voice.index_switch` / `voice.index_switch_float` 按 `count` 动态生成端口。`voice.vector_add` 编译成三路独立加法，输出 X/Y/Z。`voice.sample_hold` 每个音符保存上一采样值。
 
 组接口 socket 类型：`float`、`gate`、`audio`、`note`。`note` 表示逐音符事件，不参与 Audio 采样，也没有数值默认值。
 
