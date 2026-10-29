@@ -124,7 +124,7 @@ pitch / velocity / time / iteration ──→ partial
 
 嵌套组的端口来自被引用组的接口；编译器递归展开，循环引用会被拒绝。
 
-Voice 节点实例用 `type_id` 引用注册表，端口和参数由 `node.types` 声明。节点可选保存 `label` 和 `color`，只影响编辑器显示。连线可选保存 `muted`；静音连线不参与编译、不占用输入端口，也不参与拓扑排序。轨道图使用 `AudioGraph`，同样以 `type_id` 引用 `AUDIO_NODE_TYPES`，节点不再保存固定 kind。
+Voice 节点实例用 `type_id` 引用注册表，端口和参数由 `node.types` 声明。节点可选保存 `label`、`color` 和 `width`，只影响编辑器显示。帧可选保存 `color`，名称和颜色都只影响编辑器显示。连线可选保存 `muted`；静音连线不参与编译、不占用输入端口，也不参与拓扑排序。轨道图使用 `AudioGraph`，同样以 `type_id` 引用 `AUDIO_NODE_TYPES`，节点不再保存固定 kind。
 
 Audio 节点类型：`audio.group`、`audio.group.instance`、`audio.instrument.sine`、`audio.instrument.silence`、`audio.adsr`、`audio.plugin`、`audio.gain`、`audio.mix`、`audio.filter.lowpass`、`audio.filter.highpass`、`audio.drive`、`audio.delay`、`audio.value`、`audio.note`、`audio.output`。`audio.instrument.sine` 的频率是 `frequency` 输入 socket，可连接控制信号。
 

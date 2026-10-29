@@ -2606,6 +2606,18 @@ button:disabled {
   display: block;
   overflow: hidden;
 }
+.voice-node-resize {
+  position: absolute;
+  z-index: 5;
+  top: 0;
+  right: 0;
+  width: 8px;
+  height: 20px;
+  cursor: ew-resize;
+}
+.voice-node-resize:hover {
+  background: rgb(255 255 255 / 35%);
+}
 
 .voice-node-head {
   display: flex;
@@ -3276,6 +3288,9 @@ button:disabled {
 }
 
 .voice-frame-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
   height: 22px;
   border-bottom: 1px solid #c8ced2;
   padding: 4px 8px;
@@ -3286,6 +3301,33 @@ button:disabled {
   letter-spacing: 0.06em;
   pointer-events: auto;
   cursor: grab;
+}
+
+.voice-frame-title {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.voice-frame-name {
+  min-width: 0;
+  flex: 1;
+  height: 16px;
+  border: 1px solid #9aa6a0;
+  background: #fff;
+  color: #303834;
+  font: inherit;
+}
+
+.voice-frame-color {
+  width: 16px;
+  height: 14px;
+  padding: 0;
+  border: 1px solid #9aa6a0;
+  background: transparent;
+  cursor: pointer;
 }
 
 .voice-frame-resize {

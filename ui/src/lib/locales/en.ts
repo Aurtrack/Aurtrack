@@ -496,6 +496,8 @@ export const en: Record<MessageKey, Message> = {
   "graph.activeNode": "Active Node",
   "graph.nodeLabel": "Label",
   "graph.nodeColor": "Color",
+  "voice.frameColor": "Frame Color",
+  "voice.resizeNode": "Resize Node",
   "graph.clearColor": "Clear Color",
   "graph.noActiveNode": "No active node",
   "graph.groups": "Groups",

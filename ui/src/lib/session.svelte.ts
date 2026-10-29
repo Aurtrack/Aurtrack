@@ -884,6 +884,7 @@ export class SessionStore {
     voice: {
       nodes: Record<string, unknown>;
       connections: { from: { node: string; port: string }; to: { node: string; port: string } }[];
+      frames?: Record<string, unknown>;
     },
   ): Promise<unknown> {
     const result = await this.run("group.voice", { group_id: groupId, voice });

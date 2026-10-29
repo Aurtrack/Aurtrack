@@ -105,6 +105,9 @@
         nodeType.id !== "voice.group",
     ),
   );
+  let swapTypes = $derived(
+    menuTypes.filter((nodeType) => nodeType.id !== "voice.repeat"),
+  );
 
   function nodeGroup(node: VoiceNode): NodeGroup | undefined {
     return node.group ? groups[node.group] : undefined;
@@ -157,31 +160,37 @@
     }));
   }
 
-  function inputList(node: VoiceNode): PortInfo[] {
-    let ports: PortInfo[];
-    if (node.type_id === "group.input") ports = [];
-    else if (node.type_id === "group.output") {
-      ports = interfacePorts(groupInterface.outputs);
-    } else if (node.type_id === "voice.group") {
-      ports = interfacePorts(nodeGroup(node)?.interface.inputs ?? []);
-    } else {
-      ports = typePorts(node, "inputs");
+  function allInputList(node: VoiceNode): PortInfo[] {
+    if (node.type_id === "group.input") return [];
+    if (node.type_id === "group.output") {
+      return interfacePorts(groupInterface.outputs);
     }
+    if (node.type_id === "voice.group") {
+      return interfacePorts(nodeGroup(node)?.interface.inputs ?? []);
+    }
+    return typePorts(node, "inputs");
+  }
+
+  function allOutputList(node: VoiceNode): PortInfo[] {
+    if (node.type_id === "group.output") return [];
+    if (node.type_id === "group.input") {
+      return interfacePorts(groupInterface.inputs);
+    }
+    if (node.type_id === "voice.group") {
+      return interfacePorts(nodeGroup(node)?.interface.outputs ?? []);
+    }
+    return typePorts(node, "outputs");
+  }
+
+  function inputList(node: VoiceNode): PortInfo[] {
+    const ports = allInputList(node);
     return hideUnconnected
       ? ports.filter((port) => isLinked(node, port.id))
       : ports;
   }
 
   function outputList(node: VoiceNode): PortInfo[] {
-    let ports: PortInfo[];
-    if (node.type_id === "group.output") ports = [];
-    else if (node.type_id === "group.input") {
-      ports = interfacePorts(groupInterface.inputs);
-    } else if (node.type_id === "voice.group") {
-      ports = interfacePorts(nodeGroup(node)?.interface.outputs ?? []);
-    } else {
-      ports = typePorts(node, "outputs");
-    }
+    const ports = allOutputList(node);
     return hideUnconnected
       ? ports.filter((port) =>
           voice.connections.some(
@@ -253,8 +262,14 @@
   let circlePos = $state<Point | null>(null);
   let circleDragging = false;
   let drag = $state<Drag | null>(null);
+  let nodeResize = $state<{
+    ids: string[];
+    startX: number;
+    widths: Record<string, number>;
+  } | null>(null);
   let nodeMenu = $state<{ x: number; y: number; nodeId: string } | null>(null);
   let pendingLink = $state<Wire | null>(null);
+  let movingWire = $state<VoiceConnection | null>(null);
   let wireMoved = false;
   let frameDrag = $state<{
     id: string;
@@ -273,10 +288,13 @@
   let error = $state("");
   let saving = $state(false);
   let addMenu = $state<{ x: number; y: number } | null>(null);
+  let swapMenu = $state<{ x: number; y: number } | null>(null);
   let lastPointer = $state({ x: 0, y: 0 });
   let boardElement = $state<HTMLElement | null>(null);
   let hostElement = $state<HTMLElement | null>(null);
   let labelInput = $state<HTMLInputElement | null>(null);
+  let editingFrameId = $state<string | null>(null);
+  let frameNameInput = $state<HTMLInputElement | null>(null);
   let groupChoices = $derived(
     Object.values(groups).filter((group) => group.id !== groupId),
   );
@@ -301,11 +319,13 @@
     let minY = 0;
     let maxX = CANVAS_WIDTH;
     let maxY = CANVAS_HEIGHT;
-    for (const position of Object.values(positions)) {
+    for (const node of nodes) {
+      const position = positions[node.id];
+      if (!position) continue;
       minX = Math.min(minX, position.x);
       minY = Math.min(minY, position.y);
-      maxX = Math.max(maxX, position.x + NODE_WIDTH);
-      maxY = Math.max(maxY, position.y + 300);
+      maxX = Math.max(maxX, position.x + nodeWidth(node));
+      maxY = Math.max(maxY, position.y + nodeHeight(node));
     }
     const padding = 240;
     return {
@@ -407,6 +427,10 @@
     return expandedNodeHeight(rowCount(node), groupHeaderHeight(node));
   }
 
+  function nodeWidth(node: VoiceNode): number {
+    return Math.max(140, Math.min(480, node.width ?? NODE_WIDTH));
+  }
+
   function wireColor(connection: VoiceConnection): string {
     if (connection.muted) return "#b85a5a";
     const source = voice.nodes[connection.from.node];
@@ -434,7 +458,7 @@
       0,
       inputs.findIndex((port) => port.id === connection.to.port),
     );
-    const x1 = from.x + NODE_WIDTH;
+    const x1 = from.x + nodeWidth(source);
     const y1 = from.y + portY(source, outIndex);
     const x2 = to.x;
     const y2 = to.y + portY(target, inIndex);
@@ -465,7 +489,7 @@
     );
     return {
       from: {
-        x: sourcePosition.x + NODE_WIDTH,
+        x: sourcePosition.x + nodeWidth(source),
         y: sourcePosition.y + portY(source, outIndex),
       },
       to: {
@@ -560,7 +584,7 @@
     const position = positions[node.id];
     if (!position) return null;
     const center = {
-      x: position.x + NODE_WIDTH / 2,
+      x: position.x + nodeWidth(node) / 2,
       y: position.y + nodeHeight(node) / 2,
     };
     const inputs = inputList(node);
@@ -651,7 +675,7 @@
       ports.findIndex((candidate) => candidate.id === activeWire.port),
     );
     const x1 =
-      activeWire.side === "out" ? position.x + NODE_WIDTH : position.x;
+      activeWire.side === "out" ? position.x + nodeWidth(node) : position.x;
     const y1 = position.y + portY(node, index);
     const x2 = activeWire.x;
     const y2 = activeWire.y;
@@ -683,6 +707,35 @@
     active = id;
   }
 
+  function detachInputWire(
+    existing: VoiceConnection,
+    point: Point,
+    remember: boolean,
+  ): void {
+    const source = voice.nodes[existing.from.node];
+    const sourcePort = source
+      ? outputList(source).find(
+          (candidate) => candidate.id === existing.from.port,
+        )
+      : undefined;
+    if (!source || !sourcePort) return;
+    voice.connections = voice.connections.filter(
+      (connection) => connection !== existing,
+    );
+    selectOnly(source.id);
+    wireMoved = false;
+    movingWire = remember ? { ...existing } : null;
+    wire = {
+      node: source.id,
+      port: sourcePort.id,
+      side: "out",
+      ty: sourcePort.ty,
+      x: point.x,
+      y: point.y,
+    };
+    touchVoice();
+  }
+
   function startWire(
     event: MouseEvent,
     node: VoiceNode,
@@ -694,34 +747,15 @@
     event.stopPropagation();
     const point = worldPoint(event);
     if (!point) return;
-    if (event.ctrlKey && side === "in" && !wire) {
+    if ((event.ctrlKey || event.altKey) && side === "in" && !wire) {
       const existing = voice.connections.find(
         (connection) =>
           !connection.muted &&
           connection.to.node === node.id &&
           connection.to.port === port.id,
       );
-      const source = existing ? voice.nodes[existing.from.node] : undefined;
-      const sourcePort =
-        existing && source
-          ? outputList(source).find(
-              (candidate) => candidate.id === existing.from.port,
-            )
-          : undefined;
-      if (existing && source && sourcePort) {
-        voice.connections = voice.connections.filter(
-          (connection) => connection !== existing,
-        );
-        selectOnly(source.id);
-        wireMoved = false;
-        wire = {
-          node: source.id,
-          port: sourcePort.id,
-          side: "out",
-          ty: sourcePort.ty,
-          x: point.x,
-          y: point.y,
-        };
+      if (existing) {
+        detachInputWire(existing, point, event.altKey);
         return;
       }
     }
@@ -743,6 +777,13 @@
     };
   }
 
+  function restoreMovingWire(): void {
+    if (!movingWire) return;
+    voice.connections.push(movingWire);
+    movingWire = null;
+    touchVoice();
+  }
+
   function finishWire(
     event: MouseEvent,
     node: VoiceNode,
@@ -757,6 +798,7 @@
       if (port.ty !== active.ty) {
         error = `端口类型不匹配：${active.ty} → ${port.ty}`;
       }
+      restoreMovingWire();
       return;
     }
     const from =
@@ -767,7 +809,10 @@
       active.side === "out"
         ? { node: node.id, port: port.id }
         : { node: active.node, port: active.port };
-    if (from.node === to.node) return;
+    if (from.node === to.node) {
+      restoreMovingWire();
+      return;
+    }
     const exists = voice.connections.some(
       (connection) =>
         !connection.muted &&
@@ -776,6 +821,20 @@
         connection.to.node === to.node &&
         connection.to.port === to.port,
     );
+    if (exists) {
+      restoreMovingWire();
+      return;
+    }
+    const displaced = voice.connections.filter(
+      (connection) =>
+        !connection.muted &&
+        connection.to.node === to.node &&
+        connection.to.port === to.port &&
+        !(
+          connection.from.node === from.node &&
+          connection.from.port === from.port
+        ),
+    );
     voice.connections = voice.connections.filter(
       (connection) =>
         !(connection.to.node === to.node && connection.to.port === to.port),
@@ -783,6 +842,31 @@
     if (!exists) {
       voice.connections.push({ from, to });
     }
+    if (movingWire) {
+      const originalTarget = voice.nodes[movingWire.to.node];
+      const originalInput = originalTarget
+        ? allInputList(originalTarget).find(
+            (candidate) => candidate.id === movingWire?.to.port,
+          )
+        : undefined;
+      for (const connection of displaced) {
+        const source = voice.nodes[connection.from.node];
+        const sourcePort = source
+          ? allOutputList(source).find(
+              (candidate) => candidate.id === connection.from.port,
+            )
+          : undefined;
+        if (!source || !sourcePort || !originalInput) continue;
+        if (sourcePort.ty !== originalInput.ty) continue;
+        voice.connections.push({
+          from: { ...connection.from },
+          to: { ...movingWire.to },
+        });
+        break;
+      }
+      movingWire = null;
+    }
+    touchVoice();
   }
 
   function openNodeMenu(event: MouseEvent, node: VoiceNode) {
@@ -794,12 +878,26 @@
     nodeMenu = { x: event.clientX, y: event.clientY, nodeId: node.id };
   }
 
+  function nodeResizeDown(event: MouseEvent, node: VoiceNode): void {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const ids = selected.has(node.id) ? [...selected] : [node.id];
+    const widths: Record<string, number> = {};
+    for (const id of ids) {
+      const candidate = voice.nodes[id];
+      if (candidate) widths[id] = nodeWidth(candidate);
+    }
+    nodeResize = { ids, startX: event.clientX, widths };
+  }
+
   function nodeMouseDown(event: MouseEvent, node: VoiceNode) {
     if (circleMode) return;
     if (wire) {
       wire = null;
       wireMoved = false;
       pendingLink = null;
+      restoreMovingWire();
     }
     nodeMenu = null;
     if (event.button !== 0) return;
@@ -818,6 +916,13 @@
       selectOnly(node.id);
     } else {
       active = node.id;
+    }
+    if (event.altKey) {
+      voice.connections = voice.connections.filter(
+        (connection) =>
+          !selected.has(connection.from.node) &&
+          !selected.has(connection.to.node),
+      );
     }
     const origins: Record<string, Point> = {};
     for (const id of selected) {
@@ -840,6 +945,16 @@
       if (point) {
         circlePos = point;
         if (circleDragging) selectInCircle(point, event.shiftKey);
+      }
+      return;
+    }
+    if (nodeResize) {
+      const dx = (event.clientX - nodeResize.startX) / view.scale;
+      for (const id of nodeResize.ids) {
+        const node = voice.nodes[id];
+        if (!node) continue;
+        const width = (nodeResize.widths[id] ?? NODE_WIDTH) + dx;
+        node.width = Math.max(140, Math.min(480, Math.round(width)));
       }
       return;
     }
@@ -1056,7 +1171,7 @@
       const position = positions[node.id];
       if (!position) continue;
       const point = {
-        x: view.x + (position.x + NODE_WIDTH / 2) * view.scale,
+        x: view.x + (position.x + nodeWidth(node) / 2) * view.scale,
         y: view.y + (position.y + nodeHeight(node) / 2) * view.scale,
       };
       if (Math.hypot(point.x - center.x, point.y - center.y) <= circleRadius) {
@@ -1120,8 +1235,11 @@
       return;
     }
     if (wire && event) {
-      const element = document.elementFromPoint(event.clientX, event.clientY);
-      const target = element?.closest<HTMLElement>(".voice-port");
+      const target =
+        (event.target as Element | null)?.closest<HTMLElement>(".voice-port") ??
+        document
+          .elementFromPoint(event.clientX, event.clientY)
+          ?.closest<HTMLElement>(".voice-port");
       const targetNode = target?.dataset.portNode;
       const targetPort = target?.dataset.portId;
       const targetSide = target?.dataset.portSide;
@@ -1138,6 +1256,9 @@
             )
           : undefined;
         if (node && port) finishWire(event, node, port);
+      } else if (movingWire) {
+        restoreMovingWire();
+        wire = null;
       } else if (wireMoved && boardElement) {
         const point = boardPoint(event);
         const rect = boardElement.getBoundingClientRect();
@@ -1163,7 +1284,7 @@
           const position = positions[node.id];
           if (!position) continue;
           const center = {
-            x: view.x + (position.x + NODE_WIDTH / 2) * view.scale,
+            x: view.x + (position.x + nodeWidth(node) / 2) * view.scale,
             y:
               view.y +
               (position.y + nodeHeight(node) / 2) * view.scale,
@@ -1187,7 +1308,7 @@
         if (!position) continue;
         const x = view.x + position.x * view.scale;
         const y = view.y + position.y * view.scale;
-        const width = NODE_WIDTH * view.scale;
+        const width = nodeWidth(node) * view.scale;
         const height = nodeHeight(node) * view.scale;
         if (
           x < right &&
@@ -1210,12 +1331,15 @@
     ) {
       insertNodeOnLink(voice.nodes[drag.ids[0] ?? ""]!, insertTarget);
     }
+    const layoutChanged = !!(drag || frameDrag || frameResize || nodeResize);
     insertTarget = null;
     pan = null;
     drag = null;
     frameDrag = null;
     frameResize = null;
+    nodeResize = null;
     wire = null;
+    if (layoutChanged) touchVoice();
   }
 
   async function createAndInsertGroup() {
@@ -1420,6 +1544,192 @@
     addMenu = null;
   }
 
+  function swapSelectedNode(node: VoiceNode, typeId: string): void {
+    if (node.type_id === "group.input" || node.type_id === "group.output") {
+      return;
+    }
+    const info = typeById.get(typeId);
+    if (!info) return;
+    const oldInputs = allInputList(node);
+    const oldOutputs = allOutputList(node);
+    const incoming = voice.connections.filter(
+      (connection) => connection.to.node === node.id,
+    );
+    const outgoing = voice.connections.filter(
+      (connection) => connection.from.node === node.id,
+    );
+    const params: Record<string, number> = {};
+    for (const param of info.params) {
+      params[param.name] = node.params[param.name] ?? param.default;
+    }
+    const replacement: VoiceNode = {
+      ...node,
+      type_id: typeId,
+      params,
+      group: undefined,
+    };
+    voice.nodes[node.id] = replacement;
+    const newInputs = allInputList(replacement);
+    const newOutputs = allOutputList(replacement);
+    const matchInput = (old: PortInfo) =>
+      newInputs.find((port) => port.id === old.id) ??
+      newInputs.find((port) => port.name === old.name && port.ty === old.ty) ??
+      newInputs.find((port) => port.ty === old.ty);
+    const matchOutput = (old: PortInfo) =>
+      newOutputs.find((port) => port.id === old.id) ??
+      newOutputs.find((port) => port.name === old.name && port.ty === old.ty) ??
+      newOutputs.find((port) => port.ty === old.ty);
+    const next = voice.connections.filter(
+      (connection) =>
+        connection.to.node !== node.id && connection.from.node !== node.id,
+    );
+    for (const connection of incoming) {
+      const old = oldInputs.find((port) => port.id === connection.to.port);
+      const target = old ? matchInput(old) : undefined;
+      if (target) {
+        next.push({ ...connection, to: { node: node.id, port: target.id } });
+      }
+    }
+    for (const connection of outgoing) {
+      const old = oldOutputs.find((port) => port.id === connection.from.port);
+      const source = old ? matchOutput(old) : undefined;
+      if (source) {
+        next.push({ ...connection, from: { node: node.id, port: source.id } });
+      }
+    }
+    voice.connections = next;
+  }
+
+  function swapSelected(typeId: string): void {
+    for (const id of selected) {
+      const node = voice.nodes[id];
+      if (node) swapSelectedNode(node, typeId);
+    }
+    swapMenu = null;
+    touchVoice();
+  }
+
+  function makeLinks(replace: boolean): void {
+    const ordered = nodes
+      .filter((node) => selected.has(node.id))
+      .sort((left, right) => {
+        const a = positions[left.id]?.x ?? 0;
+        const b = positions[right.id]?.x ?? 0;
+        return a - b;
+      });
+    if (ordered.length < 2) return;
+    const occupied = new Set(
+      voice.connections
+        .filter((connection) => !connection.muted)
+        .map((connection) => `${connection.to.node}\u0000${connection.to.port}`),
+    );
+    for (let sourceIndex = 0; sourceIndex < ordered.length; sourceIndex += 1) {
+      const source = ordered[sourceIndex]!;
+      for (let targetIndex = sourceIndex + 1; targetIndex < ordered.length; targetIndex += 1) {
+        const target = ordered[targetIndex]!;
+        let best:
+          | { port: PortInfo; input: PortInfo }
+          | undefined;
+        for (const output of allOutputList(source)) {
+          const candidates = allInputList(target).filter(
+            (input) => input.ty === output.ty,
+          );
+          const input =
+            candidates.find(
+              (candidate) =>
+                candidate.id === output.id || candidate.name === output.name,
+            ) ?? candidates[0];
+          if (input) {
+            best = { port: output, input };
+            break;
+          }
+        }
+        if (!best) continue;
+        const chosen = best;
+        const key = `${target.id}\u0000${chosen.input.id}`;
+        if (occupied.has(key) && !replace) continue;
+        if (replace) {
+          voice.connections = voice.connections.filter(
+            (connection) =>
+              !(
+                connection.to.node === target.id &&
+                connection.to.port === chosen.input.id
+              ),
+          );
+        }
+        voice.connections.push({
+          from: { node: source.id, port: chosen.port.id },
+          to: { node: target.id, port: chosen.input.id },
+        });
+        occupied.add(key);
+      }
+    }
+    touchVoice();
+  }
+
+  function deleteSelectedWithReconnect(): void {
+    const removed = new Set(
+      [...selected].filter((id) => id !== "voice-in" && id !== "out"),
+    );
+    if (removed.size === 0) return;
+    const targetBusy = new Set(
+      voice.connections
+        .filter(
+          (connection) =>
+            !connection.muted &&
+            !removed.has(connection.from.node) &&
+            !removed.has(connection.to.node),
+        )
+        .map((connection) => `${connection.to.node}\u0000${connection.to.port}`),
+    );
+    const upstream = voice.connections.filter(
+      (connection) =>
+        !connection.muted &&
+        removed.has(connection.to.node) &&
+        !removed.has(connection.from.node),
+    );
+    const downstream = voice.connections.filter(
+      (connection) =>
+        !connection.muted &&
+        removed.has(connection.from.node) &&
+        !removed.has(connection.to.node),
+    );
+    const next = voice.connections.filter(
+      (connection) =>
+        !removed.has(connection.from.node) && !removed.has(connection.to.node),
+    );
+    for (const input of upstream) {
+      const source = voice.nodes[input.from.node];
+      if (!source) continue;
+      const outputPort = allOutputList(source).find(
+        (port) => port.id === input.from.port,
+      );
+      if (!outputPort) continue;
+      for (const output of downstream) {
+        const target = voice.nodes[output.to.node];
+        if (!target) continue;
+        const inputPort = allInputList(target).find(
+          (port) => port.id === output.to.port,
+        );
+        if (!inputPort || inputPort.ty !== outputPort.ty) continue;
+        const key = `${target.id}\u0000${inputPort.id}`;
+        if (targetBusy.has(key)) continue;
+        if (target.id === source.id) continue;
+        next.push({
+          from: { ...input.from },
+          to: { node: target.id, port: inputPort.id },
+        });
+        targetBusy.add(key);
+        break;
+      }
+    }
+    voice.connections = next;
+    for (const id of removed) delete voice.nodes[id];
+    selected = new Set();
+    active = "";
+    touchVoice();
+  }
+
   function removeSelected() {
     const removable = [...selected].filter(
       (id) => id !== "voice-in" && id !== "out",
@@ -1471,6 +1781,7 @@
       await session.setGroupVoice(groupId, {
         nodes: voice.nodes,
         connections: voice.connections,
+        frames: voice.frames ?? {},
       });
       if (close) onClose();
       return true;
@@ -1565,7 +1876,7 @@
       if (!position) continue;
       left = Math.min(left, position.x);
       top = Math.min(top, position.y);
-      right = Math.max(right, position.x + NODE_WIDTH);
+      right = Math.max(right, position.x + nodeWidth(node));
       bottom = Math.max(bottom, position.y + nodeHeight(node));
     }
     if (!Number.isFinite(left)) {
@@ -1589,6 +1900,7 @@
     };
     voice.frames = { ...(voice.frames ?? {}), [frame.id]: frame };
     for (const node of members) node.frame = frame.id;
+    touchVoice();
   }
 
   function unframeSelection() {
@@ -1596,11 +1908,28 @@
       const node = voice.nodes[id];
       if (node) node.frame = undefined;
     }
+    touchVoice();
+  }
+
+  function startFrameRename(frame: VoiceFrame): void {
+    editingFrameId = frame.id;
+    void tick().then(() => {
+      frameNameInput?.focus();
+      frameNameInput?.select();
+    });
+  }
+
+  function commitFrameName(frame: VoiceFrame, value: string): void {
+    const name = value.trim();
+    if (name) frame.name = name;
+    editingFrameId = null;
+    touchVoice();
   }
 
   function frameMouseDown(event: MouseEvent, frame: VoiceFrame) {
     if (circleMode) return;
     if (event.button !== 0) return;
+    if ((event.target as Element | null)?.closest("input")) return;
     event.preventDefault();
     event.stopPropagation();
     const children: Record<string, [number, number]> = {};
@@ -1624,6 +1953,7 @@
       if (node.frame === frame.id) node.frame = undefined;
     }
     if (voice.frames) delete voice.frames[frame.id];
+    touchVoice();
   }
 
   function frameResizeDown(event: MouseEvent, frame: VoiceFrame) {
@@ -1766,7 +2096,7 @@
       const position = positions[node.id] ?? { x: 0, y: 0 };
       left = Math.min(left, position.x);
       top = Math.min(top, position.y);
-      right = Math.max(right, position.x + NODE_WIDTH);
+      right = Math.max(right, position.x + nodeWidth(node));
       bottom = Math.max(bottom, position.y + nodeHeight(node));
     }
     const rect = boardElement.getBoundingClientRect();
@@ -1897,8 +2227,11 @@
       circleDragging = false;
       circlePos = null;
       addMenu = null;
+      swapMenu = null;
       nodeMenu = null;
       pendingLink = null;
+      restoreMovingWire();
+      wire = null;
       libraryOpen = false;
       interfaceOpen = false;
       sidebarOpen = false;
@@ -1936,7 +2269,11 @@
       );
       return;
     }
-    if (event.ctrlKey && !event.altKey && event.key.toLowerCase() === "p") {
+    if (
+      event.ctrlKey &&
+      !event.altKey &&
+      (event.key.toLowerCase() === "p" || event.key.toLowerCase() === "j")
+    ) {
       event.preventDefault();
       createFrame();
       return;
@@ -1969,6 +2306,30 @@
       } else {
         circlePos = null;
       }
+      return;
+    }
+    if (
+      event.shiftKey &&
+      event.key.toLowerCase() === "s" &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey &&
+      !typing
+    ) {
+      event.preventDefault();
+      addMenu = null;
+      swapMenu = { x: lastPointer.x, y: lastPointer.y };
+      return;
+    }
+    if (
+      event.key.toLowerCase() === "j" &&
+      !event.ctrlKey &&
+      !event.metaKey &&
+      !event.altKey &&
+      !typing
+    ) {
+      event.preventDefault();
+      makeLinks(event.shiftKey);
       return;
     }
     if (event.ctrlKey && event.key.toLowerCase() === "h" && !typing) {
@@ -2011,10 +2372,19 @@
         const rect = boardElement.getBoundingClientRect();
         view = {
           ...view,
-          x: rect.width / 2 - (position[0] + NODE_WIDTH / 2) * view.scale,
+          x: rect.width / 2 - (position[0] + nodeWidth(node) / 2) * view.scale,
           y: rect.height / 2 - (position[1] + nodeHeight(node) / 2) * view.scale,
         };
       }
+      return;
+    }
+    if (
+      event.ctrlKey &&
+      (event.key === "Delete" || event.key === "Backspace") &&
+      !typing
+    ) {
+      event.preventDefault();
+      deleteSelectedWithReconnect();
       return;
     }
     if (
@@ -2130,6 +2500,15 @@
         }}
       />
     {/if}
+    {#if swapMenu}
+      <NodeAddMenu
+        x={swapMenu.x}
+        y={swapMenu.y}
+        nodeTypes={swapTypes}
+        onPickType={(typeId) => swapSelected(typeId)}
+        onClose={() => (swapMenu = null)}
+      />
+    {/if}
 
     <div class="voice-editor-main">
     <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
@@ -2146,7 +2525,11 @@
       onmousedown={boardMouseDown}
       ondblclick={(event) => {
         const target = event.target as Element | null;
-        if (!target?.closest(".voice-node, .node-sidebar, .node-add-menu")) {
+        if (
+          !target?.closest(
+            ".voice-node, .voice-frame, .node-sidebar, .node-add-menu",
+          )
+        ) {
           void leave();
         }
       }}
@@ -2165,12 +2548,16 @@
           style:top={`${frame.position[1]}px`}
           style:width={`${frame.size[0]}px`}
           style:height={`${frame.size[1]}px`}
+          style:border-color={frame.color ?? undefined}
         >
           <div
             class="voice-frame-head"
             role="button"
             tabindex="0"
             aria-label={frame.name}
+            style:background={frame.color
+              ? `color-mix(in srgb, ${frame.color} 22%, #e7ebe7)`
+              : undefined}
             onmousedown={(event) => frameMouseDown(event, frame)}
             oncontextmenu={(event) => {
               event.preventDefault();
@@ -2178,7 +2565,48 @@
               deleteFrame(frame);
             }}
           >
-            {frame.name}
+            {#if editingFrameId === frame.id}
+              <input
+                bind:this={frameNameInput}
+                class="voice-frame-name"
+                value={frame.name}
+                onblur={(event) =>
+                  commitFrameName(
+                    frame,
+                    (event.currentTarget as HTMLInputElement).value,
+                  )}
+                onkeydown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    commitFrameName(
+                      frame,
+                      (event.currentTarget as HTMLInputElement).value,
+                    );
+                  } else if (event.key === "Escape") {
+                    editingFrameId = null;
+                  }
+                }}
+              />
+            {:else}
+              <span
+                class="voice-frame-title"
+                role="presentation"
+                ondblclick={(event) => {
+                  event.stopPropagation();
+                  startFrameRename(frame);
+                }}
+              >{frame.name}</span>
+            {/if}
+            <input
+              class="voice-frame-color"
+              type="color"
+              value={frame.color ?? "#b8c0c7"}
+              title={t("voice.frameColor")}
+              oninput={(event) => {
+                frame.color = (event.currentTarget as HTMLInputElement).value;
+                touchVoice();
+              }}
+            />
           </div>
           <div
             class="voice-frame-resize"
@@ -2244,7 +2672,7 @@
           class:muted={node.muted}
           style:left={`${position?.x ?? 0}px`}
           style:top={`${position?.y ?? 0}px`}
-          style:width={`${NODE_WIDTH}px`}
+          style:width={`${nodeWidth(node)}px`}
           style:height={`${nodeHeight(node)}px`}
           onmousedown={(event) => nodeMouseDown(event, node)}
           oncontextmenu={(event) => openNodeMenu(event, node)}
@@ -2267,6 +2695,12 @@
             <span class="voice-node-id">{node.id}</span>
           </div>
 
+          <div
+            class="voice-node-resize"
+            role="presentation"
+            title={t("voice.resizeNode")}
+            onmousedown={(event) => nodeResizeDown(event, node)}
+          ></div>
           {#if !node.collapsed}
           {#if isGroupNode(node)}
             <div class="voice-node-group-line">

@@ -1224,6 +1224,8 @@ pub struct VoiceFrame {
     pub name: String,
     pub position: [f64; 2],
     pub size: [f64; 2],
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
 }
 
 impl Default for VoiceGraph {
@@ -1607,6 +1609,8 @@ pub struct VoiceNode {
     pub label: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub width: Option<f64>,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)]
@@ -1637,6 +1641,7 @@ impl VoiceNode {
             collapsed: false,
             label: None,
             color: None,
+            width: None,
         }
     }
 
@@ -3102,6 +3107,21 @@ mod tests {
             .get_mut(&NodeId::fixed("osc-vca"))
             .unwrap()
             .color = Some("#336699".to_string());
+        graph
+            .nodes
+            .get_mut(&NodeId::fixed("osc-vca"))
+            .unwrap()
+            .width = Some(260.0);
+        graph.frames.insert(
+            "frame-test".to_string(),
+            VoiceFrame {
+                id: "frame-test".to_string(),
+                name: "Test".to_string(),
+                position: [0.0, 0.0],
+                size: [100.0, 100.0],
+                color: Some("#884422".to_string()),
+            },
+        );
         graph.connections[0].muted = true;
         let encoded = serde_json::to_string(&graph).unwrap();
         let decoded: VoiceGraph = serde_json::from_str(&encoded).unwrap();

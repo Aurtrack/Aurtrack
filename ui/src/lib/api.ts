@@ -70,6 +70,7 @@ export type VoiceNode = {
   collapsed?: boolean;
   label?: string;
   color?: string;
+  width?: number;
 };
 
 export type VoiceFrame = {
@@ -77,6 +78,7 @@ export type VoiceFrame = {
   name: string;
   position: [number, number];
   size: [number, number];
+  color?: string;
 };
 
 export type VoiceConnection = {

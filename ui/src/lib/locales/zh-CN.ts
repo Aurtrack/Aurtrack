@@ -466,6 +466,8 @@ export const zhCN = {
   "graph.activeNode": "活动节点",
   "graph.nodeLabel": "标签",
   "graph.nodeColor": "颜色",
+  "voice.frameColor": "帧颜色",
+  "voice.resizeNode": "调整节点宽度",
   "graph.clearColor": "清除颜色",
   "graph.noActiveNode": "未选中节点",
   "graph.groups": "节点组",
