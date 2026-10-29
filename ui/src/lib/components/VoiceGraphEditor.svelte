@@ -1851,8 +1851,7 @@
           [x + nodeWidth(node) / 2, y + nodeHeight(node) / 2],
           id,
         );
-        if (zone) node.zone = zone;
-        else delete node.zone;
+        if (zone && !node.zone) node.zone = zone;
       }
     }
     insertTarget = null;
