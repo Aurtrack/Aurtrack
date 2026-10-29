@@ -3442,6 +3442,7 @@
           {#if countPort}
             <button
               class="voice-port in zone-port zone-port-head zone-left"
+              class:port-int={countPort.ty === "int"}
               class:port-float={countPort.ty === "float"}
               style:top="38px"
               title={`${countPort.id} (${countPort.ty})`}
