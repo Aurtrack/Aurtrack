@@ -77,9 +77,10 @@
     y: number;
   };
 
-  type PortType = "float" | "gate" | "audio" | "note";
+  type PortType = "float" | "int" | "gate" | "audio" | "note";
   const socketColors: Record<PortType, string> = {
     float: "#a1a1a1",
+    int: "#7fbf7f",
     gate: "#cca6d6",
     audio: "#63c763",
     note: "#d99a4e",
@@ -3382,6 +3383,7 @@
                     min={countPort.minimum ?? 1}
                     max={countPort.maximum ?? 64}
                     step={countPort.step ?? 1}
+                    precision={countPort.ty === "int" ? 0 : undefined}
                     onchange={(value) => {
                       setParam(header, "count", value);
                       touchVoice();
@@ -3398,6 +3400,7 @@
             <button
               class="voice-port in zone-port zone-left"
               class:port-audio={port.ty === "audio"}
+              class:port-int={port.ty === "int"}
               class:port-float={port.ty === "float"}
               class:port-gate={port.ty === "gate"}
               style:top={`${58 + index * 14}px`}
@@ -3420,6 +3423,7 @@
             <button
               class="voice-port out zone-port zone-port-head zone-right"
               class:port-audio={port.ty === "audio"}
+              class:port-int={port.ty === "int"}
               class:port-float={port.ty === "float"}
               class:port-gate={port.ty === "gate"}
               style:top={`${38 + index * 14}px`}
@@ -3570,6 +3574,7 @@
               <button
                 class="voice-port in"
                 class:port-audio={port.ty === "audio"}
+                class:port-int={port.ty === "int"}
                 class:port-float={port.ty === "float"}
                 class:port-gate={port.ty === "gate"}
                 class:port-note={port.ty === "note"}
@@ -3610,6 +3615,7 @@
               <button
                 class="voice-port out"
                 class:port-audio={port.ty === "audio"}
+                class:port-int={port.ty === "int"}
                 class:port-float={port.ty === "float"}
                 class:port-gate={port.ty === "gate"}
                 class:port-note={port.ty === "note"}
@@ -3652,6 +3658,7 @@
               <button
                 class="voice-port in"
                 class:port-audio={port.ty === "audio"}
+                class:port-int={port.ty === "int"}
                 class:port-float={port.ty === "float"}
                 class:port-gate={port.ty === "gate"}
                 class:port-note={port.ty === "note"}
@@ -3670,6 +3677,7 @@
               <button
                 class="voice-port out"
                 class:port-audio={port.ty === "audio"}
+                class:port-int={port.ty === "int"}
                 class:port-float={port.ty === "float"}
                 class:port-gate={port.ty === "gate"}
                 class:port-note={port.ty === "note"}

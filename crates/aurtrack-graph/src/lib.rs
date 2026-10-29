@@ -650,7 +650,9 @@ impl NodeGroupSocket {
     /// 未连接时使用的数值。Audio 和 Note socket 没有数值默认值。
     pub fn effective_default(&self) -> Option<f64> {
         self.default.or(match self.ty {
-            NodeGroupSocketType::Float | NodeGroupSocketType::Gate => Some(0.0),
+            NodeGroupSocketType::Float | NodeGroupSocketType::Int | NodeGroupSocketType::Gate => {
+                Some(0.0)
+            },
             NodeGroupSocketType::Audio | NodeGroupSocketType::Note => None,
         })
     }
@@ -705,6 +707,8 @@ fn validate_group_socket(socket: &NodeGroupSocket) -> Result<(), GraphError> {
 pub enum NodeGroupSocketType {
     #[serde(rename = "float")]
     Float,
+    #[serde(rename = "int")]
+    Int,
     #[serde(rename = "gate")]
     Gate,
     #[serde(rename = "audio")]
@@ -841,7 +845,7 @@ const PARTIAL_INPUTS: [VoiceSocketSpec; 7] = [
         .with_default(0.0)
         .with_range(0.0, 1000.0)
         .with_step(0.001),
-    VoiceSocketSpec::new("index", "Index", SocketType::Float)
+    VoiceSocketSpec::new("index", "Index", SocketType::Int)
         .with_default(0.0)
         .with_range(0.0, 63.0)
         .with_step(1.0),
@@ -859,7 +863,7 @@ const PARTIAL_INPUTS: [VoiceSocketSpec; 7] = [
         .with_step(0.01),
 ];
 const REPEAT_INPUTS: [VoiceSocketSpec; 1] =
-    [VoiceSocketSpec::new("count", "Count", SocketType::Float)
+    [VoiceSocketSpec::new("count", "Count", SocketType::Int)
         .with_default(10.0)
         .with_range(1.0, 64.0)
         .with_step(1.0)];
@@ -872,7 +876,7 @@ const CONTEXT_PITCH_OUT: [VoiceSocketSpec; 1] =
 const CONTEXT_VELOCITY_OUT: [VoiceSocketSpec; 1] =
     [VoiceSocketSpec::new("out", "Velocity", SocketType::Float)];
 const CONTEXT_ITERATION_OUT: [VoiceSocketSpec; 1] =
-    [VoiceSocketSpec::new("out", "Iteration", SocketType::Float)];
+    [VoiceSocketSpec::new("out", "Iteration", SocketType::Int)];
 const SAMPLE_HOLD_INPUTS: [VoiceSocketSpec; 1] =
     [VoiceSocketSpec::new("next", "Next", SocketType::Float)];
 const BROADCAST_INPUTS: [VoiceSocketSpec; 1] =

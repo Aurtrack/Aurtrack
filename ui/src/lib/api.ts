@@ -100,7 +100,7 @@ export type VoiceGraph = {
 export type NodeGroupSocket = {
   id: string;
   name: string;
-  type: "float" | "gate" | "audio" | "note";
+  type: "float" | "int" | "gate" | "audio" | "note";
   default?: number;
   minimum?: number;
   maximum?: number;
@@ -117,7 +117,7 @@ export type NodeGroupInterface = {
 export type NodeTypeSocket = {
   id: string;
   name: string;
-  type: "float" | "gate" | "audio" | "note";
+  type: "float" | "int" | "gate" | "audio" | "note";
   default?: number;
   minimum?: number;
   maximum?: number;
