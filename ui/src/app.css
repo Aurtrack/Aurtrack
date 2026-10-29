@@ -3448,11 +3448,13 @@ button:disabled {
   z-index: 4;
 }
 
-.voice-zone .voice-port.in {
+.voice-zone .voice-port.zone-left {
+  right: auto;
   left: -5px;
 }
 
-.voice-zone .voice-port.out {
+.voice-zone .voice-port.zone-right {
+  left: auto;
   right: -5px;
 }
 
@@ -3528,7 +3530,7 @@ button:disabled {
 }
 
 .voice-editor-wires {
-  z-index: 1;
+  z-index: 0;
 }
 
 .voice-node {

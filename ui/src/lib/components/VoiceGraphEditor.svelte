@@ -298,8 +298,11 @@
     const top = zonePortTop(node, portId, side);
     if (top === null) return null;
     const bounds = zoneBounds(header);
+    const left =
+      node.type_id === "voice.zone.input" ||
+      (node.type_id === "voice.zone.repeat" && side === "in");
     return {
-      x: side === "out" ? bounds.left + bounds.width - 5 : bounds.left + 5,
+      x: left ? bounds.left + 5 : bounds.left + bounds.width - 5,
       y: bounds.top + top,
     };
   }
@@ -3299,7 +3302,7 @@
               {t("voice.zoneExternal")} · {port.name}
             </span>
             <button
-              class="voice-port in zone-port"
+              class="voice-port in zone-port zone-left"
               class:port-audio={port.ty === "audio"}
               class:port-float={port.ty === "float"}
               class:port-gate={port.ty === "gate"}
@@ -3318,7 +3321,7 @@
               {t("voice.zoneExternal")} · {port.name}
             </span>
             <button
-              class="voice-port out zone-port zone-port-head"
+              class="voice-port out zone-port zone-port-head zone-right"
               class:port-audio={port.ty === "audio"}
               class:port-float={port.ty === "float"}
               class:port-gate={port.ty === "gate"}
@@ -3334,7 +3337,7 @@
           {/each}
           {#if countPort}
             <button
-              class="voice-port in zone-port zone-port-head"
+              class="voice-port in zone-port zone-port-head zone-left"
               class:port-float={countPort.ty === "float"}
               style:top="38px"
               title={`${countPort.id} (${countPort.ty})`}
@@ -3355,7 +3358,7 @@
                 {t("voice.zoneInternal")} · {port.name}
               </span>
               <button
-                class="voice-port out zone-port zone-port-body"
+                class="voice-port out zone-port zone-port-body zone-left"
                 class:port-audio={port.ty === "audio"}
                 class:port-float={port.ty === "float"}
                 class:port-gate={port.ty === "gate"}
@@ -3379,7 +3382,7 @@
                 {t("voice.zoneInternal")} · {port.name}
               </span>
               <button
-                class="voice-port in zone-port zone-port-body"
+                class="voice-port in zone-port zone-port-body zone-right"
                 class:port-audio={port.ty === "audio"}
                 class:port-float={port.ty === "float"}
                 class:port-gate={port.ty === "gate"}
