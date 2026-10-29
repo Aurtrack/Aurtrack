@@ -13,8 +13,9 @@ Thumbs.db
 # Local scratch space, never committed.
 /tmp
 
-# Demo render output.
+# Local demo renders, screenshots and scratch projects.
 /demo.wav
+/demo/
 
 # OS audio scratch / peak caches produced at runtime.
 *.peakcache
