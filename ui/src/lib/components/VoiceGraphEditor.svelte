@@ -177,7 +177,7 @@
         name: "Audio",
       });
       const index = inputs.findIndex((port) => port.id === portId);
-      return index < 0 ? null : 58 + (inputs.length + 1) * 14 + index * 14;
+      return index < 0 ? null : 58 + index * 14;
     }
     if (node.type_id === "voice.zone.output") {
       const outputs = zoneSocketPorts(header.zone_outputs, {
@@ -185,7 +185,7 @@
         name: "Audio",
       });
       const index = outputs.findIndex((port) => port.id === portId);
-      return index < 0 ? null : 38 + (outputs.length + 1) * 14 + index * 14;
+      return index < 0 ? null : 38 + index * 14;
     }
     return null;
   }
@@ -1180,6 +1180,66 @@
       y: point.y,
     };
     touchVoice();
+  }
+
+  function zoneSocketDown(
+    event: MouseEvent,
+    header: VoiceNode,
+    kind: "input" | "output",
+    port: PortInfo,
+  ): void {
+    if (circleMode) return;
+    if (wire) {
+      if (kind === "input") {
+        if (wire.side === "out") finishWire(event, header, port);
+        else {
+          wire = null;
+          wireMoved = false;
+        }
+        return;
+      }
+      const outputNode = zoneBoundary(header, "voice.zone.output");
+      const target = outputNode
+        ? allInputList(outputNode).find((candidate) => candidate.id === port.id)
+        : undefined;
+      if (outputNode && target && wire.side === "out") {
+        finishWire(event, outputNode, target);
+      } else {
+        wire = null;
+        wireMoved = false;
+      }
+      return;
+    }
+    event.preventDefault();
+    event.stopPropagation();
+    if (kind === "input") {
+      const inputNode = zoneBoundary(header, "voice.zone.input");
+      const source = inputNode
+        ? allOutputList(inputNode).find((candidate) => candidate.id === port.id)
+        : undefined;
+      if (inputNode && source) startWire(event, inputNode, source, "out");
+      return;
+    }
+    startWire(event, header, port, "out");
+  }
+
+  function zoneSocketUp(
+    event: MouseEvent,
+    header: VoiceNode,
+    kind: "input" | "output",
+    port: PortInfo,
+  ): void {
+    if (!wire) return;
+    const self =
+      kind === "input"
+        ? zoneBoundary(header, "voice.zone.input")?.id
+        : header.id;
+    if (wire.node === self) {
+      wire = null;
+      wireMoved = false;
+      return;
+    }
+    zoneSocketDown(event, header, kind, port);
   }
 
   function startWire(
@@ -3243,8 +3303,6 @@
       {/each}
       {#each zoneHeaders() as header (header.id)}
         {@const bounds = zoneBounds(header)}
-        {@const inputNode = zoneBoundary(header, "voice.zone.input")}
-        {@const outputNode = zoneBoundary(header, "voice.zone.output")}
         {@const countPort = inputList(header).find((port) => port.id === "count")}
         {@const zoneInputs = zoneSocketPorts(header.zone_inputs, {
           id: "out",
@@ -3299,7 +3357,7 @@
           </div>
           {#each zoneInputs as port, index (port.id)}
             <span class="voice-zone-port-label in" style:top={`${52 + index * 14}px`}>
-              {t("voice.zoneExternal")} · {port.name}
+              {port.name}
             </span>
             <button
               class="voice-port in zone-port zone-left"
@@ -3313,12 +3371,15 @@
               data-port-id={port.id}
               data-port-side="in"
               data-port-type={port.ty}
-              onmousedown={(event) => startWire(event, header, port, "in")}
+              onmousedown={(event) =>
+                zoneSocketDown(event, header, "input", port)}
+              onmouseup={(event) =>
+                zoneSocketUp(event, header, "input", port)}
             ></button>
           {/each}
           {#each zoneOutputs as port, index (port.id)}
             <span class="voice-zone-port-label out" style:top={`${32 + index * 14}px`}>
-              {t("voice.zoneExternal")} · {port.name}
+              {port.name}
             </span>
             <button
               class="voice-port out zone-port zone-port-head zone-right"
@@ -3332,7 +3393,10 @@
               data-port-id={port.id}
               data-port-side="out"
               data-port-type={port.ty}
-              onmousedown={(event) => startWire(event, header, port, "out")}
+              onmousedown={(event) =>
+                zoneSocketDown(event, header, "output", port)}
+              onmouseup={(event) =>
+                zoneSocketUp(event, header, "output", port)}
             ></button>
           {/each}
           {#if countPort}
@@ -3349,54 +3413,7 @@
               onmousedown={(event) => startWire(event, header, countPort, "in")}
             ></button>
           {/if}
-          {#if !header.collapsed && inputNode}
-            {#each zoneInputs as port, index (port.id)}
-              <span
-                class="voice-zone-port-label in"
-                style:top={`${52 + (zoneInputs.length + 1) * 14 + index * 14}px`}
-              >
-                {t("voice.zoneInternal")} · {port.name}
-              </span>
-              <button
-                class="voice-port out zone-port zone-port-body zone-left"
-                class:port-audio={port.ty === "audio"}
-                class:port-float={port.ty === "float"}
-                class:port-gate={port.ty === "gate"}
-                style:top={`${58 + (zoneInputs.length + 1) * 14 + index * 14}px`}
-                title={`${port.name} (${port.ty})`}
-                aria-label={port.name}
-                data-port-node={inputNode.id}
-                data-port-id={port.id}
-                data-port-side="out"
-                data-port-type={port.ty}
-                onmousedown={(event) => startWire(event, inputNode, port, "out")}
-              ></button>
-            {/each}
-          {/if}
-          {#if !header.collapsed && outputNode}
-            {#each zoneOutputs as port, index (port.id)}
-              <span
-                class="voice-zone-port-label out"
-                style:top={`${32 + (zoneOutputs.length + 1) * 14 + index * 14}px`}
-              >
-                {t("voice.zoneInternal")} · {port.name}
-              </span>
-              <button
-                class="voice-port in zone-port zone-port-body zone-right"
-                class:port-audio={port.ty === "audio"}
-                class:port-float={port.ty === "float"}
-                class:port-gate={port.ty === "gate"}
-                style:top={`${38 + (zoneOutputs.length + 1) * 14 + index * 14}px`}
-                title={`${port.name} (${port.ty})`}
-                aria-label={port.name}
-                data-port-node={outputNode.id}
-                data-port-id={port.id}
-                data-port-side="in"
-                data-port-type={port.ty}
-                onmousedown={(event) => startWire(event, outputNode, port, "in")}
-              ></button>
-            {/each}
-          {/if}
+
           {#if !header.collapsed}
             <div
               class="voice-zone-resize"
