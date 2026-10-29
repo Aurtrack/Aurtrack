@@ -158,25 +158,40 @@
   }
 
   function inputList(node: VoiceNode): PortInfo[] {
-    if (node.type_id === "group.input") return [];
-    if (node.type_id === "group.output") {
-      return interfacePorts(groupInterface.outputs);
+    let ports: PortInfo[];
+    if (node.type_id === "group.input") ports = [];
+    else if (node.type_id === "group.output") {
+      ports = interfacePorts(groupInterface.outputs);
+    } else if (node.type_id === "voice.group") {
+      ports = interfacePorts(nodeGroup(node)?.interface.inputs ?? []);
+    } else {
+      ports = typePorts(node, "inputs");
     }
-    if (node.type_id === "voice.group") {
-      return interfacePorts(nodeGroup(node)?.interface.inputs ?? []);
-    }
-    return typePorts(node, "inputs");
+    return hideUnconnected
+      ? ports.filter((port) => isLinked(node, port.id))
+      : ports;
   }
 
   function outputList(node: VoiceNode): PortInfo[] {
-    if (node.type_id === "group.output") return [];
-    if (node.type_id === "group.input") {
-      return interfacePorts(groupInterface.inputs);
+    let ports: PortInfo[];
+    if (node.type_id === "group.output") ports = [];
+    else if (node.type_id === "group.input") {
+      ports = interfacePorts(groupInterface.inputs);
+    } else if (node.type_id === "voice.group") {
+      ports = interfacePorts(nodeGroup(node)?.interface.outputs ?? []);
+    } else {
+      ports = typePorts(node, "outputs");
     }
-    if (node.type_id === "voice.group") {
-      return interfacePorts(nodeGroup(node)?.interface.outputs ?? []);
-    }
-    return typePorts(node, "outputs");
+    return hideUnconnected
+      ? ports.filter((port) =>
+          voice.connections.some(
+            (connection) =>
+              !connection.muted &&
+              connection.from.node === node.id &&
+              connection.from.port === port.id,
+          ),
+        )
+      : ports;
   }
 
   // 编辑器只在打开时创建，初始快照之后由本地编辑状态接管。
@@ -232,6 +247,7 @@
   let insertTarget = $state<VoiceConnection | null>(null);
   let cutLine = $state<Point[] | null>(null);
   let muteLine = $state<Point[] | null>(null);
+  let hideUnconnected = $state(false);
   let circleMode = $state(false);
   let circleRadius = $state(48);
   let circlePos = $state<Point | null>(null);
@@ -1888,7 +1904,10 @@
       sidebarOpen = false;
       return;
     }
-    if (event.shiftKey && event.key.toLowerCase() === "a") {
+    if (
+      (event.shiftKey && event.key.toLowerCase() === "a") ||
+      event.key === "F3"
+    ) {
       event.preventDefault();
       addMenu = { x: lastPointer.x, y: lastPointer.y };
       return;
@@ -1950,6 +1969,11 @@
       } else {
         circlePos = null;
       }
+      return;
+    }
+    if (event.ctrlKey && event.key.toLowerCase() === "h" && !typing) {
+      event.preventDefault();
+      hideUnconnected = !hideUnconnected;
       return;
     }
     if (
