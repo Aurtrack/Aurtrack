@@ -172,6 +172,26 @@
       return index < 0 ? null : 38 + index * 14;
     }
     if (node.type_id === "voice.zone.input") {
+      const bounds = zoneBounds(header);
+      const link = voice.connections.find(
+        (connection) =>
+          !connection.muted &&
+          connection.from.node === node.id &&
+          connection.from.port === portId,
+      );
+      if (link) {
+        const target = voice.nodes[link.to.node];
+        const targetPort = target
+          ? allInputList(target).find((port) => port.id === link.to.port)
+          : undefined;
+        if (target && targetPort) {
+          const index = allInputList(target).findIndex(
+            (port) => port.id === targetPort.id,
+          );
+          const y = (target.position?.[1] ?? 0) + portY(target, index);
+          return Math.max(30, Math.min(bounds.height - 10, y - bounds.top));
+        }
+      }
       const inputs = zoneSocketPorts(header.zone_inputs, {
         id: "out",
         name: "Audio",
@@ -180,6 +200,26 @@
       return index < 0 ? null : 58 + (inputs.length + 1) * 14 + index * 14;
     }
     if (node.type_id === "voice.zone.output") {
+      const bounds = zoneBounds(header);
+      const link = voice.connections.find(
+        (connection) =>
+          !connection.muted &&
+          connection.to.node === node.id &&
+          connection.to.port === portId,
+      );
+      if (link) {
+        const source = voice.nodes[link.from.node];
+        const sourcePort = source
+          ? allOutputList(source).find((port) => port.id === link.from.port)
+          : undefined;
+        if (source && sourcePort) {
+          const index = allOutputList(source).findIndex(
+            (port) => port.id === sourcePort.id,
+          );
+          const y = (source.position?.[1] ?? 0) + portY(source, index);
+          return Math.max(30, Math.min(bounds.height - 10, y - bounds.top));
+        }
+      }
       const outputs = zoneSocketPorts(header.zone_outputs, {
         id: "in",
         name: "Audio",
@@ -3347,7 +3387,7 @@
                 class:port-audio={port.ty === "audio"}
                 class:port-float={port.ty === "float"}
                 class:port-gate={port.ty === "gate"}
-                style:top={`${58 + (zoneInputs.length + 1) * 14 + index * 14}px`}
+                style:top={`${zonePortTop(inputNode, port.id, "out") ?? 76}px`}
                 title={`${port.name} (${port.ty})`}
                 aria-label={port.name}
                 data-port-node={inputNode.id}
@@ -3365,7 +3405,7 @@
                 class:port-audio={port.ty === "audio"}
                 class:port-float={port.ty === "float"}
                 class:port-gate={port.ty === "gate"}
-                style:top={`${38 + (zoneOutputs.length + 1) * 14 + index * 14}px`}
+                style:top={`${zonePortTop(outputNode, port.id, "in") ?? 76}px`}
                 title={`${port.name} (${port.ty})`}
                 aria-label={port.name}
                 data-port-node={outputNode.id}
