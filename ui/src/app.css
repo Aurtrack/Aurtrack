@@ -3064,8 +3064,21 @@ button:disabled {
 
 .zone-interface-row {
   display: grid;
-  grid-template-columns: 1fr 62px 24px;
+  grid-template-columns: 12px 1fr 62px 24px;
   gap: 4px;
+  align-items: center;
+}
+
+.zone-socket-handle {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 10px;
+  cursor: grab;
+  user-select: none;
+}
+
+.zone-socket-handle:active {
+  cursor: grabbing;
 }
 
 .zone-interface-row input,

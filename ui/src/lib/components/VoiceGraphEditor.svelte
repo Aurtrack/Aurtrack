@@ -285,6 +285,37 @@
     syncZoneInterface(header);
   }
 
+  function startZoneSocketDrag(
+    event: DragEvent,
+    header: VoiceNode,
+    side: "inputs" | "outputs",
+    index: number,
+  ): void {
+    zoneSocketDrag = { headerId: header.id, side, index };
+    event.dataTransfer?.setData("text/plain", `${header.id}:${side}:${index}`);
+    if (event.dataTransfer) event.dataTransfer.effectAllowed = "move";
+  }
+
+  function dropZoneSocket(
+    event: DragEvent,
+    header: VoiceNode,
+    side: "inputs" | "outputs",
+    index: number,
+  ): void {
+    event.preventDefault();
+    const drag = zoneSocketDrag;
+    zoneSocketDrag = null;
+    if (!drag || drag.headerId !== header.id || drag.side !== side) return;
+    if (drag.index === index) return;
+    const list = ensureZoneSockets(header, side);
+    const [socket] = list.splice(drag.index, 1);
+    if (!socket) return;
+    list.splice(index, 0, socket);
+    if (side === "inputs") header.zone_inputs = [...list];
+    else header.zone_outputs = [...list];
+    syncZoneInterface(header);
+  }
+
   function zonePortPoint(
     node: VoiceNode,
     portId: string,
@@ -716,6 +747,11 @@
     startX: number;
     startY: number;
     size: [number, number];
+  } | null>(null);
+  let zoneSocketDrag = $state<{
+    headerId: string;
+    side: "inputs" | "outputs";
+    index: number;
   } | null>(null);
   let zoneResize = $state<{
     id: string;
@@ -3894,7 +3930,23 @@
                       : t("voice.zoneOutputs")}
                   </div>
                   {#each sockets as socket, index (socket.id)}
-                    <div class="zone-interface-row">
+                    <div
+                      class="zone-interface-row"
+                      role="group"
+                      aria-label={socket.name}
+                      ondragover={(event) => event.preventDefault()}
+                      ondrop={(event) => dropZoneSocket(event, node, side, index)}
+                    >
+                      <span
+                        class="zone-socket-handle"
+                        draggable="true"
+                        role="button"
+                        tabindex="-1"
+                        aria-label={socket.name}
+                        ondragstart={(event) =>
+                          startZoneSocketDrag(event, node, side, index)}
+                        ondragend={() => (zoneSocketDrag = null)}
+                      >⠿</span>
                       <input
                         value={socket.name}
                         aria-label={socket.name}
