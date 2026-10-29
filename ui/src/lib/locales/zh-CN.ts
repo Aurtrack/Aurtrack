@@ -412,6 +412,7 @@ export const zhCN = {
   "node.voice.white_noise": "白噪声",
   "node.voice.repeat": "重复",
   "node.voice.partial": "泛音",
+  "node.voice.switch": "切换",
   "node.voice.iteration": "迭代",
   "node.voice.pitch": "音高",
   "node.voice.velocity": "力度",

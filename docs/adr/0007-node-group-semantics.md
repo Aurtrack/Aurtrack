@@ -35,6 +35,7 @@
 - `voice.repeat` 是 Repeat Zone：引用一个循环体组，按 `count` 重复执行；循环体有一个音频累加器输入 `in` 和一个音频输出 `audio`，内部用 `voice.iteration` 获取迭代序号。
 - `voice.partial` 是单个泛音的原子节点；默认 `Partials` 由 `Repeat("piano.partial") + Partial` 组成，不再有单体 `osc.partials` 节点。
 - 节点可以有显示用的 `label`、`color` 和 `width`；帧可以有 `color`；连线可以有 `muted`。这些字段不参与 DSP。静音连线在编译时等价于不存在，输入回退到 socket 默认值。
+- 组输入 socket 未连接时使用接口的 `default`，不再固定为 0 或偷父级上下文。
 - 嵌套 Voice 组的 Note 输入未接线时绑定为禁用，不会从父级上下文偷音符。
 - 轨道里的 `audio.group.instance` 是**Audio 组实例**，端口由 `AudioGroup.interface` 动态生成。
 - Voice 图里的 `voice.group` 继续是真正的 Voice 组实例。

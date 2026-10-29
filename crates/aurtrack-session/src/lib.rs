@@ -827,11 +827,11 @@ fn compile_voice_inner(
                     indices.insert((id.clone(), socket.id.clone()), *index);
                     continue;
                 }
-                let op = match (socket.ty, socket.id.as_str()) {
-                    (NodeGroupSocketType::Float, "pitch") => VoiceOp::Pitch,
-                    (NodeGroupSocketType::Float, "velocity") => VoiceOp::Velocity,
-                    (NodeGroupSocketType::Gate, _) => VoiceOp::Gate,
-                    _ => VoiceOp::Constant(0.0),
+                let op = match socket.ty {
+                    NodeGroupSocketType::Gate => {
+                        VoiceOp::Constant(f64::from(u8::from(socket.default.unwrap_or(0.0) > 0.5)))
+                    },
+                    _ => VoiceOp::Constant(socket.default.unwrap_or(0.0)),
                 };
                 let index = nodes.len();
                 nodes.push(VoiceNodePlan::new(op, Vec::new()));
@@ -1009,6 +1009,7 @@ fn compile_voice_inner(
             "voice.add" | "math.add" => VoiceOp::Add,
             "voice.mix" => VoiceOp::Mix,
             "voice.gate" => VoiceOp::GateNode,
+            "voice.switch" => VoiceOp::Switch,
             "voice.time" => VoiceOp::Time,
             "voice.white_noise" => VoiceOp::WhiteNoise,
             "math.multiply" => VoiceOp::Multiply,

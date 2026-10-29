@@ -442,6 +442,7 @@ export const en: Record<MessageKey, Message> = {
   "node.voice.white_noise": "White Noise",
   "node.voice.repeat": "Repeat",
   "node.voice.partial": "Partial",
+  "node.voice.switch": "Switch",
   "node.voice.iteration": "Iteration",
   "node.voice.pitch": "Pitch",
   "node.voice.velocity": "Velocity",

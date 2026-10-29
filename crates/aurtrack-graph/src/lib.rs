@@ -798,6 +798,14 @@ const CONTEXT_VELOCITY_OUT: [VoiceSocketSpec; 1] =
     [VoiceSocketSpec::new("out", "Velocity", SocketType::Float)];
 const CONTEXT_ITERATION_OUT: [VoiceSocketSpec; 1] =
     [VoiceSocketSpec::new("out", "Iteration", SocketType::Float)];
+const SWITCH_INPUTS: [VoiceSocketSpec; 3] = [
+    VoiceSocketSpec::new("switch", "Switch", SocketType::Float)
+        .with_default(0.0)
+        .with_range(0.0, 1.0)
+        .with_step(1.0),
+    VoiceSocketSpec::new("false", "False", SocketType::Audio),
+    VoiceSocketSpec::new("true", "True", SocketType::Audio),
+];
 
 const AUDIO_OUT: [VoiceSocketSpec; 1] = [VoiceSocketSpec::new("out", "Audio", SocketType::Audio)];
 const FLOAT_OUT: [VoiceSocketSpec; 1] = [VoiceSocketSpec::new("out", "Value", SocketType::Float)];
@@ -931,6 +939,14 @@ pub const VOICE_NODE_TYPES: &[VoiceNodeType] = &[
         name: "Partial",
         category: "Generator",
         inputs: &PARTIAL_INPUTS,
+        outputs: &AUDIO_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "voice.switch",
+        name: "Switch",
+        category: "Utility",
+        inputs: &SWITCH_INPUTS,
         outputs: &AUDIO_OUT,
         params: &[],
     },

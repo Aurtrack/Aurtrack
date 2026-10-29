@@ -55,7 +55,7 @@
 | 数组 / 字段 | Geometry Nodes Field | 无 | 不适用（当前音频域） |
 | 多输入 socket | Join Geometry 等 | 无 | 缺失 |
 | 向量/颜色/几何 socket | 有 | 只有 Float/Gate/Audio/Note | 不适用 |
-| Switch / Index Switch | 有 | 无 | 缺失 |
+| Switch / Index Switch | 有 | `voice.switch` 二选一；无 Index Switch | 部分 |
 | Simulation Zone | 有 | 无 | 缺失 |
 | For Each / 并行 | 有 | 无 | 缺失 |
 
@@ -88,8 +88,8 @@
 
 ## 下一批 P2
 
-1. **节点组接口默认值与面板**：让组输入在实例上可直接改默认值。
-2. **Switch / Index Switch**：音频和控制域的显式分支。
+1. **Index Switch**：在二选一之外增加多路索引选择。
+2. **节点组接口面板**：让组输入的默认值按 panel 分组显示。
 3. **多输入 socket**：先做音频求和，再做控制求和。
 4. **字段化参数**：把当前的逐采样 Float 扩展为可广播字段。
 5. **节点搜索 F3 的模糊评分**，而非纯包含匹配。

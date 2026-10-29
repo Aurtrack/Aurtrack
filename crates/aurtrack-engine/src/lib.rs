@@ -120,6 +120,7 @@ pub enum VoiceOp {
     Vca,
     Mix,
     GateNode,
+    Switch,
     Add,
     Multiply,
     MapRange,
@@ -262,6 +263,11 @@ impl VoicePlan {
                     let a = node.inputs.get(1).map_or(0.0, |input| values[*input]);
                     let b = node.inputs.get(2).map_or(0.0, |input| values[*input]);
                     a * (1.0 - factor) + b * factor
+                },
+                VoiceOp::Switch => {
+                    let switch = node.inputs.first().map_or(0.0, |input| values[*input]);
+                    let index = if switch > 0.5 { 2 } else { 1 };
+                    node.inputs.get(index).map_or(0.0, |input| values[*input])
                 },
                 VoiceOp::GateNode => {
                     let signal = node.inputs.first().map_or(0.0, |input| values[*input]);
@@ -1499,6 +1505,32 @@ mod tests {
         );
         let expected = white_noise(3.0) + 0.25;
         assert!((plan.sample(context) - expected).abs() < 1e-9);
+    }
+
+    #[test]
+    fn switch_selects_audio_branch() {
+        for (switch, expected) in [(0.0, 0.25), (1.0, 0.75)] {
+            let plan = VoicePlan::new(
+                vec![
+                    VoiceNodePlan::new(VoiceOp::Constant(switch), vec![]),
+                    VoiceNodePlan::new(VoiceOp::Constant(0.25), vec![]),
+                    VoiceNodePlan::new(VoiceOp::Constant(0.75), vec![]),
+                    VoiceNodePlan::new(VoiceOp::Switch, vec![0, 1, 2]),
+                    VoiceNodePlan::new(VoiceOp::Output, vec![3]),
+                ],
+                4,
+            );
+            let context = VoiceContext {
+                pitch: 261.63,
+                velocity: 0.8,
+                local_time: 0.0,
+                gate: true,
+                seed: 0,
+                note_index: 0,
+                iteration: 0,
+            };
+            assert!((plan.sample(context) - expected).abs() < 1e-9);
+        }
     }
 
     #[test]
