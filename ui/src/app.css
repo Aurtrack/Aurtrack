@@ -2588,6 +2588,13 @@ button:disabled {
 .voice-editor-wires .voice-wire-hit:focus + .voice-wire {
   stroke-width: 2.6;
 }
+.voice-editor-wires .voice-wire.muted {
+  stroke-dasharray: 5 4;
+  opacity: 0.8;
+}
+.voice-mute-line polyline {
+  stroke: #d18b2c;
+}
 
 .voice-wire-temp {
   fill: none;
@@ -3027,6 +3034,34 @@ button:disabled {
 .node-sidebar-param .number-field {
   width: 96px;
   height: 20px;
+}
+
+.node-sidebar-text {
+  width: 132px;
+  height: 20px;
+  padding: 0 6px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: var(--field);
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 9px;
+}
+
+.node-color-row {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.node-color-input {
+  width: 24px;
+  height: 20px;
+  padding: 1px;
+  border: 1px solid var(--line);
+  border-radius: 2px;
+  background: var(--field);
+  cursor: pointer;
 }
 
 .node-sidebar-empty {

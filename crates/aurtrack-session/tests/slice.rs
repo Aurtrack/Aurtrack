@@ -2359,6 +2359,35 @@ fn audio_group_instance_expands_effect_nodes() {
 }
 
 #[test]
+fn muted_voice_link_compiles_as_unconnected() {
+    let mut session = Session::default();
+    run(&mut session, "project.create", json!({ "name": "muted" }));
+    run(
+        &mut session,
+        "track.create",
+        json!({ "name": "Piano", "source": "piano" }),
+    );
+    let project = session.project().unwrap().clone();
+    let mut voice = serde_json::to_value(&project.node_groups["piano.voice"].graph).unwrap();
+    for connection in voice["connections"].as_array_mut().unwrap() {
+        if connection["from"]["node"] == "env-gain" && connection["to"]["node"] == "osc-vca" {
+            connection["muted"] = json!(true);
+        }
+    }
+    run(
+        &mut session,
+        "group.voice",
+        json!({ "group_id": "piano.voice", "voice": voice }),
+    );
+    let project = session.project().unwrap();
+    let plan = project.tracks[0]
+        .playback_graph(&project.node_groups, &project.audio_groups)
+        .unwrap()
+        .2;
+    assert!(plan.piano.unwrap().voice.is_some());
+}
+
+#[test]
 fn default_piano_partial_loop_is_explicit() {
     let mut session = Session::default();
     run(&mut session, "project.create", json!({ "name": "loop" }));

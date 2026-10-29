@@ -1125,6 +1125,9 @@ pub type VoiceGraph = NodeTree<VoiceNode, VoiceConnection>;
 pub trait TreeConnection {
     fn from(&self) -> &PortRef;
     fn to(&self) -> &PortRef;
+    fn muted(&self) -> bool {
+        false
+    }
 }
 
 impl TreeConnection for VoiceConnection {
@@ -1134,6 +1137,10 @@ impl TreeConnection for VoiceConnection {
 
     fn to(&self) -> &PortRef {
         self.to()
+    }
+
+    fn muted(&self) -> bool {
+        self.muted
     }
 }
 
@@ -1173,6 +1180,9 @@ impl<N, C: TreeConnection> NodeTree<N, C> {
             incoming.insert(id.clone(), 0);
         }
         for connection in &self.connections {
+            if connection.muted() {
+                continue;
+            }
             *incoming
                 .get_mut(connection.to().node())
                 .ok_or_else(|| GraphError::UnknownNode(connection.to().node().clone()))? += 1;
@@ -1562,6 +1572,9 @@ impl VoiceGraph {
                     to: target_port.ty,
                 });
             }
+            if connection.muted {
+                continue;
+            }
             let key = (connection.to.node.clone(), connection.to.port.clone());
             if !occupied.insert(key) {
                 return Err(GraphError::PortOccupied);
@@ -1590,6 +1603,10 @@ pub struct VoiceNode {
     pub muted: bool,
     #[serde(default, skip_serializing_if = "is_false")]
     pub collapsed: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub color: Option<String>,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)]
@@ -1618,6 +1635,8 @@ impl VoiceNode {
             frame: None,
             muted: false,
             collapsed: false,
+            label: None,
+            color: None,
         }
     }
 
@@ -1632,12 +1651,18 @@ impl VoiceNode {
 pub struct VoiceConnection {
     pub from: PortRef,
     pub to: PortRef,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub muted: bool,
 }
 
 impl VoiceConnection {
     /// 创建一条 Voice 连接。
     pub fn new(from: PortRef, to: PortRef) -> Self {
-        Self { from, to }
+        Self {
+            from,
+            to,
+            muted: false,
+        }
     }
 
     /// 连接的来源端口。
@@ -2770,18 +2795,40 @@ mod tests {
         graph
             .nodes
             .insert(id.clone(), VoiceNode::new(id.clone(), "math.add"));
-        graph.connections.push(VoiceConnection {
-            from: PortRef::fixed(NodeId::fixed("voice-in"), "note"),
-            to: PortRef::new(id.clone(), "a"),
-        });
-        graph.connections.push(VoiceConnection {
-            from: PortRef::new(id, "out"),
-            to: PortRef::fixed(NodeId::fixed("out"), "audio"),
-        });
+        graph.connections.push(VoiceConnection::new(
+            PortRef::fixed(NodeId::fixed("voice-in"), "note"),
+            PortRef::new(id.clone(), "a"),
+        ));
+        graph.connections.push(VoiceConnection::new(
+            PortRef::new(id, "out"),
+            PortRef::fixed(NodeId::fixed("out"), "audio"),
+        ));
         let error = graph
             .validate_with_groups(&interface, &BTreeMap::new())
             .unwrap_err();
         assert!(matches!(error, GraphError::VoiceTypeMismatch { .. }));
+    }
+
+    #[test]
+    fn muted_voice_link_does_not_occupy_input() {
+        let mut graph = VoiceGraph::piano_default();
+        let muted = graph
+            .connections
+            .iter_mut()
+            .find(|connection| {
+                connection.from.node == NodeId::fixed("env-gain")
+                    && connection.to.node == NodeId::fixed("osc-vca")
+            })
+            .unwrap();
+        muted.muted = true;
+        graph.connections.push(VoiceConnection::new(
+            PortRef::fixed(NodeId::fixed("time"), "out"),
+            PortRef::fixed(NodeId::fixed("osc-vca"), "gain"),
+        ));
+        let groups = BTreeMap::from([("piano.partial".to_string(), NodeGroup::partial_default())]);
+        graph
+            .validate_with_groups(&NodeGroupInterface::piano(), &groups)
+            .unwrap();
     }
 
     #[test]
@@ -2792,10 +2839,10 @@ mod tests {
         let mut nested = VoiceNode::new(id.clone(), "voice.group");
         nested.group = Some("missing.voice".to_string());
         graph.nodes.insert(id.clone(), nested);
-        graph.connections.push(VoiceConnection {
-            from: PortRef::fixed(NodeId::fixed("voice-in"), "note"),
-            to: PortRef::new(id, "note"),
-        });
+        graph.connections.push(VoiceConnection::new(
+            PortRef::fixed(NodeId::fixed("voice-in"), "note"),
+            PortRef::new(id, "note"),
+        ));
         let error = graph
             .validate_with_groups(&interface, &BTreeMap::new())
             .unwrap_err();
@@ -3039,6 +3086,25 @@ mod tests {
         let graph = Graph::linear_track();
         let encoded = serde_json::to_string(&graph).unwrap();
         let decoded: Graph = serde_json::from_str(&encoded).unwrap();
+        assert_eq!(graph, decoded);
+    }
+
+    #[test]
+    fn voice_metadata_round_trips_through_json() {
+        let mut graph = VoiceGraph::piano_default();
+        graph
+            .nodes
+            .get_mut(&NodeId::fixed("osc-vca"))
+            .unwrap()
+            .label = Some("Amp".to_string());
+        graph
+            .nodes
+            .get_mut(&NodeId::fixed("osc-vca"))
+            .unwrap()
+            .color = Some("#336699".to_string());
+        graph.connections[0].muted = true;
+        let encoded = serde_json::to_string(&graph).unwrap();
+        let decoded: VoiceGraph = serde_json::from_str(&encoded).unwrap();
         assert_eq!(graph, decoded);
     }
 }

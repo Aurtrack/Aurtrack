@@ -792,7 +792,9 @@ fn compile_voice_inner(
         let mut inputs = Vec::new();
         for port in &input_ports {
             let Some(connection) = voice.connections.iter().find(|connection| {
-                connection.to.node() == &id && connection.to.port() == port.id.as_str()
+                !connection.muted
+                    && connection.to.node() == &id
+                    && connection.to.port() == port.id.as_str()
             }) else {
                 let value = node.params.get(&port.id).copied().unwrap_or(port.default);
                 let index = nodes.len();

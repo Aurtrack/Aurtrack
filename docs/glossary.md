@@ -57,6 +57,8 @@
 | partial | 泛音 | 单次生成一个泛音的音频 |
 | attack | 起音 | `min(time / attack, 1)` 控制曲线 |
 | decay | 衰减 | `exp(-time / decay)` 控制曲线 |
+| mute link | 静音连线 | 保留连线但不参与编译，输入回退默认值 |
+| node label | 节点标签 | 覆盖节点标题的显示名，不改变类型 |
 | patch | 音色 | 与 preset 区分 |
 | preset | 预设 | |
 | parameter | 参数 | |

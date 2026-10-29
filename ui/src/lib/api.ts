@@ -68,6 +68,8 @@ export type VoiceNode = {
   frame?: string;
   muted?: boolean;
   collapsed?: boolean;
+  label?: string;
+  color?: string;
 };
 
 export type VoiceFrame = {
@@ -80,6 +82,7 @@ export type VoiceFrame = {
 export type VoiceConnection = {
   from: { node: string; port: string };
   to: { node: string; port: string };
+  muted?: boolean;
 };
 
 export type VoiceGraph = {

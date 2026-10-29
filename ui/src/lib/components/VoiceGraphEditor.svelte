@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { onDestroy } from "svelte";
+  import { onDestroy, tick } from "svelte";
   import type {
     NodeGroup,
     NodeGroupInterface,
@@ -115,6 +115,7 @@
   }
 
   function nodeLabel(node: VoiceNode): string {
+    if (node.label?.trim()) return node.label.trim();
     if (node.type_id === "group.input") {
       return tLoose("node.group.input", "GROUP INPUT").toUpperCase();
     }
@@ -230,6 +231,7 @@
   let lasso = $state<{ points: Point[]; subtract: boolean } | null>(null);
   let insertTarget = $state<VoiceConnection | null>(null);
   let cutLine = $state<Point[] | null>(null);
+  let muteLine = $state<Point[] | null>(null);
   let circleMode = $state(false);
   let circleRadius = $state(48);
   let circlePos = $state<Point | null>(null);
@@ -258,6 +260,7 @@
   let lastPointer = $state({ x: 0, y: 0 });
   let boardElement = $state<HTMLElement | null>(null);
   let hostElement = $state<HTMLElement | null>(null);
+  let labelInput = $state<HTMLInputElement | null>(null);
   let groupChoices = $derived(
     Object.values(groups).filter((group) => group.id !== groupId),
   );
@@ -340,7 +343,9 @@
   function isLinked(node: VoiceNode, portId: string): boolean {
     return voice.connections.some(
       (connection) =>
-        connection.to.node === node.id && connection.to.port === portId,
+        !connection.muted &&
+        connection.to.node === node.id &&
+        connection.to.port === portId,
     );
   }
 
@@ -387,6 +392,7 @@
   }
 
   function wireColor(connection: VoiceConnection): string {
+    if (connection.muted) return "#b85a5a";
     const source = voice.nodes[connection.from.node];
     if (!source) return socketColors.audio;
     const port = outputList(source).find(
@@ -675,7 +681,9 @@
     if (event.ctrlKey && side === "in" && !wire) {
       const existing = voice.connections.find(
         (connection) =>
-          connection.to.node === node.id && connection.to.port === port.id,
+          !connection.muted &&
+          connection.to.node === node.id &&
+          connection.to.port === port.id,
       );
       const source = existing ? voice.nodes[existing.from.node] : undefined;
       const sourcePort =
@@ -746,6 +754,7 @@
     if (from.node === to.node) return;
     const exists = voice.connections.some(
       (connection) =>
+        !connection.muted &&
         connection.from.node === from.node &&
         connection.from.port === from.port &&
         connection.to.node === to.node &&
@@ -827,6 +836,19 @@
           Math.hypot(point.x - previous.x, point.y - previous.y) > 2
         ) {
           cutLine = [...cutLine, point];
+        }
+      }
+      return;
+    }
+    if (muteLine) {
+      const point = boardPoint(event);
+      if (point) {
+        const previous = muteLine.at(-1);
+        if (
+          !previous ||
+          Math.hypot(point.x - previous.x, point.y - previous.y) > 2
+        ) {
+          muteLine = [...muteLine, point];
         }
       }
       return;
@@ -918,6 +940,16 @@
       circlePos = point;
       circleDragging = true;
       selectInCircle(point, event.shiftKey);
+      return;
+    }
+    if (event.button === 2 && event.ctrlKey && event.altKey) {
+      event.preventDefault();
+      const point = boardPoint(event);
+      if (point) {
+        muteLine = [point];
+        addMenu = null;
+        nodeMenu = null;
+      }
       return;
     }
     if (event.button === 2 && event.ctrlKey) {
@@ -1057,6 +1089,17 @@
         voice.connections = voice.connections.filter(
           (connection) => !cutWire(connection, line),
         );
+      }
+      return;
+    }
+    if (muteLine) {
+      const line = muteLine;
+      muteLine = null;
+      if (line.length > 1) {
+        for (const connection of voice.connections) {
+          if (cutWire(connection, line)) connection.muted = !connection.muted;
+        }
+        touchVoice();
       }
       return;
     }
@@ -1284,6 +1327,11 @@
     node.params[name] = Number.isFinite(value) ? value : 0;
   }
 
+  function touchVoice(): void {
+    voice.nodes = { ...voice.nodes };
+    voice.connections = [...voice.connections];
+  }
+
   function addPosition(): [number, number] {
     if (!boardElement || !addMenu) return [80, 80];
     const point = worldPoint({
@@ -1381,7 +1429,7 @@
     const result: VoiceConnection[] = [];
     const indexes = new Map<string, number>();
     for (const connection of connections) {
-      const key = `${connection.to.node}\u0000${connection.to.port}`;
+      const key = `${connection.to.node}\u0000${connection.to.port}\u0000${connection.muted ? "muted" : "active"}`;
       const existing = indexes.get(key);
       if (existing === undefined) {
         indexes.set(key, result.length);
@@ -1806,6 +1854,17 @@
       }
       return;
     }
+    if (event.key === "F2" && !typing) {
+      if (!voice.nodes[active]) return;
+      event.preventDefault();
+      sidebarOpen = true;
+      interfaceOpen = false;
+      void tick().then(() => {
+        labelInput?.focus();
+        labelInput?.select();
+      });
+      return;
+    }
     if (
       event.key.toLowerCase() === "n" &&
       !typing &&
@@ -2135,6 +2194,7 @@
           />
           <path
             class="voice-wire"
+            class:muted={connection.muted}
             d={wirePath(connection)}
             style:stroke={wireColor(connection)}
           />
@@ -2171,6 +2231,9 @@
           <div
             class="voice-node-head"
             role="presentation"
+            style:background={node.color
+              ? `color-mix(in srgb, ${node.color} 58%, #222228)`
+              : undefined}
             ondblclick={() => {
               if (isGroupNode(node)) void enterGroup(node);
             }}
@@ -2332,6 +2395,13 @@
         <svg class="voice-cut" aria-hidden="true">
           <polyline
             points={cutLine.map((point) => `${point.x},${point.y}`).join(" ")}
+          />
+        </svg>
+      {/if}
+      {#if muteLine}
+        <svg class="voice-cut voice-mute-line" aria-hidden="true">
+          <polyline
+            points={muteLine.map((point) => `${point.x},${point.y}`).join(" ")}
           />
         </svg>
       {/if}
@@ -2542,6 +2612,44 @@
             <strong>{nodeLabel(node)}</strong>
             <code>{node.id}</code>
             <div class="node-sidebar-type">{node.type_id}</div>
+            <label class="node-sidebar-param">
+              <span>{t("graph.nodeLabel")}</span>
+              <input
+                bind:this={labelInput}
+                class="node-sidebar-text"
+                value={node.label ?? ""}
+                placeholder={nodeLabel(node)}
+                oninput={(event) => {
+                  const value = (event.currentTarget as HTMLInputElement).value.trim();
+                  node.label = value || undefined;
+                  touchVoice();
+                }}
+              />
+            </label>
+            <label class="node-sidebar-param">
+              <span>{t("graph.nodeColor")}</span>
+              <span class="node-color-row">
+                <input
+                  class="node-color-input"
+                  type="color"
+                  value={node.color ?? "#4a4a52"}
+                  oninput={(event) => {
+                    node.color = (event.currentTarget as HTMLInputElement).value;
+                    touchVoice();
+                  }}
+                />
+                {#if node.color}
+                  <button
+                    class="ghost small"
+                    type="button"
+                    onclick={() => {
+                      node.color = undefined;
+                      touchVoice();
+                    }}
+                  >{t("graph.clearColor")}</button>
+                {/if}
+              </span>
+            </label>
             {#if isGroupNode(node)}
               {#if node.type_id === "voice.repeat"}
                 <select
