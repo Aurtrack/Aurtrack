@@ -445,6 +445,8 @@ export const en: Record<MessageKey, Message> = {
   "node.voice.zone.output": "Zone Output",
   "voice.repeatZone": "Repeat Zone",
   "voice.audioSocket": "Audio",
+  "voice.zoneExternal": "Outer",
+  "voice.zoneInternal": "Inner",
   "voice.zoneInputs": "Input Fields",
   "voice.zoneOutputs": "Output Fields",
   "voice.addSocket": "Add Field",

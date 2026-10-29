@@ -172,26 +172,6 @@
       return index < 0 ? null : 38 + index * 14;
     }
     if (node.type_id === "voice.zone.input") {
-      const bounds = zoneBounds(header);
-      const link = voice.connections.find(
-        (connection) =>
-          !connection.muted &&
-          connection.from.node === node.id &&
-          connection.from.port === portId,
-      );
-      if (link) {
-        const target = voice.nodes[link.to.node];
-        const targetPort = target
-          ? allInputList(target).find((port) => port.id === link.to.port)
-          : undefined;
-        if (target && targetPort) {
-          const index = allInputList(target).findIndex(
-            (port) => port.id === targetPort.id,
-          );
-          const y = (target.position?.[1] ?? 0) + portY(target, index);
-          return Math.max(30, Math.min(bounds.height - 10, y - bounds.top));
-        }
-      }
       const inputs = zoneSocketPorts(header.zone_inputs, {
         id: "out",
         name: "Audio",
@@ -200,26 +180,6 @@
       return index < 0 ? null : 58 + (inputs.length + 1) * 14 + index * 14;
     }
     if (node.type_id === "voice.zone.output") {
-      const bounds = zoneBounds(header);
-      const link = voice.connections.find(
-        (connection) =>
-          !connection.muted &&
-          connection.to.node === node.id &&
-          connection.to.port === portId,
-      );
-      if (link) {
-        const source = voice.nodes[link.from.node];
-        const sourcePort = source
-          ? allOutputList(source).find((port) => port.id === link.from.port)
-          : undefined;
-        if (source && sourcePort) {
-          const index = allOutputList(source).findIndex(
-            (port) => port.id === sourcePort.id,
-          );
-          const y = (source.position?.[1] ?? 0) + portY(source, index);
-          return Math.max(30, Math.min(bounds.height - 10, y - bounds.top));
-        }
-      }
       const outputs = zoneSocketPorts(header.zone_outputs, {
         id: "in",
         name: "Audio",
@@ -1635,6 +1595,12 @@
       return;
     }
     const target = event.target as Element | null;
+    if (wire) {
+      wire = null;
+      wireMoved = false;
+      pendingLink = null;
+      return;
+    }
     const zoneHead = target?.closest<HTMLElement>(".voice-zone-head");
     if (zoneHead?.dataset.zoneId) {
       const header = voice.nodes[zoneHead.dataset.zoneId];
@@ -3330,7 +3296,7 @@
           </div>
           {#each zoneInputs as port, index (port.id)}
             <span class="voice-zone-port-label in" style:top={`${52 + index * 14}px`}>
-              {port.name}
+              {t("voice.zoneExternal")} · {port.name}
             </span>
             <button
               class="voice-port in zone-port"
@@ -3349,7 +3315,7 @@
           {/each}
           {#each zoneOutputs as port, index (port.id)}
             <span class="voice-zone-port-label out" style:top={`${32 + index * 14}px`}>
-              {port.name}
+              {t("voice.zoneExternal")} · {port.name}
             </span>
             <button
               class="voice-port out zone-port zone-port-head"
@@ -3382,12 +3348,18 @@
           {/if}
           {#if !header.collapsed && inputNode}
             {#each zoneInputs as port, index (port.id)}
+              <span
+                class="voice-zone-port-label in"
+                style:top={`${52 + (zoneInputs.length + 1) * 14 + index * 14}px`}
+              >
+                {t("voice.zoneInternal")} · {port.name}
+              </span>
               <button
                 class="voice-port out zone-port zone-port-body"
                 class:port-audio={port.ty === "audio"}
                 class:port-float={port.ty === "float"}
                 class:port-gate={port.ty === "gate"}
-                style:top={`${zonePortTop(inputNode, port.id, "out") ?? 76}px`}
+                style:top={`${58 + (zoneInputs.length + 1) * 14 + index * 14}px`}
                 title={`${port.name} (${port.ty})`}
                 aria-label={port.name}
                 data-port-node={inputNode.id}
@@ -3400,12 +3372,18 @@
           {/if}
           {#if !header.collapsed && outputNode}
             {#each zoneOutputs as port, index (port.id)}
+              <span
+                class="voice-zone-port-label out"
+                style:top={`${32 + (zoneOutputs.length + 1) * 14 + index * 14}px`}
+              >
+                {t("voice.zoneInternal")} · {port.name}
+              </span>
               <button
                 class="voice-port in zone-port zone-port-body"
                 class:port-audio={port.ty === "audio"}
                 class:port-float={port.ty === "float"}
                 class:port-gate={port.ty === "gate"}
-                style:top={`${zonePortTop(outputNode, port.id, "in") ?? 76}px`}
+                style:top={`${38 + (zoneOutputs.length + 1) * 14 + index * 14}px`}
                 title={`${port.name} (${port.ty})`}
                 aria-label={port.name}
                 data-port-node={outputNode.id}

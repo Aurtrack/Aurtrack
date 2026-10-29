@@ -415,6 +415,8 @@ export const zhCN = {
   "node.voice.zone.output": "区域输出",
   "voice.repeatZone": "重复区域",
   "voice.audioSocket": "音频",
+  "voice.zoneExternal": "外部",
+  "voice.zoneInternal": "内部",
   "voice.zoneInputs": "输入字段",
   "voice.zoneOutputs": "输出字段",
   "voice.addSocket": "添加字段",
