@@ -18,6 +18,7 @@
     clippy::too_many_lines
 )]
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
@@ -64,11 +65,25 @@ pub struct VoiceContext {
 pub struct VoicePlan {
     pub nodes: Vec<VoiceNodePlan>,
     pub output: usize,
+    pub node_outputs: BTreeMap<String, usize>,
 }
 
 impl VoicePlan {
     pub fn new(nodes: Vec<VoiceNodePlan>, output: usize) -> Self {
-        Self { nodes, output }
+        Self {
+            nodes,
+            output,
+            node_outputs: BTreeMap::new(),
+        }
+    }
+
+    pub fn set_node_outputs(&mut self, node_outputs: BTreeMap<String, usize>) {
+        self.node_outputs = node_outputs;
+    }
+
+    pub fn sample_node(&self, node_id: &str, context: VoiceContext) -> Option<f64> {
+        let target = *self.node_outputs.get(node_id)?;
+        self.sample_internal(context, &[], Some(target))
     }
 }
 
@@ -78,11 +93,16 @@ impl VoicePlan {
 pub struct VoiceNodePlan {
     pub op: VoiceOp,
     pub inputs: Vec<usize>,
+    state: Arc<[AtomicU64; 64]>,
 }
 
 impl VoiceNodePlan {
     pub fn new(op: VoiceOp, inputs: Vec<usize>) -> Self {
-        Self { op, inputs }
+        Self {
+            op,
+            inputs,
+            state: Arc::new(std::array::from_fn(|_| AtomicU64::new(0))),
+        }
     }
 }
 
@@ -121,8 +141,11 @@ pub enum VoiceOp {
     Mix,
     GateNode,
     Switch,
-    IndexSwitch,
+    IndexSwitch {
+        slots: usize,
+    },
     Broadcast,
+    SampleHold,
     Add,
     Multiply,
     MapRange,
@@ -136,8 +159,17 @@ impl VoicePlan {
     }
 
     pub fn sample_with_inputs(&self, context: VoiceContext, inputs: &[f64]) -> f64 {
+        self.sample_internal(context, inputs, None).unwrap_or(0.0)
+    }
+
+    fn sample_internal(
+        &self,
+        context: VoiceContext,
+        inputs: &[f64],
+        target: Option<usize>,
+    ) -> Option<f64> {
         if self.nodes.len() > 64 || self.output >= self.nodes.len() {
-            return 0.0;
+            return None;
         }
         let mut values = [0.0_f64; 64];
         for (index, node) in self.nodes.iter().enumerate() {
@@ -271,13 +303,19 @@ impl VoicePlan {
                     let index = if switch > 0.5 { 2 } else { 1 };
                     node.inputs.get(index).map_or(0.0, |input| values[*input])
                 },
-                VoiceOp::IndexSwitch => {
+                VoiceOp::IndexSwitch { slots } => {
                     let index = node.inputs.first().map_or(0.0, |input| values[*input]);
                     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                    let slot = (index.round().max(0.0) as usize).min(7) + 1;
+                    let slot = (index.round().max(0.0) as usize).min(slots.saturating_sub(1)) + 1;
                     node.inputs.get(slot).map_or(0.0, |input| values[*input])
                 },
                 VoiceOp::Broadcast => node.inputs.first().map_or(0.0, |input| values[*input]),
+                VoiceOp::SampleHold => {
+                    let next = node.inputs.first().map_or(0.0, |input| values[*input]);
+                    let voice = context.note_index as usize % node.state.len();
+                    let previous = node.state[voice].swap(next.to_bits(), Ordering::Relaxed);
+                    f64::from_bits(previous)
+                },
                 VoiceOp::GateNode => {
                     let signal = node.inputs.first().map_or(0.0, |input| values[*input]);
                     let gate = node.inputs.get(1).map_or(0.0, |input| values[*input]);
@@ -320,7 +358,9 @@ impl VoicePlan {
                 VoiceOp::Output => node.inputs.first().map_or(0.0, |input| values[*input]),
             };
         }
-        values[self.output]
+        target
+            .and_then(|index| values.get(index).copied())
+            .or_else(|| values.get(self.output).copied())
     }
 }
 
@@ -1543,6 +1583,30 @@ mod tests {
     }
 
     #[test]
+    fn sample_hold_keeps_previous_sample() {
+        let plan = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Constant(0.5), vec![]),
+                VoiceNodePlan::new(VoiceOp::SampleHold, vec![0]),
+                VoiceNodePlan::new(VoiceOp::Output, vec![1]),
+            ],
+            2,
+        );
+        let context = VoiceContext {
+            pitch: 261.63,
+            velocity: 0.8,
+            local_time: 0.0,
+            gate: true,
+            seed: 0,
+            note_index: 4,
+            iteration: 0,
+        };
+        assert!((plan.sample(context) - 0.0).abs() < 1e-9);
+        assert!((plan.sample(context) - 0.5).abs() < 1e-9);
+        assert!((plan.sample(context) - 0.5).abs() < 1e-9);
+    }
+
+    #[test]
     fn broadcast_passes_control_value_as_audio() {
         let plan = VoicePlan::new(
             vec![
@@ -1572,7 +1636,7 @@ mod tests {
                 VoiceNodePlan::new(VoiceOp::Constant(0.1), vec![]),
                 VoiceNodePlan::new(VoiceOp::Constant(0.2), vec![]),
                 VoiceNodePlan::new(VoiceOp::Constant(0.3), vec![]),
-                VoiceNodePlan::new(VoiceOp::IndexSwitch, vec![0, 1, 2, 3]),
+                VoiceNodePlan::new(VoiceOp::IndexSwitch { slots: 3 }, vec![0, 1, 2, 3]),
                 VoiceNodePlan::new(VoiceOp::Output, vec![4]),
             ],
             5,

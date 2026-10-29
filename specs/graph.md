@@ -128,7 +128,7 @@ Voice 节点实例用 `type_id` 引用注册表，端口和参数由 `node.types
 
 Audio 节点类型：`audio.group`、`audio.group.instance`、`audio.instrument.sine`、`audio.instrument.silence`、`audio.adsr`、`audio.plugin`、`audio.gain`、`audio.mix`、`audio.filter.lowpass`、`audio.filter.highpass`、`audio.drive`、`audio.delay`、`audio.value`、`audio.note`、`audio.output`。`audio.instrument.sine` 的频率是 `frequency` 输入 socket，可连接控制信号。
 
-工程视图同时输出 `type_id` 和 UI 用的 `kind`；写入只认 `type_id`。当前 Voice 类型以 `node.types` 注册表为准，包含 `voice.repeat`、`voice.partial`、`voice.switch`、`voice.index_switch`、`voice.broadcast`、`voice.sum`、`voice.iteration`、`voice.pitch`、`voice.velocity`、`voice.attack`、`voice.decay`、`voice.noise`、`voice.vca`、`voice.add`、`voice.mix`、`voice.gate`、`note.separate` 等原子节点。`voice.sum` 的 `in` 是音频多输入 socket，可接多条线；它编译成把所有输入相加。
+工程视图同时输出 `type_id` 和 UI 用的 `kind`；写入只认 `type_id`。当前 Voice 类型以 `node.types` 注册表为准，包含 `voice.repeat`、`voice.partial`、`voice.switch`、`voice.index_switch`、`voice.index_switch_float`、`voice.vector_add`、`voice.broadcast`、`voice.sample_hold`、`voice.sum`、`voice.sum_float`、`voice.iteration`、`voice.pitch`、`voice.velocity`、`voice.attack`、`voice.decay`、`voice.noise`、`voice.vca`、`voice.add`、`voice.mix`、`voice.gate`、`note.separate` 等原子节点。`voice.sum` 和 `voice.sum_float` 的 `in` 是多输入 socket，可接多条线；它们编译成把所有输入相加。`voice.index_switch` / `voice.index_switch_float` 按 `count` 动态生成端口。`voice.vector_add` 编译成三路独立加法，输出 X/Y/Z。`voice.sample_hold` 每个音符保存上一采样值。
 
 组接口 socket 类型：`float`、`gate`、`audio`、`note`。`note` 表示逐音符事件，不参与 Audio 采样，也没有数值默认值。
 

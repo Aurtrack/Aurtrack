@@ -879,6 +879,13 @@ export class SessionStore {
     return result;
   }
 
+  async previewVoice(
+    groupId: string,
+    nodeId: string,
+  ): Promise<{ values: number[]; minimum: number; maximum: number }> {
+    return this.run("voice.preview", { group_id: groupId, node_id: nodeId });
+  }
+
   async setGroupVoice(
     groupId: string,
     voice: {

@@ -36,8 +36,12 @@
 - `voice.partial` 是单个泛音的原子节点；默认 `Partials` 由 `Repeat("piano.partial") + Partial` 组成，不再有单体 `osc.partials` 节点。
 - 节点可以有显示用的 `label`、`color` 和 `width`；帧可以有 `color`；连线可以有 `muted`。这些字段不参与 DSP。静音连线在编译时等价于不存在，输入回退到 socket 默认值。
 - 组输入 socket 未连接时使用接口的 `default`，不再固定为 0 或偷父级上下文。
-- 多输入 socket 允许在同一个目标端口上保留多条连线；当前 `voice.sum` 用它做音频求和。普通输入仍然只允许一条有效连线。
+- 多输入 socket 允许在同一个目标端口上保留多条连线；`voice.sum` / `voice.sum_float` 用它做音频或控制求和。普通输入仍然只允许一条有效连线。
+- `voice.index_switch` 和 `voice.index_switch_float` 的输入槽数量来自 `count` 参数，编译器和 UI 都从参数推导端口。
+- `voice.vector_add` 用三路独立 Float 输出模拟向量，避免在引擎引入打包向量。
+- `voice.sample_hold` 是显式状态节点：每个音符保存上一采样值，状态用原子存储，音频线程不分配不加锁。
 - `voice.broadcast` 显式把 Float 控制值当作逐采样音频使用，避免隐式类型转换。
+- 节点预览通过 `voice.preview` 编译当前组并采样目标节点，只用于 UI，不写入工程。
 - 嵌套 Voice 组的 Note 输入未接线时绑定为禁用，不会从父级上下文偷音符。
 - 轨道里的 `audio.group.instance` 是**Audio 组实例**，端口由 `AudioGroup.interface` 动态生成。
 - Voice 图里的 `voice.group` 继续是真正的 Voice 组实例。

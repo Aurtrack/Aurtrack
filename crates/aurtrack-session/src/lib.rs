@@ -823,6 +823,17 @@ fn compile_voice_inner(
                 );
             }
         }
+        if node.type_id == "voice.vector_add" {
+            for (port, left, right) in [("x", 0, 3), ("y", 1, 4), ("z", 2, 5)] {
+                let index = nodes.len();
+                nodes.push(VoiceNodePlan::new(
+                    VoiceOp::Add,
+                    vec![inputs[left], inputs[right]],
+                ));
+                indices.insert((id.clone(), port.to_string()), index);
+            }
+            continue;
+        }
         if node.type_id == "group.input" {
             for socket in &interface.inputs {
                 if socket.ty == NodeGroupSocketType::Note {
@@ -1016,12 +1027,17 @@ fn compile_voice_inner(
             "voice.decay" => VoiceOp::Decay,
             "voice.noise" => VoiceOp::Noise,
             "voice.vca" => VoiceOp::Vca,
-            "voice.add" | "voice.sum" | "math.add" => VoiceOp::Add,
+            "voice.add" | "voice.sum" | "voice.sum_float" | "math.add" => VoiceOp::Add,
             "voice.mix" => VoiceOp::Mix,
             "voice.gate" => VoiceOp::GateNode,
             "voice.switch" => VoiceOp::Switch,
-            "voice.index_switch" => VoiceOp::IndexSwitch,
+            "voice.index_switch" | "voice.index_switch_float" => {
+                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                let slots = (param("count", 4.0).round() as usize).clamp(1, 16);
+                VoiceOp::IndexSwitch { slots }
+            },
             "voice.broadcast" => VoiceOp::Broadcast,
+            "voice.sample_hold" => VoiceOp::SampleHold,
             "voice.time" => VoiceOp::Time,
             "voice.white_noise" => VoiceOp::WhiteNoise,
             "math.multiply" => VoiceOp::Multiply,
@@ -1043,7 +1059,19 @@ fn compile_voice_inner(
         nodes.push(VoiceNodePlan::new(op, inputs));
     }
     let output = output.ok_or(GraphError::VoiceTerminals)?;
-    Ok(VoicePlan::new(nodes, output))
+    let mut preview_outputs = BTreeMap::new();
+    for (id, node) in &voice.nodes {
+        if let Ok(ports) = aurtrack_graph::node_outputs(node, interface, groups) {
+            if let Some(port) = ports.first() {
+                if let Some(index) = indices.get(&(id.clone(), port.id.clone())) {
+                    preview_outputs.insert(id.to_string(), *index);
+                }
+            }
+        }
+    }
+    let mut plan = VoicePlan::new(nodes, output);
+    plan.set_node_outputs(preview_outputs);
+    Ok(plan)
 }
 
 /// 轨道上的一个片段。
@@ -1142,6 +1170,7 @@ impl Session {
             "group.rename" => self.cmd_group_rename(&request.args),
             "group.interface" => self.cmd_group_interface(&request.args),
             "group.voice" => self.cmd_group_voice(&request.args),
+            "voice.preview" => self.cmd_voice_preview(&request.args),
             "group.from_nodes" => self.cmd_group_from_nodes(&request.args),
             "group.ungroup" => self.cmd_group_ungroup(&request.args),
             "audio_group.create" => self.cmd_audio_group_create(&request.args),
@@ -1965,6 +1994,58 @@ impl Session {
             "voice": "updated",
         }))
         .with_undo(token))
+    }
+
+    fn cmd_voice_preview(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct PreviewArgs {
+            group_id: String,
+            node_id: String,
+            #[serde(default)]
+            points: Option<u32>,
+            #[serde(default)]
+            pitch: Option<f64>,
+            #[serde(default)]
+            velocity: Option<f64>,
+        }
+        let args: PreviewArgs = parse_args(args)?;
+        let project = self
+            .project
+            .as_ref()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let group = project
+            .node_groups
+            .get(&args.group_id)
+            .ok_or_else(|| CommandError::not_found(format!("找不到节点组：{}", args.group_id)))?;
+        let plan = compile_voice(&group.graph, &group.interface, &project.node_groups)
+            .map_err(graph_error)?;
+        let points = args.points.unwrap_or(32).clamp(2, 256) as usize;
+        let pitch = args.pitch.unwrap_or(261.63);
+        let velocity = args.velocity.unwrap_or(0.8);
+        let mut values = Vec::with_capacity(points);
+        for index in 0..points {
+            #[allow(clippy::cast_precision_loss)]
+            let time = 0.5 * index as f64 / (points - 1) as f64;
+            let context = aurtrack_engine::VoiceContext {
+                pitch,
+                velocity,
+                local_time: time,
+                gate: true,
+                seed: 0,
+                note_index: 0,
+                iteration: 0,
+            };
+            values.push(plan.sample_node(&args.node_id, context).unwrap_or(0.0));
+        }
+        let minimum = values.iter().copied().fold(f64::INFINITY, f64::min);
+        let maximum = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        Ok(CommandResponse::ok(json!({
+            "node_id": args.node_id,
+            "values": values,
+            "minimum": minimum,
+            "maximum": maximum,
+        })))
     }
 
     fn cmd_group_from_nodes(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {

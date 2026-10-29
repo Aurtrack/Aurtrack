@@ -223,6 +223,19 @@ fn group_voice_schema() -> Value {
     )
 }
 
+fn voice_preview_schema() -> Value {
+    object_schema(
+        json!({
+            "group_id": { "type": "string" },
+            "node_id": { "type": "string" },
+            "points": { "type": "integer", "minimum": 2, "maximum": 256, "default": 32 },
+            "pitch": { "type": "number", "minimum": 20, "maximum": 20000, "default": 261.63 },
+            "velocity": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.8 }
+        }),
+        &["group_id", "node_id"],
+    )
+}
+
 fn node_types_schema() -> Value {
     object_schema(json!({}), &[])
 }
@@ -949,7 +962,7 @@ fn transport_metronome_schema() -> Value {
     )
 }
 
-static COMMANDS: [CommandSpec; 72] = [
+static COMMANDS: [CommandSpec; 73] = [
     CommandSpec {
         id: "project.create",
         summary: "创建或替换当前工程",
@@ -1123,6 +1136,12 @@ static COMMANDS: [CommandSpec; 72] = [
         summary: "替换节点组的 Voice 图",
         undo: UndoKind::Snapshot,
         input_schema: group_voice_schema,
+    },
+    CommandSpec {
+        id: "voice.preview",
+        summary: "采样一个 Voice 节点的输出曲线",
+        undo: UndoKind::None,
+        input_schema: voice_preview_schema,
     },
     CommandSpec {
         id: "group.from_nodes",

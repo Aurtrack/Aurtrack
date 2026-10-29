@@ -428,12 +428,43 @@ fn static_ports(sockets: &[VoiceSocketSpec]) -> Vec<VoicePort> {
         .collect()
 }
 
+#[allow(clippy::cast_precision_loss)]
+fn index_switch_ports(node: &VoiceNode, ty: SocketType) -> Vec<VoicePort> {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let count = (node.params.get("count").copied().unwrap_or(4.0).round() as usize).clamp(1, 16);
+    let mut ports = vec![VoicePort {
+        id: "index".to_string(),
+        name: "Index".to_string(),
+        ty: SocketType::Float,
+        default: 0.0,
+        minimum: 0.0,
+        maximum: (count - 1) as f64,
+        step: 1.0,
+        multi: false,
+    }];
+    for index in 0..count {
+        ports.push(VoicePort {
+            id: index.to_string(),
+            name: index.to_string(),
+            ty,
+            default: 0.0,
+            minimum: f64::NEG_INFINITY,
+            maximum: f64::INFINITY,
+            step: 0.01,
+            multi: false,
+        });
+    }
+    ports
+}
+
 pub fn node_inputs(
     node: &VoiceNode,
     interface: &NodeGroupInterface,
     groups: &BTreeMap<String, NodeGroup>,
 ) -> Result<Vec<VoicePort>, GraphError> {
     match node.type_id.as_str() {
+        "voice.index_switch" => Ok(index_switch_ports(node, SocketType::Audio)),
+        "voice.index_switch_float" => Ok(index_switch_ports(node, SocketType::Float)),
         "group.input" => Ok(Vec::new()),
         "group.output" => Ok(interface_ports(&interface.outputs)),
         "voice.group" => {
@@ -809,6 +840,8 @@ const CONTEXT_VELOCITY_OUT: [VoiceSocketSpec; 1] =
     [VoiceSocketSpec::new("out", "Velocity", SocketType::Float)];
 const CONTEXT_ITERATION_OUT: [VoiceSocketSpec; 1] =
     [VoiceSocketSpec::new("out", "Iteration", SocketType::Float)];
+const SAMPLE_HOLD_INPUTS: [VoiceSocketSpec; 1] =
+    [VoiceSocketSpec::new("next", "Next", SocketType::Float)];
 const BROADCAST_INPUTS: [VoiceSocketSpec; 1] =
     [VoiceSocketSpec::new("value", "Value", SocketType::Float)
         .with_default(0.0)
@@ -816,20 +849,27 @@ const BROADCAST_INPUTS: [VoiceSocketSpec; 1] =
         .with_step(0.01)];
 const SUM_INPUTS: [VoiceSocketSpec; 1] =
     [VoiceSocketSpec::new("in", "Audio", SocketType::Audio).multi()];
-const INDEX_SWITCH_INPUTS: [VoiceSocketSpec; 9] = [
-    VoiceSocketSpec::new("index", "Index", SocketType::Float)
-        .with_default(0.0)
-        .with_range(0.0, 7.0)
-        .with_step(1.0),
-    VoiceSocketSpec::new("0", "0", SocketType::Audio),
-    VoiceSocketSpec::new("1", "1", SocketType::Audio),
-    VoiceSocketSpec::new("2", "2", SocketType::Audio),
-    VoiceSocketSpec::new("3", "3", SocketType::Audio),
-    VoiceSocketSpec::new("4", "4", SocketType::Audio),
-    VoiceSocketSpec::new("5", "5", SocketType::Audio),
-    VoiceSocketSpec::new("6", "6", SocketType::Audio),
-    VoiceSocketSpec::new("7", "7", SocketType::Audio),
+const SUM_FLOAT_INPUTS: [VoiceSocketSpec; 1] =
+    [VoiceSocketSpec::new("in", "Value", SocketType::Float).multi()];
+const VECTOR_ADD_INPUTS: [VoiceSocketSpec; 6] = [
+    VoiceSocketSpec::new("x1", "X1", SocketType::Float),
+    VoiceSocketSpec::new("y1", "Y1", SocketType::Float),
+    VoiceSocketSpec::new("z1", "Z1", SocketType::Float),
+    VoiceSocketSpec::new("x2", "X2", SocketType::Float),
+    VoiceSocketSpec::new("y2", "Y2", SocketType::Float),
+    VoiceSocketSpec::new("z2", "Z2", SocketType::Float),
 ];
+const VECTOR_OUT: [VoiceSocketSpec; 3] = [
+    VoiceSocketSpec::new("x", "X", SocketType::Float),
+    VoiceSocketSpec::new("y", "Y", SocketType::Float),
+    VoiceSocketSpec::new("z", "Z", SocketType::Float),
+];
+const INDEX_SWITCH_PARAMS: [ParamSpec; 1] = [ParamSpec {
+    name: "count",
+    default: 4.0,
+    minimum: 1.0,
+    maximum: 16.0,
+}];
 const SWITCH_INPUTS: [VoiceSocketSpec; 3] = [
     VoiceSocketSpec::new("switch", "Switch", SocketType::Float)
         .with_default(0.0)
@@ -991,12 +1031,36 @@ pub const VOICE_NODE_TYPES: &[VoiceNodeType] = &[
         params: &[],
     },
     VoiceNodeType {
+        id: "voice.sum_float",
+        name: "Sum Float",
+        category: "Math",
+        inputs: &SUM_FLOAT_INPUTS,
+        outputs: &FLOAT_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "voice.vector_add",
+        name: "Vector Add",
+        category: "Math",
+        inputs: &VECTOR_ADD_INPUTS,
+        outputs: &VECTOR_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
         id: "voice.index_switch",
         name: "Index Switch",
         category: "Utility",
-        inputs: &INDEX_SWITCH_INPUTS,
+        inputs: &[],
         outputs: &AUDIO_OUT,
-        params: &[],
+        params: &INDEX_SWITCH_PARAMS,
+    },
+    VoiceNodeType {
+        id: "voice.index_switch_float",
+        name: "Index Switch Float",
+        category: "Utility",
+        inputs: &[],
+        outputs: &FLOAT_OUT,
+        params: &INDEX_SWITCH_PARAMS,
     },
     VoiceNodeType {
         id: "voice.broadcast",
@@ -1004,6 +1068,14 @@ pub const VOICE_NODE_TYPES: &[VoiceNodeType] = &[
         category: "Utility",
         inputs: &BROADCAST_INPUTS,
         outputs: &AUDIO_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "voice.sample_hold",
+        name: "Sample Hold",
+        category: "Utility",
+        inputs: &SAMPLE_HOLD_INPUTS,
+        outputs: &FLOAT_OUT,
         params: &[],
     },
     VoiceNodeType {

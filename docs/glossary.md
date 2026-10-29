@@ -59,6 +59,9 @@
 | index switch | 索引切换 | 按索引在 8 路音频中选择 |
 | sum | 求和 | 多输入音频求和 |
 | broadcast | 广播 | 显式把控制值作为逐采样音频使用 |
+| vector add | 向量加法 | 六路 Float 输入、三路 X/Y/Z 输出 |
+| sample hold | 采样保持 | 保存上一采样值，构成最简单的状态节点 |
+| preview | 预览 | 编译组并采样目标节点，在 UI 显示曲线 |
 | attack | 起音 | `min(time / attack, 1)` 控制曲线 |
 | decay | 衰减 | `exp(-time / decay)` 控制曲线 |
 | mute link | 静音连线 | 保留连线但不参与编译，输入回退默认值 |

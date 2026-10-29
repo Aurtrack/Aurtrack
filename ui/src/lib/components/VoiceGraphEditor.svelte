@@ -164,6 +164,37 @@
   }
 
   function allInputList(node: VoiceNode): PortInfo[] {
+    if (
+      node.type_id === "voice.index_switch" ||
+      node.type_id === "voice.index_switch_float"
+    ) {
+      const count = Math.max(
+        1,
+        Math.min(16, Math.round(node.params.count ?? 4)),
+      );
+      const ty: PortType =
+        node.type_id === "voice.index_switch" ? "audio" : "float";
+      return [
+        {
+          id: "index",
+          name: "Index",
+          ty: "float",
+          default: 0,
+          minimum: 0,
+          maximum: count - 1,
+          step: 1,
+        },
+        ...Array.from({ length: count }, (_, index) => ({
+          id: String(index),
+          name: String(index),
+          ty,
+          default: 0,
+          minimum: -Infinity,
+          maximum: Infinity,
+          step: 0.01,
+        })),
+      ];
+    }
     if (node.type_id === "group.input") return [];
     if (node.type_id === "group.output") {
       return interfacePorts(groupInterface.outputs);
@@ -231,6 +262,42 @@
     outputs: [],
   });
   let interfaceError = $state("");
+  let preview = $state<{
+    values: number[];
+    minimum: number;
+    maximum: number;
+  } | null>(null);
+  let previewError = $state("");
+  let previewLoading = $state(false);
+
+  async function loadPreview(): Promise<void> {
+    if (!active) return;
+    previewLoading = true;
+    previewError = "";
+    try {
+      preview = await session.previewVoice(groupId, active);
+    } catch (cause) {
+      previewError = errorMessage(cause);
+      preview = null;
+    } finally {
+      previewLoading = false;
+    }
+  }
+
+  function previewPoints(): string {
+    const plot = preview;
+    if (!plot || plot.values.length < 2) return "";
+    const min = plot.minimum;
+    const max = plot.maximum;
+    const span = Math.max(1e-9, max - min);
+    return plot.values
+      .map((value, index) => {
+        const x = (index / (plot.values.length - 1)) * 132;
+        const y = 32 - ((value - min) / span) * 28;
+        return `${x.toFixed(2)},${y.toFixed(2)}`;
+      })
+      .join(" ");
+  }
   let libraryOpen = $state(false);
   let libraryError = $state("");
   let newGroupName = $state("");
@@ -3122,6 +3189,24 @@
             <strong>{nodeLabel(node)}</strong>
             <code>{node.id}</code>
             <div class="node-sidebar-type">{node.type_id}</div>
+            <div class="node-preview">
+              <button
+                class="ghost small"
+                type="button"
+                disabled={previewLoading}
+                onclick={() => void loadPreview()}
+              >{t("graph.preview")}</button>
+              {#if previewError}
+                <span class="node-preview-error">{previewError}</span>
+              {:else if preview}
+                <svg class="node-preview-plot" viewBox="0 0 132 36" aria-hidden="true">
+                  <polyline points={previewPoints()} />
+                </svg>
+                <span class="node-preview-range">
+                  {preview.minimum.toFixed(3)} … {preview.maximum.toFixed(3)}
+                </span>
+              {/if}
+            </div>
             <label class="node-sidebar-param">
               <span>{t("graph.nodeLabel")}</span>
               <input

@@ -38,7 +38,7 @@
 | 静音节点 | `M`，连线穿过 | `M`，编译时旁路 | 已对齐 |
 | 折叠节点 | `H` | `H` | 已对齐 |
 | 折叠未连接 socket | `Ctrl+H` | `Ctrl+H` | 已对齐 |
-| 节点预览 | `Shift+H` | 音频节点暂无预览 | 不适用 |
+| 节点预览 | `Shift+H` | N 侧栏显示采样曲线 | 部分 |
 | 节点缩放 | 拖左右边界，多选联动 | 右上角拖动，多选联动 | 已对齐 |
 | Swap 节点 | `Shift+S`，按名称/类型重连 | `Shift+S`，按名称/类型重连 | 已对齐 |
 | 删除并重连 | `Ctrl+Delete` | `Ctrl+Delete` | 已对齐 |
@@ -52,11 +52,11 @@
 | N 侧栏 | 节点/组属性 | 已有 | 已对齐 |
 | 搜索菜单 | `F3` | `F3` / `Shift+A` 共用添加菜单 | 已对齐 |
 | 节点组进入/离开 | `Tab` / `Ctrl+Tab` | 同左 | 已对齐 |
-| 数组 / 字段 | Geometry Nodes Field | Float 本身逐采样；`voice.broadcast` 显式 Float→Audio；无向量数组 | 部分 |
-| 多输入 socket | Join Geometry 等 | `voice.sum` 音频多输入；控制域未做 | 部分 |
-| 向量/颜色/几何 socket | 有 | 只有 Float/Gate/Audio/Note | 不适用 |
-| Switch / Index Switch | 有 | `voice.switch` 二选一；`voice.index_switch` 固定 8 路 | 已对齐 |
-| Simulation Zone | 有 | 无 | 缺失 |
+| 数组 / 字段 | Geometry Nodes Field | Float 逐采样；`broadcast`、浮点 Index Switch；无通用数组 | 部分 |
+| 多输入 socket | Join Geometry 等 | `voice.sum` 音频、`voice.sum_float` 控制多输入 | 已对齐 |
+| 向量/颜色/几何 socket | 有 | `voice.vector_add` 六 Float 进、三 Float 出；无 Vector 单端口 | 部分 |
+| Switch / Index Switch | 有 | 二选一 + 1–16 路动态 Index Switch | 已对齐 |
+| Simulation Zone | 有 | `voice.sample_hold` 按音符保存上一采样；无多帧缓存 | 部分 |
 | For Each / 并行 | 有 | 无 | 缺失 |
 
 ## 已完成的 P0
@@ -94,19 +94,27 @@
 4. **字段化参数**：Float 本身就是逐采样字段；新增 `voice.broadcast` 显式把控制值转成音频。
 5. **F3 模糊评分**：精确、前缀、包含、子序列分级排序。
 
-## 下一批 P3
+## 已完成的 P3
 
-1. **控制域多输入**：把 `voice.sum` 扩展为 Float/Gate 求和。
-2. **动态 Index Switch**：按节点参数生成输入槽，而不是固定 8 路。
-3. **通用字段/数组**：向量、索引数组和多输出 socket。
-4. **仿真 Zone**：跨采样状态，而不是纯函数式逐采样求值。
-5. **节点预览**：低开销波形缩略图。
+1. **控制域多输入**：`voice.sum_float` 使用 Float 多输入。
+2. **动态 Index Switch**：音频和浮点版本都按 `count` 生成 1–16 个输入槽。
+3. **向量多输出**：`voice.vector_add` 六路 Float 输入、X/Y/Z 三路输出。
+4. **跨采样状态**：`voice.sample_hold` 按音符保存上一采样，使用原子状态，不分配不加锁。
+5. **节点预览**：`voice.preview` 编译当前组并采样节点，N 侧栏显示曲线和范围。
+
+## 下一批 P4
+
+1. **真正的 Vector socket**：单端口携带 X/Y/Z，而不是三根线。
+2. **通用数组/列表 socket** 与 For Each。
+3. **完整 Simulation Zone**：多帧缓存、重置和预览。
+4. **节点组接口面板 UI**：按 panel 折叠实例参数。
+5. **预览游标**：点击曲线定位到具体采样时间。
 
 ## 不做的部分
 
 - 不引入 Geometry、Object、Collection、Material 等 Blender 场景类型；Aurtrack 的数据域是音频、控制、Note。
 - 不为了“像 Blender”而把 `Add`、`Mix`、`VCA` 合并成万能节点；音频语义优先。
-- 不实现节点预览，直到音频节点有低开销的波形缩略图方案。
+- 不实现完整仿真缓存；当前只提供单采样状态节点。
 
 ## 判定标准
 

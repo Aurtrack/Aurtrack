@@ -3054,6 +3054,32 @@ button:disabled {
   height: 20px;
 }
 
+.node-preview {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.node-preview-plot {
+  width: 100%;
+  height: 40px;
+  border: 1px solid var(--line);
+  background: var(--field);
+}
+
+.node-preview-plot polyline {
+  fill: none;
+  stroke: var(--blue);
+  stroke-width: 1.2;
+}
+
+.node-preview-range,
+.node-preview-error {
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 8px;
+}
+
 .node-sidebar-text {
   width: 132px;
   height: 20px;

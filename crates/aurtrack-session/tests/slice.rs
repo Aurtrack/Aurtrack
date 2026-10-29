@@ -333,7 +333,7 @@ fn batch_note_edits_and_cross_track_clip_move_share_snapshots() {
 fn describe_lists_all_commands() {
     let mut session = Session::default();
     let out = run(&mut session, "describe", json!({}));
-    assert_eq!(out["commands"].as_array().unwrap().len(), 72);
+    assert_eq!(out["commands"].as_array().unwrap().len(), 73);
     assert!(out["project"].is_null());
 }
 
@@ -2385,6 +2385,29 @@ fn muted_voice_link_compiles_as_unconnected() {
         .unwrap()
         .2;
     assert!(plan.piano.unwrap().voice.is_some());
+}
+
+#[test]
+fn voice_preview_samples_a_node() {
+    let mut session = Session::default();
+    run(&mut session, "project.create", json!({ "name": "preview" }));
+    run(
+        &mut session,
+        "track.create",
+        json!({ "name": "Piano", "source": "piano" }),
+    );
+    let preview = run(
+        &mut session,
+        "voice.preview",
+        json!({
+            "group_id": "piano.voice",
+            "node_id": "env-gain",
+            "points": 16,
+        }),
+    );
+    assert_eq!(preview["values"].as_array().unwrap().len(), 16);
+    assert!(preview["minimum"].as_f64().unwrap().is_finite());
+    assert!(preview["maximum"].as_f64().unwrap().is_finite());
 }
 
 #[test]
