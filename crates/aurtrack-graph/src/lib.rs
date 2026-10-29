@@ -457,15 +457,43 @@ fn index_switch_ports(node: &VoiceNode, ty: SocketType) -> Vec<VoicePort> {
     ports
 }
 
+pub fn zone_input_sockets(node: &VoiceNode) -> Vec<NodeGroupSocket> {
+    if !node.zone_inputs.is_empty() {
+        return node.zone_inputs.clone();
+    }
+    vec![NodeGroupSocket::new(
+        "out",
+        "Audio",
+        NodeGroupSocketType::Audio,
+    )]
+}
+
+pub fn zone_output_sockets(node: &VoiceNode) -> Vec<NodeGroupSocket> {
+    if !node.zone_outputs.is_empty() {
+        return node.zone_outputs.clone();
+    }
+    vec![NodeGroupSocket::new(
+        "in",
+        "Audio",
+        NodeGroupSocketType::Audio,
+    )]
+}
+
 pub fn node_inputs(
     node: &VoiceNode,
     interface: &NodeGroupInterface,
     groups: &BTreeMap<String, NodeGroup>,
 ) -> Result<Vec<VoicePort>, GraphError> {
     match node.type_id.as_str() {
+        "voice.zone.repeat" => {
+            let mut ports = static_ports(&REPEAT_INPUTS);
+            ports.extend(interface_ports(&zone_input_sockets(node)));
+            Ok(ports)
+        },
+        "voice.zone.output" => Ok(interface_ports(&zone_output_sockets(node))),
         "voice.index_switch" => Ok(index_switch_ports(node, SocketType::Audio)),
         "voice.index_switch_float" => Ok(index_switch_ports(node, SocketType::Float)),
-        "group.input" => Ok(Vec::new()),
+        "group.input" | "voice.zone.input" => Ok(Vec::new()),
         "group.output" => Ok(interface_ports(&interface.outputs)),
         "voice.group" => {
             let group_id = node.group.as_deref().ok_or(GraphError::EmptyGroupId)?;
@@ -486,8 +514,10 @@ pub fn node_outputs(
     groups: &BTreeMap<String, NodeGroup>,
 ) -> Result<Vec<VoicePort>, GraphError> {
     match node.type_id.as_str() {
+        "voice.zone.repeat" => Ok(interface_ports(&zone_output_sockets(node))),
+        "voice.zone.input" => Ok(interface_ports(&zone_input_sockets(node))),
         "group.input" => Ok(interface_ports(&interface.inputs)),
-        "group.output" => Ok(Vec::new()),
+        "group.output" | "voice.zone.output" => Ok(Vec::new()),
         "voice.group" => {
             let group_id = node.group.as_deref().ok_or(GraphError::EmptyGroupId)?;
             let group = groups
@@ -1635,7 +1665,7 @@ impl VoiceGraph {
                     PortRef::fixed(NodeId::fixed("add"), "in2"),
                 ),
                 VoiceConnection::new(
-                    PortRef::fixed(NodeId::fixed("partials"), "out"),
+                    PortRef::fixed(NodeId::fixed("partials"), "in"),
                     PortRef::fixed(NodeId::fixed("osc-vca"), "in"),
                 ),
                 VoiceConnection::new(
@@ -1810,7 +1840,7 @@ impl VoiceGraph {
         }
         let input_node = input_node.ok_or(GraphError::ZoneTerminals)?;
         let output_node = output_node.ok_or(GraphError::ZoneTerminals)?;
-        let mut connections: Vec<VoiceConnection> = self
+        let connections: Vec<VoiceConnection> = self
             .connections
             .iter()
             .filter(|connection| {
@@ -1818,25 +1848,10 @@ impl VoiceGraph {
             })
             .cloned()
             .collect();
-        for connection in &mut connections {
-            if connection.from.node == input_node && connection.from.port == "out" {
-                connection.from.port = "in".to_string();
-            }
-            if connection.to.node == output_node && connection.to.port == "in" {
-                connection.to.port = "audio".to_string();
-            }
-        }
+        let _ = (&input_node, &output_node);
         let interface = NodeGroupInterface {
-            inputs: vec![NodeGroupSocket::new(
-                "in",
-                "Audio",
-                NodeGroupSocketType::Audio,
-            )],
-            outputs: vec![NodeGroupSocket::new(
-                "audio",
-                "Audio",
-                NodeGroupSocketType::Audio,
-            )],
+            inputs: zone_input_sockets(header),
+            outputs: zone_output_sockets(header),
         };
         Ok((
             VoiceGraph {
@@ -1973,6 +1988,10 @@ pub struct VoiceNode {
     pub width: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub height: Option<f64>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub zone_inputs: Vec<NodeGroupSocket>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub zone_outputs: Vec<NodeGroupSocket>,
 }
 
 #[allow(clippy::trivially_copy_pass_by_ref)]
@@ -2006,6 +2025,8 @@ impl VoiceNode {
             color: None,
             width: None,
             height: None,
+            zone_inputs: Vec::new(),
+            zone_outputs: Vec::new(),
         }
     }
 
@@ -3278,6 +3299,26 @@ mod tests {
                 && connection.to.node != NodeId::fixed("p-out")
         });
         assert!(matches!(graph.validate(), Err(GraphError::ZoneTerminals)));
+    }
+
+    #[test]
+    fn inline_zone_accepts_multiple_output_sockets() {
+        let mut graph = VoiceGraph::piano_default();
+        let outputs = vec![
+            NodeGroupSocket::new("in", "Audio", NodeGroupSocketType::Audio),
+            NodeGroupSocket::new("aux", "Aux", NodeGroupSocketType::Float),
+        ];
+        if let Some(header) = graph.nodes.get_mut(&NodeId::fixed("partials")) {
+            header.zone_outputs = outputs.clone();
+        }
+        if let Some(boundary) = graph.nodes.get_mut(&NodeId::fixed("p-out")) {
+            boundary.zone_outputs = outputs;
+        }
+        graph.validate().unwrap();
+        let (_, interface) = graph
+            .zone_body(&graph.nodes[&NodeId::fixed("partials")])
+            .unwrap();
+        assert_eq!(interface.outputs.len(), 2);
     }
 
     #[test]

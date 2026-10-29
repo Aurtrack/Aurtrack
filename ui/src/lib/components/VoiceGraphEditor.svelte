@@ -4,6 +4,7 @@
     NodeGroup,
     NodeGroupInterface,
     NodeTypeInfo,
+    NodeTypeSocket,
     VoiceConnection,
     VoiceFrame,
     VoiceGraph,
@@ -338,7 +339,41 @@
     }));
   }
 
+  function zoneSocketPorts(
+    sockets: NodeTypeSocket[] | undefined,
+    fallback: { id: string; name: string },
+  ): PortInfo[] {
+    const list = sockets?.length
+      ? sockets
+      : [
+          {
+            id: fallback.id,
+            name: fallback.name,
+            type: "audio" as const,
+            default: 0,
+          },
+        ];
+    return list.map((socket) => ({
+      id: socket.id,
+      name: socket.name,
+      ty: socket.type,
+      default: socket.default,
+      minimum: socket.minimum,
+      maximum: socket.maximum,
+      step: socket.step,
+    }));
+  }
+
   function allInputList(node: VoiceNode): PortInfo[] {
+    if (node.type_id === "voice.zone.repeat") {
+      return [
+        ...typePorts(node, "inputs").filter((port) => port.id === "count"),
+        ...zoneSocketPorts(node.zone_inputs, { id: "out", name: "Audio" }),
+      ];
+    }
+    if (node.type_id === "voice.zone.output") {
+      return zoneSocketPorts(node.zone_outputs, { id: "in", name: "Audio" });
+    }
     if (
       node.type_id === "voice.index_switch" ||
       node.type_id === "voice.index_switch_float"
@@ -381,6 +416,13 @@
   }
 
   function allOutputList(node: VoiceNode): PortInfo[] {
+    if (node.type_id === "voice.zone.repeat") {
+      return zoneSocketPorts(node.zone_outputs, { id: "in", name: "Audio" });
+    }
+    if (node.type_id === "voice.zone.input") {
+      return zoneSocketPorts(node.zone_inputs, { id: "out", name: "Audio" });
+    }
+    if (node.type_id === "voice.zone.output") return [];
     if (node.type_id === "group.output") return [];
     if (node.type_id === "group.input") {
       return interfacePorts(groupInterface.inputs);

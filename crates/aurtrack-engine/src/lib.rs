@@ -135,6 +135,8 @@ pub enum VoiceOp {
     Decay,
     Repeat {
         body: Box<VoicePlan>,
+        output: usize,
+        feedback: usize,
     },
     OscPartials {
         partials: usize,
@@ -172,12 +174,7 @@ impl VoicePlan {
         self.sample_internal(context, inputs, None).unwrap_or(0.0)
     }
 
-    fn sample_internal(
-        &self,
-        context: VoiceContext,
-        inputs: &[f64],
-        target: Option<usize>,
-    ) -> Option<f64> {
+    fn sample_values(&self, context: VoiceContext, inputs: &[f64]) -> Option<[f64; 64]> {
         if self.nodes.len() > 64 || self.output >= self.nodes.len() {
             return None;
         }
@@ -356,27 +353,69 @@ impl VoicePlan {
                     let max = node.inputs.get(2).map_or(1.0, |input| values[*input]);
                     value.clamp(min, max)
                 },
-                VoiceOp::Repeat { ref body } => {
+                VoiceOp::Repeat {
+                    ref body,
+                    output,
+                    feedback,
+                } => {
                     let count = node
                         .inputs
                         .first()
                         .map_or(1.0, |input| values[*input])
                         .round()
                         .clamp(1.0, 64.0) as usize;
-                    let mut audio = 0.0;
+                    let mut carried = node.inputs.get(1).map_or(0.0, |input| values[*input]);
+                    let extra: Vec<f64> = node
+                        .inputs
+                        .iter()
+                        .skip(2)
+                        .map(|input| values[*input])
+                        .collect();
+                    let mut result = carried;
                     for iteration in 0..count {
                         let mut loop_context = context;
                         loop_context.iteration = iteration as u64;
-                        audio = body.sample_with_inputs(loop_context, &[audio]);
+                        let mut body_inputs = Vec::with_capacity(1 + extra.len());
+                        body_inputs.push(carried);
+                        body_inputs.extend_from_slice(&extra);
+                        let sampled =
+                            body.sample_sockets(&[feedback, output], loop_context, &body_inputs)?;
+                        carried = sampled.first().copied().unwrap_or(0.0);
+                        result = sampled.get(1).copied().unwrap_or(carried);
                     }
-                    audio
+                    result
                 },
                 VoiceOp::Output => node.inputs.first().map_or(0.0, |input| values[*input]),
             };
         }
+        Some(values)
+    }
+
+    fn sample_internal(
+        &self,
+        context: VoiceContext,
+        inputs: &[f64],
+        target: Option<usize>,
+    ) -> Option<f64> {
+        let values = self.sample_values(context, inputs)?;
         target
             .and_then(|index| values.get(index).copied())
             .or_else(|| values.get(self.output).copied())
+    }
+
+    pub fn sample_sockets(
+        &self,
+        sockets: &[usize],
+        context: VoiceContext,
+        inputs: &[f64],
+    ) -> Option<Vec<f64>> {
+        let values = self.sample_values(context, inputs)?;
+        Some(
+            sockets
+                .iter()
+                .map(|index| values.get(*index).copied().unwrap_or(0.0))
+                .collect(),
+        )
     }
 }
 
@@ -1670,8 +1709,49 @@ mod tests {
     }
 
     #[test]
+    fn repeat_can_expose_a_secondary_output_slot() {
+        let mut body = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Input(0), vec![]),
+                VoiceNodePlan::new(VoiceOp::Constant(0.75), vec![]),
+                VoiceNodePlan::new(VoiceOp::Output, vec![0]),
+            ],
+            2,
+        );
+        body.set_outputs(BTreeMap::from([
+            ("audio".to_string(), 0),
+            ("aux".to_string(), 1),
+        ]));
+        let plan = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Constant(2.0), vec![]),
+                VoiceNodePlan::new(
+                    VoiceOp::Repeat {
+                        body: Box::new(body),
+                        output: 1,
+                        feedback: 0,
+                    },
+                    vec![0],
+                ),
+                VoiceNodePlan::new(VoiceOp::Output, vec![1]),
+            ],
+            2,
+        );
+        let context = VoiceContext {
+            pitch: 261.63,
+            velocity: 0.8,
+            local_time: 0.0,
+            gate: true,
+            seed: 0,
+            note_index: 0,
+            iteration: 0,
+        };
+        assert!((plan.sample(context) - 0.75).abs() < 1e-9);
+    }
+
+    #[test]
     fn repeat_zone_accumulates_body_output() {
-        let body = VoicePlan::new(
+        let mut body = VoicePlan::new(
             vec![
                 VoiceNodePlan::new(VoiceOp::Input(0), vec![]),
                 VoiceNodePlan::new(VoiceOp::Constant(1.0), vec![]),
@@ -1680,12 +1760,15 @@ mod tests {
             ],
             3,
         );
+        body.set_outputs(BTreeMap::from([("audio".to_string(), 3)]));
         let plan = VoicePlan::new(
             vec![
                 VoiceNodePlan::new(VoiceOp::Constant(4.0), vec![]),
                 VoiceNodePlan::new(
                     VoiceOp::Repeat {
                         body: Box::new(body),
+                        output: 3,
+                        feedback: 3,
                     },
                     vec![0],
                 ),

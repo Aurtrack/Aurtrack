@@ -930,23 +930,41 @@ fn compile_voice_inner(
         if node.type_id == "voice.zone.repeat" {
             let (body_graph, body_interface) = voice.zone_body(node)?;
             let mut bindings = BTreeMap::new();
-            bindings.insert("in".to_string(), 0);
+            let mut body_inputs = Vec::new();
+            for (index, socket) in aurtrack_graph::zone_input_sockets(node).iter().enumerate() {
+                bindings.insert(socket.id.clone(), index);
+                body_inputs.push(VoiceNodePlan::new(VoiceOp::Input(index), Vec::new()));
+            }
             let body = compile_voice_inner(
                 &body_graph,
                 &body_interface,
                 groups,
                 stack,
                 Some(&bindings),
-                &[VoiceNodePlan::new(VoiceOp::Input(0), Vec::new())],
+                &body_inputs,
             )?;
-            let index = nodes.len();
-            nodes.push(VoiceNodePlan::new(
-                VoiceOp::Repeat {
-                    body: Box::new(body),
-                },
-                inputs.first().copied().into_iter().collect(),
-            ));
-            indices.insert((id.clone(), "out".to_string()), index);
+            let feedback = aurtrack_graph::zone_output_sockets(node)
+                .iter()
+                .find(|socket| socket.ty == NodeGroupSocketType::Audio)
+                .and_then(|socket| body.outputs.get(&socket.id).copied())
+                .or_else(|| body.outputs.values().next().copied())
+                .ok_or(GraphError::VoiceTerminals)?;
+            for socket in aurtrack_graph::zone_output_sockets(node) {
+                let slot = *body
+                    .outputs
+                    .get(&socket.id)
+                    .ok_or(GraphError::VoiceTerminals)?;
+                let index = nodes.len();
+                nodes.push(VoiceNodePlan::new(
+                    VoiceOp::Repeat {
+                        body: Box::new(body.clone()),
+                        output: slot,
+                        feedback,
+                    },
+                    inputs.clone(),
+                ));
+                indices.insert((id.clone(), socket.id), index);
+            }
             continue;
         }
         if node.type_id == "voice.repeat" {
@@ -984,6 +1002,8 @@ fn compile_voice_inner(
             let index = nodes.len();
             nodes.push(VoiceNodePlan::new(
                 VoiceOp::Repeat {
+                    output: body.outputs.values().next().copied().unwrap_or(body.output),
+                    feedback: body.outputs.values().next().copied().unwrap_or(body.output),
                     body: Box::new(body),
                 },
                 inputs.first().copied().into_iter().collect(),

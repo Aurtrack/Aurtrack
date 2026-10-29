@@ -73,6 +73,8 @@ export type VoiceNode = {
   color?: string;
   width?: number;
   height?: number;
+  zone_inputs?: NodeTypeSocket[];
+  zone_outputs?: NodeTypeSocket[];
 };
 
 export type VoiceFrame = {
