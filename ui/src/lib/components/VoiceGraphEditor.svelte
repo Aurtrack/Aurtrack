@@ -235,6 +235,8 @@
       name: side === "inputs" ? `Input ${number}` : `Output ${number}`,
       type: "audio",
     });
+    if (side === "inputs") header.zone_inputs = [...list];
+    else header.zone_outputs = [...list];
     syncZoneInterface(header);
   }
 
@@ -246,6 +248,8 @@
     const list = ensureZoneSockets(header, side);
     if (list.length <= 1) return;
     const [removed] = list.splice(index, 1);
+    if (side === "inputs") header.zone_inputs = [...list];
+    else header.zone_outputs = [...list];
     const boundary = zoneBoundary(
       header,
       side === "inputs" ? "voice.zone.input" : "voice.zone.output",
@@ -276,6 +280,8 @@
     const socket = list[index];
     if (!socket) return;
     Object.assign(socket, patch);
+    if (side === "inputs") header.zone_inputs = [...list];
+    else header.zone_outputs = [...list];
     syncZoneInterface(header);
   }
 
