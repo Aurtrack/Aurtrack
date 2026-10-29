@@ -3314,19 +3314,72 @@ button:disabled {
 .voice-zone {
   position: absolute;
   z-index: 1;
-  border: 1px dashed #8a6f9e;
+  border: 1px solid #9d86ad;
   background: rgb(204 166 214 / 9%);
   pointer-events: none;
 }
 
+.voice-zone.selected {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+
+.voice-zone-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 28px;
+  border-bottom: 1px solid #c7b5d0;
+  padding: 0 12px;
+  background: rgb(190 160 205 / 35%);
+  pointer-events: auto;
+  cursor: grab;
+}
+
 .voice-zone-label {
-  position: absolute;
-  top: 7px;
-  left: 28px;
-  color: #7d6390;
+  color: #5e4a6b;
   font-family: var(--mono);
   font-size: 8px;
   letter-spacing: 0.08em;
+}
+
+.voice-zone-count {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: auto;
+  color: #6f5b7c;
+  font-family: var(--mono);
+  font-size: 8px;
+}
+
+.voice-zone-count .number-field {
+  width: 70px;
+}
+
+.voice-zone-linked {
+  color: var(--blue);
+}
+
+.voice-zone .voice-port {
+  pointer-events: auto;
+  z-index: 4;
+}
+
+.voice-zone .voice-port.in {
+  left: -5px;
+}
+
+.voice-zone .voice-port.out {
+  right: -5px;
+}
+
+.voice-zone .voice-port.zone-port-head {
+  top: 38px;
+}
+
+.voice-zone .voice-port.zone-port-body {
+  top: 76px;
 }
 
 .voice-frame {

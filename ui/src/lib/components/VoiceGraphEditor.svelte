@@ -121,10 +121,43 @@
     return node?.type_id === "voice.group" || node?.type_id === "voice.repeat";
   }
 
+  function isZoneChrome(node: VoiceNode): boolean {
+    return (
+      node.type_id === "voice.zone.repeat" ||
+      node.type_id === "voice.zone.input" ||
+      node.type_id === "voice.zone.output"
+    );
+  }
+
   function zoneHeaders(): VoiceNode[] {
     return Object.values(voice.nodes).filter(
       (node) => node.type_id === "voice.zone.repeat",
     );
+  }
+
+  function zoneBoundary(
+    header: VoiceNode,
+    typeId: "voice.zone.input" | "voice.zone.output",
+  ): VoiceNode | undefined {
+    return Object.values(voice.nodes).find(
+      (node) => node.zone === header.id && node.type_id === typeId,
+    );
+  }
+
+  function zonePortPoint(node: VoiceNode, side: "in" | "out"): Point | null {
+    const headerId =
+      node.type_id === "voice.zone.repeat" ? node.id : node.zone;
+    if (!headerId) return null;
+    const header = voice.nodes[headerId];
+    if (!header) return null;
+    const bounds = zoneBounds(header);
+    const boundary =
+      node.type_id === "voice.zone.input" ||
+      node.type_id === "voice.zone.output";
+    return {
+      x: side === "out" ? bounds.left + bounds.width - 5 : bounds.left + 5,
+      y: bounds.top + (boundary ? 82 : 44),
+    };
   }
 
   function zoneMemberIds(zoneId: string, seen = new Set<string>()): string[] {
@@ -631,10 +664,12 @@
       0,
       inputs.findIndex((port) => port.id === connection.to.port),
     );
-    const x1 = from.x + nodeWidth(source);
-    const y1 = from.y + portY(source, outIndex);
-    const x2 = to.x;
-    const y2 = to.y + portY(target, inIndex);
+    const start = zonePortPoint(source, "out");
+    const end = zonePortPoint(target, "in");
+    const x1 = start?.x ?? from.x + nodeWidth(source);
+    const y1 = start?.y ?? from.y + portY(source, outIndex);
+    const x2 = end?.x ?? to.x;
+    const y2 = end?.y ?? to.y + portY(target, inIndex);
     const bend = wireBend(x1, x2);
     return `M ${x1} ${y1} C ${x1 + bend} ${y1}, ${x2 - bend} ${y2}, ${x2} ${y2}`;
   }
@@ -661,11 +696,11 @@
       inputList(target).findIndex((port) => port.id === connection.to.port),
     );
     return {
-      from: {
+      from: zonePortPoint(source, "out") ?? {
         x: sourcePosition.x + nodeWidth(source),
         y: sourcePosition.y + portY(source, outIndex),
       },
-      to: {
+      to: zonePortPoint(target, "in") ?? {
         x: targetPosition.x,
         y: targetPosition.y + portY(target, inIndex),
       },
@@ -1070,6 +1105,28 @@
     nodeResize = { ids, startX: event.clientX, widths };
   }
 
+  function zoneMouseDown(event: MouseEvent, header: VoiceNode): void {
+    if (event.button !== 0) return;
+    const target = event.target as Element | null;
+    if (target?.closest("input, button, select, textarea")) return;
+    event.preventDefault();
+    event.stopPropagation();
+    selectOnly(header.id);
+    const ids = [header.id, ...zoneMemberIds(header.id)];
+    const origins: Record<string, Point> = {};
+    for (const id of ids) {
+      const position = positions[id];
+      if (position) origins[id] = { ...position };
+    }
+    drag = {
+      ids,
+      startX: event.clientX,
+      startY: event.clientY,
+      origins,
+      moved: false,
+    };
+  }
+
   function nodeMouseDown(event: MouseEvent, node: VoiceNode) {
     if (circleMode) return;
     if (wire) {
@@ -1289,9 +1346,15 @@
       return;
     }
     const target = event.target as Element | null;
+    const zoneHead = target?.closest<HTMLElement>(".voice-zone-head");
+    if (zoneHead?.dataset.zoneId) {
+      const header = voice.nodes[zoneHead.dataset.zoneId];
+      if (header) zoneMouseDown(event, header);
+      return;
+    }
     if (
       target?.closest(
-        ".voice-node, .voice-add-menu, .voice-interface-panel, .voice-wire-hit",
+        ".voice-zone-head, .voice-node, .voice-add-menu, .voice-interface-panel, .voice-wire-hit",
       )
     ) {
       return;
@@ -2899,14 +2962,112 @@
       {/each}
       {#each zoneHeaders() as header (header.id)}
         {@const bounds = zoneBounds(header)}
+        {@const inputNode = zoneBoundary(header, "voice.zone.input")}
+        {@const outputNode = zoneBoundary(header, "voice.zone.output")}
+        {@const countPort = inputList(header).find((port) => port.id === "count")}
+        {@const headerOutput = outputList(header)[0]}
         <div
           class="voice-zone"
+          class:selected={selected.has(header.id)}
           style:left={`${bounds.left}px`}
           style:top={`${bounds.top}px`}
           style:width={`${bounds.width}px`}
           style:height={`${bounds.height}px`}
         >
-          <span class="voice-zone-label">{t("voice.repeatZone")}</span>
+          <div
+            class="voice-zone-head"
+            role="button"
+            tabindex="0"
+            aria-label={t("voice.repeatZone")}
+            data-zone-id={header.id}
+            onmousedown={(event) => zoneMouseDown(event, header)}
+          >
+            <span class="voice-zone-label">{t("voice.repeatZone")}</span>
+            {#if countPort}
+              <span class="voice-zone-count">
+                {countPort.name}
+                {#if isLinked(header, "count")}
+                  <span class="voice-zone-linked">↗</span>
+                {:else}
+                  <NumberField
+                    value={header.params.count ?? countPort.default ?? 10}
+                    min={countPort.minimum ?? 1}
+                    max={countPort.maximum ?? 64}
+                    step={countPort.step ?? 1}
+                    onchange={(value) => {
+                      setParam(header, "count", value);
+                      touchVoice();
+                    }}
+                  />
+                {/if}
+              </span>
+            {/if}
+          </div>
+          {#if countPort}
+            <button
+              class="voice-port in zone-port zone-port-head"
+              class:port-float={countPort.ty === "float"}
+              style:top="38px"
+              title={`${countPort.id} (${countPort.ty})`}
+              aria-label={countPort.id}
+              data-port-node={header.id}
+              data-port-id={countPort.id}
+              data-port-side="in"
+              data-port-type={countPort.ty}
+              onmousedown={(event) => startWire(event, header, countPort, "in")}
+            ></button>
+          {/if}
+          {#if headerOutput}
+            <button
+              class="voice-port out zone-port zone-port-head"
+              class:port-audio={headerOutput.ty === "audio"}
+              style:top="38px"
+              title={`${headerOutput.id} (${headerOutput.ty})`}
+              aria-label={headerOutput.id}
+              data-port-node={header.id}
+              data-port-id={headerOutput.id}
+              data-port-side="out"
+              data-port-type={headerOutput.ty}
+              onmousedown={(event) =>
+                startWire(event, header, headerOutput, "out")}
+            ></button>
+          {/if}
+          {#if inputNode}
+            {@const inputPort = outputList(inputNode)[0]}
+            {#if inputPort}
+              <button
+                class="voice-port out zone-port zone-port-body"
+                class:port-audio={inputPort.ty === "audio"}
+                style:top="76px"
+                title={`${t("node.voice.zone.input")} (${inputPort.ty})`}
+                aria-label={t("node.voice.zone.input")}
+                data-port-node={inputNode.id}
+                data-port-id={inputPort.id}
+                data-port-side="out"
+                data-port-type={inputPort.ty}
+                onmousedown={(event) =>
+                  startWire(event, inputNode, inputPort, "out")}
+              ></button>
+            {/if}
+          {/if}
+          {#if outputNode}
+            {@const outputPort = inputList(outputNode)[0]}
+            {#if outputPort}
+              <button
+                class="voice-port in zone-port zone-port-body"
+                class:port-audio={outputPort.ty === "audio"}
+                style:top="76px"
+                title={`${t("node.voice.zone.output")} (${outputPort.ty})`}
+                aria-label={t("node.voice.zone.output")}
+                data-port-node={outputNode.id}
+                data-port-id={outputPort.id}
+                data-port-side="in"
+                data-port-type={outputPort.ty}
+                onmousedown={(event) =>
+                  startWire(event, outputNode, outputPort, "in")}
+              ></button>
+            {/if}
+          {/if}
         </div>
       {/each}
       <svg
@@ -2957,6 +3118,7 @@
 
       {#each nodes as node (node.id)}
         {@const position = positions[node.id]}
+        {#if !isZoneChrome(node)}
         <div
           class="voice-node"
           class:selected={selected.has(node.id)}
@@ -3133,6 +3295,7 @@
             {/each}
           {/if}
         </div>
+        {/if}
       {/each}
       </div>
       {#if marquee}
