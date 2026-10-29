@@ -65,6 +65,7 @@ pub struct VoiceContext {
 pub struct VoicePlan {
     pub nodes: Vec<VoiceNodePlan>,
     pub output: usize,
+    pub outputs: BTreeMap<String, usize>,
     pub node_outputs: BTreeMap<String, usize>,
 }
 
@@ -73,12 +74,22 @@ impl VoicePlan {
         Self {
             nodes,
             output,
+            outputs: BTreeMap::new(),
             node_outputs: BTreeMap::new(),
         }
     }
 
+    pub fn set_outputs(&mut self, outputs: BTreeMap<String, usize>) {
+        self.outputs = outputs;
+    }
+
     pub fn set_node_outputs(&mut self, node_outputs: BTreeMap<String, usize>) {
         self.node_outputs = node_outputs;
+    }
+
+    pub fn sample_output(&self, socket: &str, context: VoiceContext) -> Option<f64> {
+        let target = *self.outputs.get(socket)?;
+        self.sample_internal(context, &[], Some(target))
     }
 
     pub fn sample_node(&self, node_id: &str, context: VoiceContext) -> Option<f64> {

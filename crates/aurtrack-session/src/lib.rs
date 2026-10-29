@@ -784,6 +784,7 @@ fn compile_voice_inner(
     let order = voice.topological_order()?;
     let zone_body_ids = voice.zone_body_ids();
     let mut indices = BTreeMap::<(NodeId, String), usize>::new();
+    let mut outputs = BTreeMap::<String, usize>::new();
     let mut nodes = initial_nodes.to_vec();
     let mut output = None;
     for id in order {
@@ -826,6 +827,17 @@ fn compile_voice_inner(
                         .ok_or(GraphError::VoiceUnknownNode)?,
                 );
             }
+        }
+        if node.type_id == "group.output" {
+            for (index, port) in input_ports.iter().enumerate() {
+                if let Some(value) = inputs.get(index) {
+                    outputs.insert(port.id.clone(), *value);
+                    if output.is_none() {
+                        output = Some(*value);
+                    }
+                }
+            }
+            continue;
         }
         if node.type_id == "voice.vector_add" {
             for (port, left, right) in [("x", 0, 3), ("y", 1, 4), ("z", 2, 5)] {
@@ -1066,10 +1078,6 @@ fn compile_voice_inner(
             "math.map_range" => VoiceOp::MapRange,
             "math.clamp" => VoiceOp::Clamp,
             "value.float" => VoiceOp::Constant(param("value", 0.0)),
-            "group.output" => {
-                output = Some(nodes.len());
-                VoiceOp::Output
-            },
             _ => return Err(GraphError::VoiceUnknownNode),
         };
         let index = nodes.len();
@@ -1092,6 +1100,7 @@ fn compile_voice_inner(
         }
     }
     let mut plan = VoicePlan::new(nodes, output);
+    plan.set_outputs(outputs);
     plan.set_node_outputs(preview_outputs);
     Ok(plan)
 }
