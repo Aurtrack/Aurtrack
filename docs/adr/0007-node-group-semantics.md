@@ -34,6 +34,7 @@
 - `voice.attack` 与 `voice.decay` 是两个独立控制曲线，默认通过 `math.multiply` 相乘；不再使用固定公式的包络宏节点。`voice.vca` 负责音频乘控制值；`voice.noise` 只输出噪声源，不再内置包络和电平。
 - Repeat Zone 默认是内联的：`voice.zone.repeat` 头节点带 `count` 和音频输出，循环体节点通过 `zone` 字段归属到它；`voice.zone.input` / `voice.zone.output` 是显式边界。编译器把边界节点转换成临时组的输入输出后编译，因此没有隐藏上下文。旧的 `voice.repeat` 组引用保留编译能力，但 UI 不再新增。`count` 运行时钳制到 1–64，`voice.iteration` 提供迭代序号。
 - 区间头的 `width` / `height` 只描述编辑器边界，不参与 DSP；未设置时按成员节点自动包围。标题栏可以折叠循环体，折叠状态也只是编辑元数据。
+- 区间头用 `zone_inputs` / `zone_outputs` 保存多字段接口；每个字段有稳定 ID、名称、类型和顺序。UI 的增删改名同步到 Zone Input/Output 边界节点，编译器为每个输出生成独立的 Repeat 槽。
 - `voice.partial` 是单个泛音的原子节点；默认 `Partials` 由 `Repeat("piano.partial") + Partial` 组成，不再有单体 `osc.partials` 节点。
 - 节点可以有显示用的 `label`、`color` 和 `width`；帧可以有 `color`；连线可以有 `muted`。这些字段不参与 DSP。静音连线在编译时等价于不存在，输入回退到 socket 默认值。
 - 组输入 socket 未连接时使用接口的 `default`，不再固定为 0 或偷父级上下文。
