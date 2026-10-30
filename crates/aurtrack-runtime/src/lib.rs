@@ -533,7 +533,7 @@ fn build_plan(
             });
             let piano = graph.piano.clone();
             let uses_implicit_notes =
-                !matches!(track.source(), aurtrack_session::Source::Piano) || piano.is_some();
+                matches!(track.source(), aurtrack_session::Source::Sine { .. }) || piano.is_some();
             let notes = if uses_implicit_notes {
                 track
                     .clips
@@ -724,7 +724,7 @@ mod tests {
             tracks: vec![Track {
                 id: "track-1".to_string(),
                 name: "lead".to_string(),
-                graph: aurtrack_graph::AudioGraph::track("audio.instrument.silence"),
+                graph: aurtrack_graph::AudioGraph::track("audio.instrument.sine"),
                 clips: vec![Clip {
                     id: "clip-1".to_string(),
                     name: "verse".to_string(),
@@ -756,6 +756,47 @@ mod tests {
         assert_eq!(plan.tracks[0].notes.len(), 1);
         assert!((plan.tracks[0].notes[0].start - 0.75).abs() < 1e-9);
         assert!((plan.tracks[0].notes[0].frequency - 440.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn build_plan_silence_track_schedules_no_notes() {
+        let project = Project {
+            name: "silence".to_string(),
+            sample_rate: 48_000,
+            tempo_bpm: 120.0,
+            time_signature: TimeSignature {
+                numerator: 4,
+                denominator: 4,
+            },
+            length_bars: 1,
+            loop_start_tick: 0,
+            loop_end_tick: 4 * TICKS_PER_QUARTER,
+            node_groups: std::collections::BTreeMap::new(),
+            audio_groups: std::collections::BTreeMap::new(),
+            tracks: vec![Track {
+                id: "track-1".to_string(),
+                name: "silence".to_string(),
+                graph: aurtrack_graph::AudioGraph::track("audio.instrument.silence"),
+                clips: vec![Clip {
+                    id: "clip-1".to_string(),
+                    name: "notes".to_string(),
+                    start_tick: 0,
+                    duration_tick: TICKS_PER_QUARTER,
+                    notes: vec![Note {
+                        id: "note-1".to_string(),
+                        pitch: 69,
+                        start_tick: 0,
+                        duration_tick: TICKS_PER_QUARTER,
+                        velocity: 0.8,
+                    }],
+                }],
+            }],
+            master_plugin: None,
+        };
+
+        let plan = build_plan(&project, 48_000, false).unwrap();
+        assert!(plan.tracks[0].notes.is_empty());
+        assert!(plan.tracks[0].frequency.is_none());
     }
 
     #[test]

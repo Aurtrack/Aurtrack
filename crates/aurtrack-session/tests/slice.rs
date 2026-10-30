@@ -93,6 +93,42 @@ fn full_slice_produces_audio_and_undo_restores_it() {
 }
 
 #[test]
+fn silence_instrument_with_notes_renders_zero() {
+    let mut session = Session::default();
+    run(&mut session, "project.create", json!({ "name": "silence" }));
+    run(
+        &mut session,
+        "track.create",
+        json!({ "name": "silence", "source": "silence" }),
+    );
+    run(
+        &mut session,
+        "clip.create",
+        json!({ "track_id": "track-1", "start": 0.0, "duration": 1.0 }),
+    );
+    run(
+        &mut session,
+        "note.add",
+        json!({
+            "path": "/tracks/track-1/clips/clip-1",
+            "pitch": 69,
+            "start": 0.0,
+            "duration": 0.5,
+            "velocity": 1.0,
+        }),
+    );
+
+    let path = temp_path("silence");
+    let rendered = run(
+        &mut session,
+        "render.segment",
+        json!({ "duration_seconds": 0.5, "path": path }),
+    );
+    assert!(rendered["rms"].as_f64().unwrap() < 1e-9);
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn duplicate_and_quantize_notes_and_clips() {
     let mut session = Session::default();
     run(&mut session, "project.create", json!({}));

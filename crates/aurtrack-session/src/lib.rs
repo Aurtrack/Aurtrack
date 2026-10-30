@@ -5378,7 +5378,9 @@ fn render_project(
             release: settings.release,
         });
         let piano = graph.piano.as_ref();
-        let explicit_piano = matches!(track.source(), Source::Piano);
+        let source = track.source();
+        let silent = matches!(source, Source::Silence);
+        let explicit_piano = matches!(source, Source::Piano);
         let piano_notes: Vec<NotePlan> = if piano.is_some() {
             track
                 .clips
@@ -5398,7 +5400,9 @@ fn render_project(
         let release = adsr.map_or(0.0, |envelope| envelope.release.max(0.001));
         for (index, slot) in mix.iter_mut().enumerate() {
             let time = start_seconds + index as f64 / sample_rate_f64;
-            let mut sample = if let Some(piano) = piano.as_ref() {
+            let mut sample = if silent {
+                0.0
+            } else if let Some(piano) = piano.as_ref() {
                 piano.sample(&piano_notes, time)
             } else {
                 let mut sample = source_frequency.map_or(0.0, |frequency| {
