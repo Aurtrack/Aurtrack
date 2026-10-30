@@ -781,7 +781,7 @@ fn compile_voice_inner(
     input_bindings: Option<&BTreeMap<String, usize>>,
     initial_nodes: &[VoiceNodePlan],
 ) -> Result<VoicePlan, GraphError> {
-    let order = voice.topological_order()?;
+    let order = voice.topological_order_with_zones()?;
     let zone_body_ids = voice.zone_body_ids();
     let mut indices = BTreeMap::<(NodeId, String), usize>::new();
     let mut outputs = BTreeMap::<String, usize>::new();
@@ -928,6 +928,22 @@ fn compile_voice_inner(
             continue;
         }
         if node.type_id == "voice.zone.repeat" {
+            let input_node = voice
+                .nodes
+                .values()
+                .find(|candidate| {
+                    candidate.zone.as_deref() == Some(id.as_str())
+                        && candidate.type_id == "voice.zone.input"
+                })
+                .ok_or(GraphError::ZoneTerminals)?;
+            let output_node = voice
+                .nodes
+                .values()
+                .find(|candidate| {
+                    candidate.zone.as_deref() == Some(id.as_str())
+                        && candidate.type_id == "voice.zone.output"
+                })
+                .ok_or(GraphError::ZoneTerminals)?;
             let (body_graph, body_interface) = voice.zone_body(node)?;
             let mut bindings = BTreeMap::new();
             let mut body_inputs = Vec::new();
@@ -943,6 +959,59 @@ fn compile_voice_inner(
                 Some(&bindings),
                 &body_inputs,
             )?;
+            let mut external = Vec::new();
+            let count = voice
+                .connections
+                .iter()
+                .filter(|connection| {
+                    !connection.muted
+                        && connection.to.node() == &input_node.id
+                        && connection.to.port() == "count"
+                })
+                .find_map(|connection| {
+                    indices
+                        .get(&(
+                            connection.from.node().clone(),
+                            connection.from.port().to_string(),
+                        ))
+                        .copied()
+                });
+            let count_index = count.unwrap_or_else(|| {
+                let index = nodes.len();
+                nodes.push(VoiceNodePlan::new(
+                    VoiceOp::Constant(input_node.params.get("count").copied().unwrap_or(10.0)),
+                    Vec::new(),
+                ));
+                index
+            });
+            external.push(count_index);
+            for socket in aurtrack_graph::zone_input_sockets(node) {
+                let source = voice
+                    .connections
+                    .iter()
+                    .filter(|connection| {
+                        !connection.muted
+                            && connection.to.node() == &input_node.id
+                            && connection.to.port() == socket.id
+                    })
+                    .find_map(|connection| {
+                        indices
+                            .get(&(
+                                connection.from.node().clone(),
+                                connection.from.port().to_string(),
+                            ))
+                            .copied()
+                    });
+                let index = source.unwrap_or_else(|| {
+                    let index = nodes.len();
+                    nodes.push(VoiceNodePlan::new(
+                        VoiceOp::Constant(socket.default.unwrap_or(0.0)),
+                        Vec::new(),
+                    ));
+                    index
+                });
+                external.push(index);
+            }
             let feedback = aurtrack_graph::zone_output_sockets(node)
                 .iter()
                 .find(|socket| socket.ty == NodeGroupSocketType::Audio)
@@ -961,9 +1030,9 @@ fn compile_voice_inner(
                         output: slot,
                         feedback,
                     },
-                    inputs.clone(),
+                    external.clone(),
                 ));
-                indices.insert((id.clone(), socket.id), index);
+                indices.insert((output_node.id.clone(), socket.id), index);
             }
             continue;
         }

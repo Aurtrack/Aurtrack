@@ -93,7 +93,7 @@ gate ──→ out.audio
 
 `Attack` 输出 `min(time / attack, 1)`，`Decay` 输出 `exp(-time / decay)`；两者显式相乘，不再有固定公式的包络宏节点。`VCA` 负责音频乘控制值，`Noise` 只输出噪声源。
 
-默认循环是内联 Repeat Zone：`voice.zone.repeat` 是区间头节点，`count` 是 Float 输入；同一 `zone` 字段下的 `voice.zone.input`、`voice.zone.output` 和普通节点构成循环体。区块在编辑器里直接画成带边框的 Zone，不再跳进独立组。区间头保存可选的 `width` / `height`，用于手动缩放边界；标题栏可以折叠循环体。`zone_inputs` / `zone_outputs` 保存字段列表（ID、名称、类型、顺序），边界端口和编译器接口都由它生成；默认回退为一个音频输入 `out` 和一个音频输出 `in`。编辑器显示 Zone Input / Zone Output 两个可见节点：输入节点左侧接外部、右侧给循环体，输出节点左侧收循环体、右侧向外；`Count` 是 Zone Input 上的整数内联输入。`voice.iteration` 输出当前迭代序号。
+默认循环是内联 Repeat Zone：`voice.zone.repeat` 是区间头节点，只保存字段定义、Frame 和可选 `width` / `height`，不再承载 I/O 端口；`count` 是 Zone Input 上的整数内联输入。同一 `zone` 字段下的 `voice.zone.input`、`voice.zone.output` 和普通节点构成循环体。区块在编辑器里直接画成带边框的 Zone，不再跳进独立组。标题栏可以折叠循环体。`zone_inputs` / `zone_outputs` 保存字段列表（ID、名称、类型、顺序），边界端口和编译器接口都由它生成；默认回退为一个音频输入 `out` 和一个音频输出 `in`。编辑器显示 Zone Input / Zone Output 两个可见节点：输入节点左侧接外部、右侧给循环体，输出节点左侧收循环体、右侧向外。`voice.iteration` 输出当前迭代序号。
 
 旧的 `voice.repeat` 组引用仍然能编译，但不再出现在添加菜单里。内联循环体必须恰好有一个 Zone Input 和一个 Zone Output，边界节点不能直接连到 Zone 外部。默认循环体是：
 

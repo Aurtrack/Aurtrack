@@ -512,7 +512,7 @@ fn clip_and_note_commands_validate_and_undo() {
     run(
         &mut session,
         "track.create",
-        json!({ "name": "lead", "source": "silence" }),
+        json!({ "name": "lead", "source": "sine" }),
     );
 
     let clip = run(
@@ -1085,7 +1085,11 @@ fn highpass_and_drive_render() {
 fn branch_graph_connects_mix_and_renders() {
     let mut session = Session::default();
     run(&mut session, "project.create", json!({}));
-    run(&mut session, "track.create", json!({ "name": "lead" }));
+    run(
+        &mut session,
+        "track.create",
+        json!({ "name": "lead", "source": "sine" }),
+    );
     run(
         &mut session,
         "clip.create",
@@ -2629,4 +2633,105 @@ fn piano_track_renders_audible_wav() {
     let rms = rendered["rms"].as_f64().unwrap();
     assert!(rms > 0.001, "钢琴轨渲染没有声音：{rms}");
     let _ = std::fs::remove_file(path);
+}
+
+#[test]
+fn zone_ports_live_on_visible_boundary_nodes() {
+    let mut session = Session::default();
+    run(
+        &mut session,
+        "project.create",
+        json!({ "name": "zone-ports" }),
+    );
+    run(
+        &mut session,
+        "track.create",
+        json!({ "name": "piano", "source": "piano" }),
+    );
+    let project = session.project().unwrap();
+    let group = &project.node_groups["piano.voice"];
+    let graph = &group.graph;
+    let header = &graph.nodes[&aurtrack_graph::NodeId::new("partials").unwrap()];
+    assert!(
+        aurtrack_graph::node_inputs(header, &group.interface, &project.node_groups)
+            .unwrap()
+            .is_empty()
+    );
+    assert!(
+        aurtrack_graph::node_outputs(header, &group.interface, &project.node_groups)
+            .unwrap()
+            .is_empty()
+    );
+
+    let input = &graph.nodes[&aurtrack_graph::NodeId::new("p-in").unwrap()];
+    let inputs =
+        aurtrack_graph::node_inputs(input, &group.interface, &project.node_groups).unwrap();
+    assert!(
+        inputs
+            .iter()
+            .any(|port| port.id == "count" && port.ty == aurtrack_graph::SocketType::Int)
+    );
+    assert!(
+        inputs
+            .iter()
+            .any(|port| port.id == "out" && port.ty == aurtrack_graph::SocketType::Audio)
+    );
+    assert!((input.params["count"] - 10.0).abs() < 1e-9);
+
+    let output = &graph.nodes[&aurtrack_graph::NodeId::new("p-out").unwrap()];
+    let outputs =
+        aurtrack_graph::node_outputs(output, &group.interface, &project.node_groups).unwrap();
+    assert!(
+        outputs
+            .iter()
+            .any(|port| port.id == "in" && port.ty == aurtrack_graph::SocketType::Audio)
+    );
+    assert!(graph.connections.iter().any(|connection| {
+        connection.from.node().as_str() == "p-out"
+            && connection.from.port() == "in"
+            && connection.to.node().as_str() == "osc-vca"
+    }));
+}
+
+#[test]
+fn zone_external_input_connects_to_boundary() {
+    let mut session = Session::default();
+    run(
+        &mut session,
+        "project.create",
+        json!({ "name": "zone-input" }),
+    );
+    run(
+        &mut session,
+        "track.create",
+        json!({ "name": "piano", "source": "piano" }),
+    );
+    let project = session.project().unwrap().clone();
+    let mut voice = project.node_groups["piano.voice"].graph.clone();
+    let outside = aurtrack_graph::VoiceNode::new(
+        aurtrack_graph::NodeId::new("outside").unwrap(),
+        "voice.partial",
+    );
+    let outside_id = outside.id.clone();
+    voice.nodes.insert(outside_id.clone(), outside);
+    voice.connections.push(aurtrack_graph::VoiceConnection::new(
+        aurtrack_graph::PortRef::new(outside_id, "out"),
+        aurtrack_graph::PortRef::new(aurtrack_graph::NodeId::new("p-in").unwrap(), "out"),
+    ));
+    run(
+        &mut session,
+        "group.voice",
+        json!({ "group_id": "piano.voice", "voice": voice }),
+    );
+
+    let project = session.project().unwrap();
+    let graph = &project.node_groups["piano.voice"].graph;
+    assert!(graph.connections.iter().any(|connection| {
+        connection.from.node().as_str() == "outside"
+            && connection.to.node().as_str() == "p-in"
+            && connection.to.port() == "out"
+    }));
+    project.tracks[0]
+        .playback_graph(&project.node_groups, &project.audio_groups)
+        .unwrap();
 }

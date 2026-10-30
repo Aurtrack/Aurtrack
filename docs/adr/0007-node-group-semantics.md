@@ -35,7 +35,7 @@
 - Repeat Zone 默认是内联的：`voice.zone.repeat` 头节点带 `count` 和音频输出，循环体节点通过 `zone` 字段归属到它；`voice.zone.input` / `voice.zone.output` 是显式边界。编译器把边界节点转换成临时组的输入输出后编译，因此没有隐藏上下文。旧的 `voice.repeat` 组引用保留编译能力，但 UI 不再新增。`count` 运行时钳制到 1–64，`voice.iteration` 提供迭代序号。
 - 区间头的 `width` / `height` 只描述编辑器边界，不参与 DSP；未设置时按成员节点自动包围。标题栏可以折叠循环体，折叠状态也只是编辑元数据。
 - 区间头用 `zone_inputs` / `zone_outputs` 保存多字段接口；每个字段有稳定 ID、名称、类型和顺序。UI 的增删改名同步到 Zone Input/Output 边界节点，编译器为每个输出生成独立的 Repeat 槽。
-- 编辑器把边界显示成两个可见节点：Zone Input 左侧接外部、右侧给循环体；Zone Output 左侧收循环体、右侧向外。`Count` 作为整数内联输入放在 Zone Input 上。底层仍由区间头和内部边界节点承担编译。
+- 编辑器把边界显示成两个可见节点：Zone Input 左侧接外部、右侧给循环体；Zone Output 左侧收循环体、右侧向外。`Count` 作为整数内联输入放在 Zone Input 上。区间头只保存字段定义和 Frame 元数据，不再承载 I/O 端口；保存、CLI/MCP 和编译器读同一份边界端口。
 - `voice.partial` 是单个泛音的原子节点；默认 `Partials` 由 `Repeat("piano.partial") + Partial` 组成，不再有单体 `osc.partials` 节点。
 - 节点可以有显示用的 `label`、`color` 和 `width`；帧可以有 `color`；连线可以有 `muted`。这些字段不参与 DSP。静音连线在编译时等价于不存在，输入回退到 socket 默认值。
 - 组输入 socket 未连接时使用接口的 `default`，不再固定为 0 或偷父级上下文。
