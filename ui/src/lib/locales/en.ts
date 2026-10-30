@@ -160,6 +160,7 @@ export const en: Record<MessageKey, Message> = {
   "graph.plugin": "PLUGIN",
   "graph.collapse": "COLLAPSE",
   "graph.mute": "MUTE",
+  "graph.bypass": "BYPASS",
   "graph.duplicate": "DUPLICATE",
   "graph.delete": "DELETE",
   "graph.mixInputs": "TWO INPUTS",

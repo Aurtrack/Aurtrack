@@ -520,6 +520,13 @@
     return undefined;
   }
 
+  function muteActionLabel(node: VoiceNode | undefined): string {
+    const bypass = node
+      ? inputList(node).some((port) => port.ty === "audio")
+      : false;
+    return t(bypass ? "graph.bypass" : "graph.mute");
+  }
+
   function nodeLabel(node: VoiceNode): string {
     if (node.label?.trim()) return node.label.trim();
     if (node.type_id === "group.input") {
@@ -3525,7 +3532,9 @@
             }}
           >
             <span class="voice-node-title">{nodeLabel(node)}</span>
-            {#if node.muted}<span class="voice-node-muted">M</span>{/if}
+            {#if node.muted}
+              <span class="voice-node-muted" title={muteActionLabel(node)}>M</span>
+            {/if}
             <span class="voice-node-id">{node.id}</span>
           </div>
 
@@ -4264,7 +4273,7 @@
             toggleMuted();
           }}
         >
-          {t("graph.mute")}
+          {muteActionLabel(voice.nodes[nodeMenu.nodeId])}
         </button>
         <button
           role="menuitem"

@@ -1657,6 +1657,104 @@ fn node_flags_are_stored_in_project_view() {
 }
 
 #[test]
+fn muting_instrument_silences_the_track() {
+    let mut session = Session::default();
+    run(
+        &mut session,
+        "project.create",
+        json!({ "name": "instrument-mute" }),
+    );
+    run(
+        &mut session,
+        "track.create",
+        json!({ "name": "sine", "source": "sine", "frequency": 440.0 }),
+    );
+
+    let audible = temp_path("instrument-audible");
+    let rendered = run(
+        &mut session,
+        "render.segment",
+        json!({ "duration_seconds": 0.2, "path": audible }),
+    );
+    assert!(rendered["peak"].as_f64().unwrap() > 0.0);
+    let _ = std::fs::remove_file(audible);
+
+    run(
+        &mut session,
+        "node.flags",
+        json!({
+            "track_id": "track-1",
+            "node_id": "instrument",
+            "muted": true
+        }),
+    );
+    let silent = temp_path("instrument-muted");
+    let rendered = run(
+        &mut session,
+        "render.segment",
+        json!({ "duration_seconds": 0.2, "path": silent }),
+    );
+    assert!(rendered["rms"].as_f64().unwrap() < 1e-9);
+    let _ = std::fs::remove_file(silent);
+}
+
+#[test]
+fn muting_audio_effect_bypasses_it() {
+    let mut session = Session::default();
+    run(
+        &mut session,
+        "project.create",
+        json!({ "name": "effect-bypass" }),
+    );
+    run(
+        &mut session,
+        "track.create",
+        json!({ "name": "sine", "source": "sine", "frequency": 440.0 }),
+    );
+    let device = run(
+        &mut session,
+        "device.add",
+        json!({ "track_id": "track-1", "kind": "gain" }),
+    );
+    let device_id = device["device_id"].as_str().unwrap().to_string();
+    run(
+        &mut session,
+        "param.set",
+        json!({
+            "path": format!("/tracks/track-1/devices/{device_id}/params/gain"),
+            "value": 0.0
+        }),
+    );
+
+    let muted = temp_path("effect-muted");
+    let rendered = run(
+        &mut session,
+        "render.segment",
+        json!({ "duration_seconds": 0.2, "path": muted }),
+    );
+    assert!(rendered["rms"].as_f64().unwrap() < 1e-9);
+    let _ = std::fs::remove_file(muted);
+
+    run(
+        &mut session,
+        "node.flags",
+        json!({
+            "track_id": "track-1",
+            "node_id": device_id,
+            "muted": true
+        }),
+    );
+    let bypassed = temp_path("effect-bypass");
+    let rendered = run(
+        &mut session,
+        "render.segment",
+        json!({ "duration_seconds": 0.2, "path": bypassed }),
+    );
+    assert!(rendered["peak"].as_f64().unwrap() > 0.0);
+    let _ = std::fs::remove_file(bypassed);
+}
+
+#[test]
 fn audio_frames_persist_and_clear_assignments() {
     let mut session = Session::default();
     run(&mut session, "project.create", json!({ "name": "frames" }));
