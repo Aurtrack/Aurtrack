@@ -1223,6 +1223,8 @@ fn compile_voice_inner(
             "math.floor" => VoiceOp::Floor,
             "math.ceil" => VoiceOp::Ceil,
             "math.round" => VoiceOp::Round,
+            "math.exp" => VoiceOp::Exp,
+            "math.sqrt" => VoiceOp::Sqrt,
             "math.greater_than" => VoiceOp::GreaterThan,
             "math.less_than" => VoiceOp::LessThan,
             "math.map_range" => VoiceOp::MapRange,

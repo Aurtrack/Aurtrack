@@ -1377,6 +1377,22 @@ pub const VOICE_NODE_TYPES: &[VoiceNodeType] = &[
         params: &[],
     },
     VoiceNodeType {
+        id: "math.exp",
+        name: "Exp",
+        category: "Math",
+        inputs: &ONE_FLOAT_IN,
+        outputs: &FLOAT_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "math.sqrt",
+        name: "Sqrt",
+        category: "Math",
+        inputs: &ONE_FLOAT_IN,
+        outputs: &FLOAT_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
         id: "math.ceil",
         name: "Ceil",
         category: "Math",

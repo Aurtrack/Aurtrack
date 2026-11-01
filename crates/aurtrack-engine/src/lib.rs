@@ -172,6 +172,8 @@ pub enum VoiceOp {
     Floor,
     Ceil,
     Round,
+    Exp,
+    Sqrt,
     GreaterThan,
     LessThan,
     MapRange,
@@ -473,6 +475,18 @@ impl VoicePlan {
                     .first()
                     .map_or(0.0, |input| values[*input])
                     .round(),
+                VoiceOp::Exp => {
+                    let value = node
+                        .inputs
+                        .first()
+                        .map_or(0.0, |input| values[*input])
+                        .exp();
+                    if value.is_finite() { value } else { 0.0 }
+                },
+                VoiceOp::Sqrt => {
+                    let value = node.inputs.first().map_or(0.0, |input| values[*input]);
+                    if value < 0.0 { 0.0 } else { value.sqrt() }
+                },
                 VoiceOp::GreaterThan => {
                     let a = node.inputs.first().map_or(0.0, |input| values[*input]);
                     let b = node.inputs.get(1).map_or(0.0, |input| values[*input]);
@@ -1679,6 +1693,31 @@ fn advance(position: u64, loop_frames: u64, loop_start: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn exp_and_sqrt_primitives_sample() {
+        let plan = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Constant(0.0), vec![]),
+                VoiceNodePlan::new(VoiceOp::Exp, vec![0]),
+                VoiceNodePlan::new(VoiceOp::Constant(9.0), vec![]),
+                VoiceNodePlan::new(VoiceOp::Sqrt, vec![2]),
+                VoiceNodePlan::new(VoiceOp::Add, vec![1, 3]),
+                VoiceNodePlan::new(VoiceOp::Output, vec![4]),
+            ],
+            5,
+        );
+        let context = VoiceContext {
+            pitch: 440.0,
+            velocity: 1.0,
+            local_time: 0.0,
+            gate: true,
+            seed: 0,
+            note_index: 0,
+            iteration: 0,
+        };
+        assert!((plan.sample(context) - 4.0).abs() < 1e-9);
+    }
 
     #[test]
     fn biquad_passes_or_blocks_dc() {
