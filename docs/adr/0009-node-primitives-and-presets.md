@@ -89,6 +89,7 @@ Aurtrack 的节点系统里有一批“看起来是节点、实际是复合算�
 
 - 第 1 步完成：数学原语已加入节点目录；Voice/Audio 计划上限提高到 256，超限在编译期返回 `NodeLimit`，不再静默输出 0。
 - 第 2 步进行中：`osc.sine`、`env.adsr`、`filter.biquad.lowpass/highpass`、`math.exp/sqrt` 已加入；`voice.partial` 预设组尚未替换。
+- 预设可复制：新增 `group.duplicate`，复制图/接口/名称并使用新 ID；UI 入口尚未添加。
 
 ## 非目标
 
