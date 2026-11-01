@@ -477,7 +477,8 @@ fn compile_audio_graph(
                     &mut nodes,
                 )?;
                 let op = match node.type_id.as_str() {
-                    "audio.group" | "audio.instrument.silence" => GraphOp::Voice,
+                    "audio.group" => GraphOp::Voice,
+                    "audio.instrument.silence" => GraphOp::Constant(0.0),
                     "audio.instrument.sine" => GraphOp::Sine,
                     "audio.value" => GraphOp::Constant(node.param("value").unwrap_or(0.0)),
                     "audio.lfo" => GraphOp::Lfo(LfoPlan::new(

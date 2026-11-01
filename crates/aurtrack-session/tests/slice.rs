@@ -118,6 +118,17 @@ fn silence_instrument_with_notes_renders_zero() {
         }),
     );
 
+    let project = session.project().unwrap();
+    let (_, _, plan) = project.tracks[0]
+        .playback_graph(&project.node_groups, &project.audio_groups)
+        .unwrap();
+    assert!(
+        !plan
+            .nodes
+            .iter()
+            .any(|node| matches!(node.op, aurtrack_engine::GraphOp::Voice))
+    );
+
     let path = temp_path("silence");
     let rendered = run(
         &mut session,

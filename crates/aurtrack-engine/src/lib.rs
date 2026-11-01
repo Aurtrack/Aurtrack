@@ -365,23 +365,27 @@ impl VoicePlan {
                         .round()
                         .clamp(1.0, 64.0) as usize;
                     let mut carried = node.inputs.get(1).map_or(0.0, |input| values[*input]);
-                    let extra: Vec<f64> = node
-                        .inputs
-                        .iter()
-                        .skip(2)
-                        .map(|input| values[*input])
-                        .collect();
+                    let extra_len = node.inputs.len().saturating_sub(2).min(64);
+                    let mut extra = [0.0_f64; 64];
+                    for (slot, input) in extra.iter_mut().zip(node.inputs.iter().skip(2)) {
+                        *slot = values[*input];
+                    }
                     let mut result = carried;
+                    let mut body_inputs = [0.0_f64; 65];
+                    let mut sampled = [0.0_f64; 2];
                     for iteration in 0..count {
                         let mut loop_context = context;
                         loop_context.iteration = iteration as u64;
-                        let mut body_inputs = Vec::with_capacity(1 + extra.len());
-                        body_inputs.push(carried);
-                        body_inputs.extend_from_slice(&extra);
-                        let sampled =
-                            body.sample_sockets(&[feedback, output], loop_context, &body_inputs)?;
-                        carried = sampled.first().copied().unwrap_or(0.0);
-                        result = sampled.get(1).copied().unwrap_or(carried);
+                        body_inputs[0] = carried;
+                        body_inputs[1..=extra_len].copy_from_slice(&extra[..extra_len]);
+                        body.sample_sockets_into(
+                            &[feedback, output],
+                            loop_context,
+                            &body_inputs[..=extra_len],
+                            &mut sampled,
+                        )?;
+                        carried = sampled[0];
+                        result = sampled[1];
                     }
                     result
                 },
@@ -409,13 +413,24 @@ impl VoicePlan {
         context: VoiceContext,
         inputs: &[f64],
     ) -> Option<Vec<f64>> {
+        let mut output = vec![0.0; sockets.len()];
+        self.sample_sockets_into(sockets, context, inputs, &mut output)?;
+        Some(output)
+    }
+
+    /// 音频线程路径：把 socket 结果写进调用方缓冲区，避免分配。
+    pub fn sample_sockets_into(
+        &self,
+        sockets: &[usize],
+        context: VoiceContext,
+        inputs: &[f64],
+        output: &mut [f64],
+    ) -> Option<()> {
         let values = self.sample_values(context, inputs)?;
-        Some(
-            sockets
-                .iter()
-                .map(|index| values.get(*index).copied().unwrap_or(0.0))
-                .collect(),
-        )
+        for (slot, index) in output.iter_mut().zip(sockets) {
+            *slot = values.get(*index).copied().unwrap_or(0.0);
+        }
+        Some(())
     }
 }
 

@@ -487,6 +487,19 @@
     return t(bypass ? "graph.bypass" : "graph.mute");
   }
 
+  function nodeTypeHint(node: VoiceNode): string {
+    if (node.type_id === "voice.zone.repeat") return "Repeat Zone";
+    if (node.type_id === "voice.zone.input") return "Zone Input";
+    if (node.type_id === "voice.zone.output") return "Zone Output";
+    if (node.type_id === "voice.group") {
+      return nodeGroup(node)?.name ?? "Voice Group";
+    }
+    if (node.type_id === "audio.group.instance") return "Audio Group";
+    if (node.type_id === "audio.group") return "Piano Voice Group";
+    const info = typeById.get(node.type_id);
+    return info ? nodeTypeLabel(info) : node.type_id;
+  }
+
   function nodeLabel(node: VoiceNode): string {
     if (node.label?.trim()) return node.label.trim();
     if (node.type_id === "group.input") {
@@ -3493,6 +3506,7 @@
           <div
             class="voice-node-head"
             role="presentation"
+            title={`${nodeLabel(node)} · ${nodeTypeHint(node)}`}
             style:background={node.color
               ? `color-mix(in srgb, ${node.color} 58%, #222228)`
               : undefined}
