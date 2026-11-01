@@ -17,6 +17,7 @@ export const en: Record<MessageKey, Message> = {
   "menu.render": "RENDER",
   "menu.view": "VIEW",
   "menu.help": "HELP",
+  "menu.newProject": "New project…",
   "menu.open": "Open project…",
   "menu.save": "Save",
   "menu.saveAs": "Save as…",
@@ -277,6 +278,11 @@ export const en: Record<MessageKey, Message> = {
   "close.discard": "EXIT WITHOUT SAVING",
   "close.cancel": "CANCEL",
 
+  "newProject.title": "NEW PROJECT",
+  "newProject.message":
+    "The current project has unsaved changes. Starting a new project will discard them.",
+  "newProject.confirm": "DISCARD AND CREATE",
+  "newProject.cancel": "CANCEL",
   "open.title": "OPEN ANOTHER PROJECT",
   "open.message":
     "The current project has unsaved changes. Opening another project will discard them.",
@@ -298,6 +304,9 @@ export const en: Record<MessageKey, Message> = {
   "plugins.empty": "NOTHING FOUND",
   "plugins.close": "CLOSE",
   "status.connecting": "Connecting to session…",
+  "status.projectCreated": "New project created",
+  "status.projectCreateFailed": (params) =>
+    `Create project failed: ${params.message}`,
   "status.ready": "Session ready. Add a track, or press PLAY.",
   "status.initFailed": (params) => `Init failed: ${params.message}`,
   "status.trackCreated": (params) => `Created ${params.id}`,

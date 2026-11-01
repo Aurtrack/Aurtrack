@@ -31,6 +31,37 @@
   </div>
 {/if}
 
+{#if session.pendingNewProject}
+  <div class="modal-backdrop">
+    <div
+      class="modal"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="new-project-title"
+    >
+      <div class="modal-head">
+        <span class="title" id="new-project-title">{t("newProject.title")}</span>
+      </div>
+      <p class="modal-text">{t("newProject.message")}</p>
+      <div class="modal-actions">
+        <button
+          class="primary"
+          disabled={session.busy}
+          onclick={() => void session.confirmPendingNewProject()}
+        >
+          {t("newProject.confirm")}
+        </button>
+        <button
+          disabled={session.busy}
+          onclick={() => session.cancelPendingNewProject()}
+        >
+          {t("newProject.cancel")}
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
 {#if session.recoveryAvailable}
   <div class="modal-backdrop">
     <div

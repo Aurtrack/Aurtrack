@@ -59,7 +59,30 @@
     setLocale(next);
     close();
   }
+
+  function handleShortcut(event: KeyboardEvent) {
+    if (
+      !(event.ctrlKey || event.metaKey) ||
+      event.altKey ||
+      event.key.toLowerCase() !== "n"
+    ) {
+      return;
+    }
+    const target = document.activeElement;
+    if (
+      target instanceof HTMLInputElement ||
+      target instanceof HTMLTextAreaElement ||
+      target instanceof HTMLSelectElement ||
+      (target instanceof HTMLElement && target.isContentEditable)
+    ) {
+      return;
+    }
+    event.preventDefault();
+    void session.newProject();
+  }
 </script>
+
+<svelte:window onkeydown={handleShortcut} />
 
 <nav class="top-menu" aria-label={t("menu.label")}>
   {#each menus as menu}
@@ -78,6 +101,15 @@
       {#if openMenu === menu.id}
         <div class="menu-popover" role="menu">
           {#if menu.id === "file"}
+            <button
+              class="menu-item"
+              role="menuitem"
+              disabled={session.busy}
+              onclick={() => run(() => void session.newProject())}
+            >
+              <span>{t("menu.newProject")}</span>
+              <span class="menu-shortcut">Ctrl+N</span>
+            </button>
             <button
               class="menu-item"
               role="menuitem"

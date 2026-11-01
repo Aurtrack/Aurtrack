@@ -162,6 +162,7 @@ export class SessionStore {
   closeRequested = $state(false);
   pluginManagerOpen = $state(false);
   pendingOpenPath = $state<string | null>(null);
+  pendingNewProject = $state(false);
   clipboard = $state<Clipboard | null>(null);
   recentProjects = $state<RecentProject[]>(loadRecentProjects());
   private lastSeekAt = 0;
@@ -590,6 +591,41 @@ export class SessionStore {
 
   cancelPendingOpen() {
     this.pendingOpenPath = null;
+  }
+
+  async newProject() {
+    if (this.busy) return;
+    if (this.dirty) {
+      this.pendingNewProject = true;
+      return;
+    }
+    await this.createNewProject();
+  }
+
+  async confirmPendingNewProject() {
+    this.pendingNewProject = false;
+    await this.createNewProject();
+  }
+
+  cancelPendingNewProject() {
+    this.pendingNewProject = false;
+  }
+
+  private async createNewProject() {
+    if (this.busy) return;
+    this.busy = true;
+    try {
+      await call("project.create", { name: t("project.defaultName") });
+      this.projectPath = "";
+      await this.refreshProject();
+      await this.clearRecovery();
+      this.ensureSelection();
+      this.setStatus("status.projectCreated");
+    } catch (error) {
+      this.fail("status.projectCreateFailed", error);
+    } finally {
+      this.busy = false;
+    }
   }
 
   cancelClose() {
