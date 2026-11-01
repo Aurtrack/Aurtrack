@@ -963,6 +963,18 @@ const SINE_INPUTS: [VoiceSocketSpec; 3] = [
         .with_default(0.0)
         .with_range(-1000.0, 1000.0),
 ];
+const BIQUAD_INPUTS: [VoiceSocketSpec; 4] = [
+    VoiceSocketSpec::new("in", "Audio", SocketType::Audio),
+    VoiceSocketSpec::new("cutoff", "Cutoff", SocketType::Float)
+        .with_default(1200.0)
+        .with_range(20.0, 20_000.0),
+    VoiceSocketSpec::new("q", "Q", SocketType::Float)
+        .with_default(0.707)
+        .with_range(0.1, 10.0),
+    VoiceSocketSpec::new("rate", "Sample Rate", SocketType::Float)
+        .with_default(48_000.0)
+        .with_range(1_000.0, 192_000.0),
+];
 const ADSR_INPUTS: [VoiceSocketSpec; 6] = [
     VoiceSocketSpec::new("gate", "Gate", SocketType::Gate).with_default(0.0),
     VoiceSocketSpec::new("time", "Time", SocketType::Float)
@@ -1241,6 +1253,22 @@ pub const VOICE_NODE_TYPES: &[VoiceNodeType] = &[
         name: "Noise",
         category: "Generator",
         inputs: &NOISE_SOURCE_INPUTS,
+        outputs: &AUDIO_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "filter.biquad.lowpass",
+        name: "Biquad Lowpass",
+        category: "Filter",
+        inputs: &BIQUAD_INPUTS,
+        outputs: &AUDIO_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "filter.biquad.highpass",
+        name: "Biquad Highpass",
+        category: "Filter",
+        inputs: &BIQUAD_INPUTS,
         outputs: &AUDIO_OUT,
         params: &[],
     },

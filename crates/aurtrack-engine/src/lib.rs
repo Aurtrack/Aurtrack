@@ -135,6 +135,9 @@ pub enum VoiceOp {
     Attack,
     Decay,
     Adsr,
+    Biquad {
+        highpass: bool,
+    },
     Repeat {
         body: Box<VoicePlan>,
         output: usize,
@@ -312,6 +315,49 @@ impl VoicePlan {
                         let release = release.max(0.0001);
                         (adsr_held(off, attack, decay, sustain) * (1.0 - elapsed / release))
                             .max(0.0)
+                    }
+                },
+                VoiceOp::Biquad { highpass } => {
+                    let input = node.inputs.first().map_or(0.0, |input| values[*input]);
+                    let cutoff = node.inputs.get(1).map_or(1200.0, |input| values[*input]);
+                    let q = node.inputs.get(2).map_or(0.707, |input| values[*input]);
+                    let rate = node.inputs.get(3).map_or(48_000.0, |input| values[*input]);
+                    if !input.is_finite()
+                        || !cutoff.is_finite()
+                        || !q.is_finite()
+                        || !rate.is_finite()
+                    {
+                        0.0
+                    } else {
+                        let rate = rate.clamp(1_000.0, 192_000.0);
+                        let cutoff = cutoff.clamp(20.0, rate * 0.45);
+                        let q = q.clamp(0.1, 10.0);
+                        let omega = std::f64::consts::TAU * cutoff / rate;
+                        let alpha = omega.sin() / (2.0 * q);
+                        let cosine = omega.cos();
+                        let (b0, b1, b2) = if highpass {
+                            let b0 = f64::midpoint(1.0, cosine);
+                            (b0, -2.0 * b0, b0)
+                        } else {
+                            ((1.0 - cosine) / 2.0, 1.0 - cosine, (1.0 - cosine) / 2.0)
+                        };
+                        let a0 = 1.0 + alpha;
+                        let a1 = -2.0 * cosine;
+                        let a2 = 1.0 - alpha;
+                        let b0 = b0 / a0;
+                        let b1 = b1 / a0;
+                        let b2 = b2 / a0;
+                        let a1 = a1 / a0;
+                        let a2 = a2 / a0;
+                        let slot = (context.note_index as usize * 2) % (node.state.len() - 1);
+                        let z1 = f64::from_bits(node.state[slot].load(Ordering::Relaxed));
+                        let z2 = f64::from_bits(node.state[slot + 1].load(Ordering::Relaxed));
+                        let output = b0 * input + z1;
+                        let next_z1 = b1 * input - a1 * output + z2;
+                        let next_z2 = b2 * input - a2 * output;
+                        node.state[slot].store(next_z1.to_bits(), Ordering::Relaxed);
+                        node.state[slot + 1].store(next_z2.to_bits(), Ordering::Relaxed);
+                        if output.is_finite() { output } else { 0.0 }
                     }
                 },
                 VoiceOp::Attack => {
@@ -1633,6 +1679,39 @@ fn advance(position: u64, loop_frames: u64, loop_start: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn biquad_passes_or_blocks_dc() {
+        let context = VoiceContext {
+            pitch: 440.0,
+            velocity: 1.0,
+            local_time: 0.0,
+            gate: true,
+            seed: 0,
+            note_index: 0,
+            iteration: 0,
+        };
+        let sample = |highpass| {
+            let plan = VoicePlan::new(
+                vec![
+                    VoiceNodePlan::new(VoiceOp::Constant(1.0), vec![]),
+                    VoiceNodePlan::new(VoiceOp::Constant(500.0), vec![]),
+                    VoiceNodePlan::new(VoiceOp::Constant(0.707), vec![]),
+                    VoiceNodePlan::new(VoiceOp::Constant(48_000.0), vec![]),
+                    VoiceNodePlan::new(VoiceOp::Biquad { highpass }, vec![0, 1, 2, 3]),
+                    VoiceNodePlan::new(VoiceOp::Output, vec![4]),
+                ],
+                5,
+            );
+            let mut output = 0.0;
+            for _ in 0..2048 {
+                output = plan.sample(context);
+            }
+            output
+        };
+        assert!(sample(false) > 0.9);
+        assert!(sample(true).abs() < 0.1);
+    }
 
     #[test]
     fn adsr_releases_after_gate_closes() {

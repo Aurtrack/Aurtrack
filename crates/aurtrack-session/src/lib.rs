@@ -1199,6 +1199,8 @@ fn compile_voice_inner(
             "voice.decay" => VoiceOp::Decay,
             "env.adsr" => VoiceOp::Adsr,
             "voice.noise" => VoiceOp::Noise,
+            "filter.biquad.lowpass" => VoiceOp::Biquad { highpass: false },
+            "filter.biquad.highpass" => VoiceOp::Biquad { highpass: true },
             "voice.vca" => VoiceOp::Vca,
             "voice.add" | "voice.sum" | "voice.sum_float" | "math.add" => VoiceOp::Add,
             "voice.mix" => VoiceOp::Mix,
