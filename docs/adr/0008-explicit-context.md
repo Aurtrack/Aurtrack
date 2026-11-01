@@ -67,6 +67,7 @@
 | `GraphOp::Voice` | 所有 Voice 节点共享轨道级 voice | 已修：只有 `Track.source` 指向的组编译 Voice |
 | ADSR/plugin 选择 | 扫描任意节点取 ADSR/插件 | 已修：只接受输出路径上的节点 |
 | 多个 plugin | 播放计划 last-wins | 已修：图校验拒绝多个 plugin |
+| 多个 ADSR | 包络计划 last-wins | 已修：音频图校验拒绝多个 ADSR |
 | `audio.instrument.silence` | 曾编译为 Voice，透传全局声部 | 已修 |
 | 节点 mute | 旁通与静音语义混用 | 已修 |
 | Zone 边界 | header 承载外部端口，CLI/UI 不一致 | 已修 |
