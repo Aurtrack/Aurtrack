@@ -952,6 +952,17 @@ const WHITE_NOISE_OUT: [VoiceSocketSpec; 1] =
         .with_default(0.0)
         .with_range(0.0, 1.0)
         .with_step(0.001)];
+const SINE_INPUTS: [VoiceSocketSpec; 3] = [
+    VoiceSocketSpec::new("freq", "Frequency", SocketType::Float)
+        .with_default(440.0)
+        .with_range(0.0, 20_000.0),
+    VoiceSocketSpec::new("phase", "Phase", SocketType::Float)
+        .with_default(0.0)
+        .with_range(-std::f64::consts::TAU, std::f64::consts::TAU),
+    VoiceSocketSpec::new("time", "Time", SocketType::Float)
+        .with_default(0.0)
+        .with_range(-1000.0, 1000.0),
+];
 const ONE_FLOAT_IN: [VoiceSocketSpec; 1] =
     [VoiceSocketSpec::new("value", "Value", SocketType::Float)
         .with_default(0.0)
@@ -1189,6 +1200,14 @@ pub const VOICE_NODE_TYPES: &[VoiceNodeType] = &[
         category: "Envelope",
         inputs: &DECAY_INPUTS,
         outputs: &FLOAT_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "osc.sine",
+        name: "Sine",
+        category: "Oscillator",
+        inputs: &SINE_INPUTS,
+        outputs: &AUDIO_OUT,
         params: &[],
     },
     VoiceNodeType {

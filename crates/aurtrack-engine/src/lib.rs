@@ -130,6 +130,7 @@ pub enum VoiceOp {
     Input(usize),
     WhiteNoise,
     Constant(f64),
+    Sine,
     Partial,
     Attack,
     Decay,
@@ -206,6 +207,20 @@ impl VoicePlan {
                     white_noise(value)
                 },
                 VoiceOp::Constant(value) => value,
+                VoiceOp::Sine => {
+                    let frequency = node
+                        .inputs
+                        .first()
+                        .map_or(440.0, |input| values[*input])
+                        .clamp(0.0, 20_000.0);
+                    let phase = node.inputs.get(1).map_or(0.0, |input| values[*input]);
+                    let time = node.inputs.get(2).map_or(0.0, |input| values[*input]);
+                    if !frequency.is_finite() || !phase.is_finite() || !time.is_finite() {
+                        0.0
+                    } else {
+                        (std::f64::consts::TAU * frequency * time + phase).sin()
+                    }
+                },
                 VoiceOp::OscPartials {
                     partials,
                     inharmonicity,
@@ -1573,6 +1588,30 @@ fn advance(position: u64, loop_frames: u64, loop_start: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sine_oscillator_samples_frequency_and_phase() {
+        let plan = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Constant(1.0), vec![]),
+                VoiceNodePlan::new(VoiceOp::Constant(0.0), vec![]),
+                VoiceNodePlan::new(VoiceOp::Constant(0.25), vec![]),
+                VoiceNodePlan::new(VoiceOp::Sine, vec![0, 1, 2]),
+                VoiceNodePlan::new(VoiceOp::Output, vec![3]),
+            ],
+            4,
+        );
+        let context = VoiceContext {
+            pitch: 440.0,
+            velocity: 1.0,
+            local_time: 0.0,
+            gate: true,
+            seed: 0,
+            note_index: 0,
+            iteration: 0,
+        };
+        assert!((plan.sample(context) - 1.0).abs() < 1e-9);
+    }
 
     #[test]
     fn math_primitives_sample() {

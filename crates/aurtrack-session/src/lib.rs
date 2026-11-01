@@ -1190,6 +1190,7 @@ fn compile_voice_inner(
         }
         let param = |name: &str, default: f64| node.params.get(name).copied().unwrap_or(default);
         let op = match node.type_id.as_str() {
+            "osc.sine" => VoiceOp::Sine,
             "voice.partial" => VoiceOp::Partial,
             "voice.iteration" => VoiceOp::Iteration,
             "voice.pitch" => VoiceOp::Pitch,
