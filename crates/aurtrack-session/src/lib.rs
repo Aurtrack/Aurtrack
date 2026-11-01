@@ -1044,7 +1044,14 @@ fn compile_voice_inner(
             let count_index = count.unwrap_or_else(|| {
                 let index = nodes.len();
                 nodes.push(VoiceNodePlan::new(
-                    VoiceOp::Constant(input_node.params.get("count").copied().unwrap_or(10.0)),
+                    VoiceOp::Constant(
+                        input_node
+                            .params
+                            .get("count")
+                            .or_else(|| node.params.get("count"))
+                            .copied()
+                            .unwrap_or(10.0),
+                    ),
                     Vec::new(),
                 ));
                 index

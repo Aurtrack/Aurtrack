@@ -427,6 +427,7 @@ export const zhCN = {
   "voice.zoneOutputs": "输出字段",
   "voice.addSocket": "添加字段",
   "voice.zoneCarryPairs": "跨迭代携带值",
+  "voice.repeatCount": "迭代次数",
   "voice.addCarry": "添加携带值",
   "voice.removeSocket": "删除字段",
   "node.voice.partial": "泛音",

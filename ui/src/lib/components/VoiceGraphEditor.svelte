@@ -4054,6 +4054,24 @@
             <div class="node-sidebar-type">{node.type_id}</div>
             {#if node.type_id === "voice.zone.repeat"}
               {@const sockets = editableZoneSockets(node, "inputs")}
+              <label class="zone-count-field">
+                <span>{t("voice.repeatCount")}</span>
+                <NumberField
+                  value={node.params.count ??
+                    zoneBoundary(node, "voice.zone.input")?.params.count ??
+                    10}
+                  min={0}
+                  max={64}
+                  step={1}
+                  precision={0}
+                  onchange={(value) => {
+                    node.params.count = value;
+                    const input = zoneBoundary(node, "voice.zone.input");
+                    if (input) input.params.count = value;
+                    touchVoice();
+                  }}
+                />
+              </label>
               <div class="zone-interface-editor">
                 <div class="node-sidebar-label">
                   {t("voice.zoneCarryPairs")}

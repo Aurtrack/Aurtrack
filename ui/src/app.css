@@ -3061,6 +3061,17 @@ button:disabled {
   height: 20px;
 }
 
+.zone-count-field {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  font-family: "Cascadia Mono", Consolas, monospace;
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+}
+
 .zone-interface-editor {
   display: flex;
   flex-direction: column;
