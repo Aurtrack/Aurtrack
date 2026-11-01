@@ -96,6 +96,7 @@ Aurtrack 的节点系统里有一批“看起来是节点、实际是复合算�
 - 音频域 `audio.instrument.sine` 已暴露 Phase 控制输入；它仍是源节点，未改由组实现。
 - 新增 `track.source` 命令和节点侧栏“设为音源”入口；删除源后可以重新指定，传 null 清空。
 - 数值输入的 Voice 组改为 `GroupCall` 子计划，按插槽传入父图的值；修复嵌套组把父索引误当子节点、导致 `piano.partial` 的 time 绑到内部常量的问题。
+- 默认钢琴不再用 `voice.pitch` / `voice.velocity` 读取隐式上下文；`note.separate` 的 pitch/velocity 作为 Repeat 成对输入进入 `piano.partial`。
 
 ## 剩余缺口
 
