@@ -291,6 +291,7 @@ fn compile_audio_graph(
     audio_groups: &BTreeMap<String, AudioGroup>,
     interface: Option<&NodeGroupInterface>,
     input_bindings: Option<&BTreeMap<String, usize>>,
+    source: Option<&NodeId>,
     stack: &mut Vec<String>,
 ) -> Result<CompiledAudio, GraphError> {
     let mut indices = BTreeMap::<(NodeId, String), usize>::new();
@@ -380,6 +381,7 @@ fn compile_audio_graph(
                     audio_groups,
                     Some(&group.interface),
                     Some(&bindings),
+                    None,
                     stack,
                 );
                 stack.pop();
@@ -478,7 +480,13 @@ fn compile_audio_graph(
                     &mut nodes,
                 )?;
                 let op = match node.type_id.as_str() {
-                    "audio.group" => GraphOp::Voice,
+                    "audio.group" => {
+                        if source == Some(node.id()) {
+                            GraphOp::Voice
+                        } else {
+                            GraphOp::Constant(0.0)
+                        }
+                    },
                     "audio.instrument.silence" => GraphOp::Constant(0.0),
                     "audio.instrument.sine" => GraphOp::Sine,
                     "audio.value" => GraphOp::Constant(node.param("value").unwrap_or(0.0)),
@@ -764,6 +772,7 @@ impl Track {
             audio_groups,
             None,
             None,
+            Some(&self.source),
             &mut Vec::new(),
         )?;
         let nodes = compiled.nodes;
