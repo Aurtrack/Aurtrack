@@ -68,19 +68,31 @@ pub struct VoicePlan {
     pub outputs: BTreeMap<String, usize>,
     pub node_outputs: BTreeMap<String, usize>,
     repeat_cache: Arc<[AtomicU64]>,
+    repeat_stride: usize,
 }
 
 impl VoicePlan {
     pub fn new(nodes: Vec<VoiceNodePlan>, output: usize) -> Self {
+        let repeat_stride = nodes
+            .iter()
+            .map(|node| match &node.op {
+                VoiceOp::Repeat { outputs, .. } => outputs.len(),
+                _ => 0,
+            })
+            .max()
+            .unwrap_or(1)
+            .max(1);
+        let repeat_slots = nodes.len().max(1).saturating_mul(repeat_stride);
         Self {
             nodes,
             output,
             outputs: BTreeMap::new(),
             node_outputs: BTreeMap::new(),
-            repeat_cache: (0..REPEAT_CACHE_SLOTS)
+            repeat_cache: (0..repeat_slots)
                 .map(|_| AtomicU64::new(0))
                 .collect::<Vec<_>>()
                 .into(),
+            repeat_stride,
         }
     }
 
@@ -613,8 +625,8 @@ impl VoicePlan {
                             )?;
                             carried = sampled;
                         }
-                        let base = index * MAX_REPEAT_OUTPUTS;
-                        for (slot, value) in carried.iter().enumerate() {
+                        let base = index * self.repeat_stride;
+                        for (slot, value) in carried[..outputs.len()].iter().enumerate() {
                             self.repeat_cache[base + slot]
                                 .store(value.to_bits(), Ordering::Relaxed);
                         }
@@ -622,7 +634,7 @@ impl VoicePlan {
                     }
                 },
                 VoiceOp::RepeatResult { source, slot } => {
-                    let base = source * MAX_REPEAT_OUTPUTS + slot;
+                    let base = source * self.repeat_stride + slot;
                     self.repeat_cache
                         .get(base)
                         .map_or(0.0, |value| f64::from_bits(value.load(Ordering::Relaxed)))
@@ -1066,9 +1078,7 @@ pub const MAX_VOICE_NODES: usize = 256;
 pub const VOICE_STATE_SLOTS: usize = 128;
 
 /// 一个 Repeat Zone 最多携带的输出值数量。
-pub const MAX_REPEAT_OUTPUTS: usize = 16;
-
-const REPEAT_CACHE_SLOTS: usize = MAX_VOICE_NODES * MAX_REPEAT_OUTPUTS;
+pub const MAX_REPEAT_OUTPUTS: usize = 64;
 
 /// 每个音符可用的 Voice 延迟采样数。
 pub const VOICE_DELAY_SAMPLES: usize = 4096;
