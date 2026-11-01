@@ -566,17 +566,31 @@ impl NodeGroupInterface {
     pub fn partial() -> Self {
         Self {
             inputs: vec![
-                NodeGroupSocket::new("pitch", "Pitch", NodeGroupSocketType::Float),
+                NodeGroupSocket::new("pitch", "Pitch", NodeGroupSocketType::Float)
+                    .with_range(20.0, 20_000.0)
+                    .with_step(0.01),
                 NodeGroupSocket::new("velocity", "Velocity", NodeGroupSocketType::Float)
-                    .with_default(0.8),
-                NodeGroupSocket::new("time", "Time", NodeGroupSocketType::Float),
-                NodeGroupSocket::new("index", "Index", NodeGroupSocketType::Int),
+                    .with_default(0.8)
+                    .with_range(0.0, 1.0)
+                    .with_step(0.01),
+                NodeGroupSocket::new("time", "Time", NodeGroupSocketType::Float)
+                    .with_range(0.0, 1000.0)
+                    .with_step(0.001),
+                NodeGroupSocket::new("index", "Index", NodeGroupSocketType::Int)
+                    .with_range(0.0, 63.0)
+                    .with_step(1.0),
                 NodeGroupSocket::new("inharmonicity", "Inharmonicity", NodeGroupSocketType::Float)
-                    .with_default(0.0004),
+                    .with_default(0.0004)
+                    .with_range(0.0, 0.01)
+                    .with_step(0.0001),
                 NodeGroupSocket::new("brightness", "Brightness", NodeGroupSocketType::Float)
-                    .with_default(0.5),
+                    .with_default(0.5)
+                    .with_range(0.0, 1.0)
+                    .with_step(0.01),
                 NodeGroupSocket::new("decay", "Decay", NodeGroupSocketType::Float)
-                    .with_default(1.2),
+                    .with_default(1.2)
+                    .with_range(0.05, 8.0)
+                    .with_step(0.001),
             ],
             outputs: vec![NodeGroupSocket::new(
                 "audio",
