@@ -826,6 +826,22 @@ export class SessionStore {
     return data.group_id;
   }
 
+  async duplicateGroup(groupId: string): Promise<string> {
+    const base = `${groupId}.copy`;
+    let candidate = base;
+    let number = 2;
+    while (this.nodeGroups[candidate]) {
+      candidate = `${base}${number}`;
+      number += 1;
+    }
+    const data = await this.run<{ group_id: string }>("group.duplicate", {
+      source_id: groupId,
+      group_id: candidate,
+    });
+    await this.refreshProject();
+    return data.group_id;
+  }
+
   async groupFromNodes(
     sourceGroupId: string,
     nodeIds: string[],

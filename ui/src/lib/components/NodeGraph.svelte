@@ -2585,6 +2585,14 @@
               >
                 {t("graph.editGroup")}
               </button>
+              <button
+                class="ghost small"
+                disabled={!node.group}
+                onclick={() =>
+                  node.group && void session.duplicateGroup(node.group)}
+              >
+                {t("graph.duplicateGroup")}
+              </button>
             {/if}
             {#each sidebarSections(node) as [panel, params] (panel)}
               {#if panel}

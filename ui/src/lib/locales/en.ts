@@ -150,6 +150,7 @@ export const en: Record<MessageKey, Message> = {
   "graph.title": "NODE GRAPH",
   "graph.nodes": "NODES",
   "graph.source": "SOURCE",
+  "graph.duplicateGroup": "DUPLICATE AS PRESET",
   "graph.noTrack": "Select a track first",
   "graph.hint": "MMB pan · wheel zoom · drag node to move · Shift+A add · X or right click delete",
   "graph.addAdsr": "+ Envelope",

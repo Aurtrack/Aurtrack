@@ -145,6 +145,7 @@ export const zhCN = {
   "graph.title": "节点图",
   "graph.nodes": "个节点",
   "graph.source": "音源",
+  "graph.duplicateGroup": "复制为独立预设",
   "graph.noTrack": "先选择一条轨道",
   "graph.hint": "中键平移 · 滚轮缩放 · 拖节点移动 · Shift+A 添加 · X 或右键删除",
   "graph.addAdsr": "+ 包络",
