@@ -963,6 +963,24 @@ const SINE_INPUTS: [VoiceSocketSpec; 3] = [
         .with_default(0.0)
         .with_range(-1000.0, 1000.0),
 ];
+const ADSR_INPUTS: [VoiceSocketSpec; 6] = [
+    VoiceSocketSpec::new("gate", "Gate", SocketType::Gate).with_default(0.0),
+    VoiceSocketSpec::new("time", "Time", SocketType::Float)
+        .with_default(0.0)
+        .with_range(-1000.0, 1000.0),
+    VoiceSocketSpec::new("attack", "Attack", SocketType::Float)
+        .with_default(0.01)
+        .with_range(0.0001, 10.0),
+    VoiceSocketSpec::new("decay", "Decay", SocketType::Float)
+        .with_default(0.1)
+        .with_range(0.0, 10.0),
+    VoiceSocketSpec::new("sustain", "Sustain", SocketType::Float)
+        .with_default(0.7)
+        .with_range(0.0, 1.0),
+    VoiceSocketSpec::new("release", "Release", SocketType::Float)
+        .with_default(0.2)
+        .with_range(0.0001, 10.0),
+];
 const ONE_FLOAT_IN: [VoiceSocketSpec; 1] =
     [VoiceSocketSpec::new("value", "Value", SocketType::Float)
         .with_default(0.0)
@@ -1199,6 +1217,14 @@ pub const VOICE_NODE_TYPES: &[VoiceNodeType] = &[
         name: "Decay",
         category: "Envelope",
         inputs: &DECAY_INPUTS,
+        outputs: &FLOAT_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "env.adsr",
+        name: "ADSR",
+        category: "Envelope",
+        inputs: &ADSR_INPUTS,
         outputs: &FLOAT_OUT,
         params: &[],
     },

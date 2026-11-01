@@ -134,6 +134,7 @@ pub enum VoiceOp {
     Partial,
     Attack,
     Decay,
+    Adsr,
     Repeat {
         body: Box<VoicePlan>,
         output: usize,
@@ -284,6 +285,34 @@ impl VoicePlan {
                         brightness,
                         decay,
                     )
+                },
+                VoiceOp::Adsr => {
+                    let gate = node.inputs.first().map_or(0.0, |input| values[*input]) > 0.5;
+                    let time = node
+                        .inputs
+                        .get(1)
+                        .map_or(context.local_time, |input| values[*input]);
+                    let attack = node.inputs.get(2).map_or(0.01, |input| values[*input]);
+                    let decay = node.inputs.get(3).map_or(0.1, |input| values[*input]);
+                    let sustain = node.inputs.get(4).map_or(0.7, |input| values[*input]);
+                    let release = node.inputs.get(5).map_or(0.2, |input| values[*input]);
+                    let slot = context.note_index as usize % node.state.len();
+                    if gate {
+                        node.state[slot].store(f64::NAN.to_bits(), Ordering::Relaxed);
+                        adsr_held(time, attack, decay, sustain)
+                    } else {
+                        let stored = f64::from_bits(node.state[slot].load(Ordering::Relaxed));
+                        let off = if stored.is_nan() {
+                            node.state[slot].store(time.to_bits(), Ordering::Relaxed);
+                            time
+                        } else {
+                            stored
+                        };
+                        let elapsed = (time - off).max(0.0);
+                        let release = release.max(0.0001);
+                        (adsr_held(off, attack, decay, sustain) * (1.0 - elapsed / release))
+                            .max(0.0)
+                    }
                 },
                 VoiceOp::Attack => {
                     let time = node
@@ -522,6 +551,22 @@ fn white_noise(value: f64) -> f64 {
 fn noise_sample(seed: u64, time: f64) -> f64 {
     let state = hash64(seed ^ time.to_bits().wrapping_mul(0x9E37_79B9_7F4A_7C15));
     (state >> 11) as f64 / (1_u64 << 53) as f64 * 2.0 - 1.0
+}
+
+fn adsr_held(time: f64, attack: f64, decay: f64, sustain: f64) -> f64 {
+    if !time.is_finite() || time < 0.0 {
+        return 0.0;
+    }
+    let sustain = sustain.clamp(0.0, 1.0);
+    let attack = attack.max(0.0001);
+    if time < attack {
+        return time / attack;
+    }
+    let decay = decay.max(0.0);
+    if time < attack + decay && decay > 0.0 {
+        return 1.0 - (1.0 - sustain) * ((time - attack) / decay);
+    }
+    sustain
 }
 
 fn partial_sample(
@@ -1588,6 +1633,38 @@ fn advance(position: u64, loop_frames: u64, loop_start: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adsr_releases_after_gate_closes() {
+        let plan = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Gate, vec![]),
+                VoiceNodePlan::new(VoiceOp::Time, vec![]),
+                VoiceNodePlan::new(VoiceOp::Constant(0.1), vec![]),
+                VoiceNodePlan::new(VoiceOp::Constant(0.1), vec![]),
+                VoiceNodePlan::new(VoiceOp::Constant(0.5), vec![]),
+                VoiceNodePlan::new(VoiceOp::Constant(0.1), vec![]),
+                VoiceNodePlan::new(VoiceOp::Adsr, vec![0, 1, 2, 3, 4, 5]),
+                VoiceNodePlan::new(VoiceOp::Output, vec![6]),
+            ],
+            7,
+        );
+        let mut context = VoiceContext {
+            pitch: 440.0,
+            velocity: 1.0,
+            local_time: 0.5,
+            gate: true,
+            seed: 0,
+            note_index: 0,
+            iteration: 0,
+        };
+        assert!((plan.sample(context) - 0.5).abs() < 1e-9);
+        context.gate = false;
+        context.local_time = 0.55;
+        assert!((plan.sample(context) - 0.5).abs() < 1e-9);
+        context.local_time = 0.6;
+        assert!((plan.sample(context) - 0.25).abs() < 1e-9);
+    }
 
     #[test]
     fn sine_oscillator_samples_frequency_and_phase() {

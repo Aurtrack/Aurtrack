@@ -1197,6 +1197,7 @@ fn compile_voice_inner(
             "voice.velocity" => VoiceOp::Velocity,
             "voice.attack" => VoiceOp::Attack,
             "voice.decay" => VoiceOp::Decay,
+            "env.adsr" => VoiceOp::Adsr,
             "voice.noise" => VoiceOp::Noise,
             "voice.vca" => VoiceOp::Vca,
             "voice.add" | "voice.sum" | "voice.sum_float" | "math.add" => VoiceOp::Add,
