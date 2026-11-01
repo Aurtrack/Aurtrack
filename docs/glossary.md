@@ -28,6 +28,7 @@
 | event | 事件 | |
 | view state | 视图状态 | 不进工程文件、不进撤销栈 |
 | device | 设备 | |
+| implicit context | 隐式上下文 | 执行依赖存在，但没有出现在端口、字段或连接里；禁止靠扫描或名字推断 |
 | node | 节点 | |
 | node group | 节点组 | |
 | graph | 图 | |
