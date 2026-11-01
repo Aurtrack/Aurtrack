@@ -73,7 +73,7 @@ Aurtrack 的节点系统里有一批“看起来是节点、实际是复合算�
 | `voice.repeat` / `voice.group` | 宏 | 编译期内联，不能独立编译 | 保留语义，支持展开和子计划 |
 | `voice.noise` / `white_noise` | 原语 | 可保留 | 补种子/颜色控制 |
 | `voice.sample_hold` | 原语 | 可保留 | 明确状态语义 |
-| `math.add` / `multiply` | 原语 | 已补 subtract/divide/pow/mod/floor/ceil/round/compare | 可继续补向量/位运算 |
+| `math.add` / `multiply` | 原语 | 已补 subtract/divide/pow/mod/floor/ceil/round/compare/exp/sqrt | 可继续补向量/位运算 |
 | `audio.delay` | 原语 | 音频域有，Voice 域没有 | 补 Voice 历史/延迟 |
 
 ## 实施顺序
@@ -88,7 +88,7 @@ Aurtrack 的节点系统里有一批“看起来是节点、实际是复合算�
 ## 进展
 
 - 第 1 步完成：数学原语已加入节点目录；Voice/Audio 计划上限提高到 256，超限在编译期返回 `NodeLimit`，不再静默输出 0。
-- 第 2 步进行中：`osc.sine`、`env.adsr`、`filter.biquad.lowpass/highpass` 已加入；`voice.partial` 预设组尚未替换。
+- 第 2 步进行中：`osc.sine`、`env.adsr`、`filter.biquad.lowpass/highpass`、`math.exp/sqrt` 已加入；`voice.partial` 预设组尚未替换。
 
 ## 非目标
 
