@@ -6082,3 +6082,49 @@ struct ClipPasteArgs {
     duration: f64,
     notes: Vec<NoteDraft>,
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod repeat_zone_tests {
+    use super::*;
+
+    #[test]
+    fn repeat_zone_compiles_multiple_pairs() {
+        let mut graph = VoiceGraph::piano_default();
+        let aux = NodeGroupSocket::new("aux", "Aux", NodeGroupSocketType::Float);
+        for id in ["partials", "p-in"] {
+            if let Some(node) = graph.nodes.get_mut(&NodeId::new(id).unwrap()) {
+                let mut sockets = aurtrack_graph::zone_input_sockets(node);
+                sockets.push(aux.clone());
+                node.zone_inputs = sockets;
+            }
+        }
+        for id in ["partials", "p-out"] {
+            if let Some(node) = graph.nodes.get_mut(&NodeId::new(id).unwrap()) {
+                let mut sockets = aurtrack_graph::zone_output_sockets(node);
+                sockets.push(aux.clone());
+                node.zone_outputs = sockets;
+            }
+        }
+        let mut value = VoiceNode::new(NodeId::new("aux-value").unwrap(), "value.float");
+        value.params.insert("value".to_string(), 5.0);
+        value.zone = Some("partials".to_string());
+        graph.nodes.insert(value.id.clone(), value);
+        graph.connections.push(VoiceConnection::new(
+            PortRef::new(NodeId::new("aux-value").unwrap(), "out"),
+            PortRef::new(NodeId::new("p-out").unwrap(), "aux"),
+        ));
+
+        let plan = compile_voice(&graph, &NodeGroupInterface::piano(), &BTreeMap::new()).unwrap();
+        assert!(
+            plan.nodes
+                .iter()
+                .any(|node| matches!(node.op, aurtrack_engine::VoiceOp::Repeat { .. }))
+        );
+        assert!(
+            plan.nodes
+                .iter()
+                .any(|node| matches!(node.op, aurtrack_engine::VoiceOp::RepeatResult { .. }))
+        );
+    }
+}
