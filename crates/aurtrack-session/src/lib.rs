@@ -694,22 +694,26 @@ impl Track {
                         .is_some_and(|node| node.type_id == "audio.note")
             })
         };
+        let instrument = self.graph.nodes().find(|node| node.is_instrument());
         let mut group_id = None;
         let mut source_frequency = None;
         let mut adsr = None;
         let mut plugin = None;
-        for node in self.graph.nodes() {
-            match node.type_id.as_str() {
+        if let Some(instrument) = instrument {
+            match instrument.type_id.as_str() {
                 "audio.group" => {
-                    if has_note_source(node.id()) {
-                        if let Some(group) = &node.group {
-                            group_id = Some(group.clone());
-                        }
+                    if has_note_source(instrument.id()) {
+                        group_id.clone_from(&instrument.group);
                     }
                 },
                 "audio.instrument.sine" => {
-                    source_frequency = Some(node.param("frequency").unwrap_or(440.0));
+                    source_frequency = Some(instrument.param("frequency").unwrap_or(440.0));
                 },
+                _ => {},
+            }
+        }
+        for node in self.graph.nodes() {
+            match node.type_id.as_str() {
                 "audio.adsr" => {
                     adsr = Some(aurtrack_graph::AdsrSettings::new(
                         node.param("attack").unwrap_or(0.01),
