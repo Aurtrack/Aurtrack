@@ -971,6 +971,18 @@ const SINE_INPUTS: [VoiceSocketSpec; 3] = [
         .with_default(0.0)
         .with_range(-1000.0, 1000.0),
 ];
+const DELAY_INPUTS: [VoiceSocketSpec; 4] = [
+    VoiceSocketSpec::new("in", "Audio", SocketType::Audio),
+    VoiceSocketSpec::new("time", "Time", SocketType::Float)
+        .with_default(0.01)
+        .with_range(0.0, 0.08),
+    VoiceSocketSpec::new("feedback", "Feedback", SocketType::Float)
+        .with_default(0.0)
+        .with_range(0.0, 0.95),
+    VoiceSocketSpec::new("rate", "Sample Rate", SocketType::Float)
+        .with_default(48_000.0)
+        .with_range(1_000.0, 192_000.0),
+];
 const BIQUAD_INPUTS: [VoiceSocketSpec; 4] = [
     VoiceSocketSpec::new("in", "Audio", SocketType::Audio),
     VoiceSocketSpec::new("cutoff", "Cutoff", SocketType::Float)
@@ -1261,6 +1273,14 @@ pub const VOICE_NODE_TYPES: &[VoiceNodeType] = &[
         name: "Noise",
         category: "Generator",
         inputs: &NOISE_SOURCE_INPUTS,
+        outputs: &AUDIO_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "delay.line",
+        name: "Delay",
+        category: "Delay",
+        inputs: &DELAY_INPUTS,
         outputs: &AUDIO_OUT,
         params: &[],
     },

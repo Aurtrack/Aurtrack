@@ -30,8 +30,9 @@ use std::path::Path;
 use aurtrack_command::{CommandError, CommandRequest, CommandResponse, registry};
 use aurtrack_engine::{
     AdsrPlan, DelayPlan, FilterPlan, FilterSettings, GraphNodePlan, GraphOp, GraphPlan,
-    HighpassPlan, LfoPlan, MAX_GRAPH_NODES, MAX_VOICE_NODES, NotePlan, PluginPlan, VoiceNodePlan,
-    VoiceOp, VoicePlan, adsr_envelope, midi_to_hz, note_envelope,
+    HighpassPlan, LfoPlan, MAX_GRAPH_NODES, MAX_VOICE_NODES, NotePlan, PluginPlan,
+    VOICE_DELAY_SAMPLES, VoiceNodePlan, VoiceOp, VoicePlan, adsr_envelope, midi_to_hz,
+    note_envelope,
 };
 use aurtrack_graph::{
     AudioConnection, AudioGraph, AudioGroup, AudioNode, GraphError, NodeGroup, NodeGroupInterface,
@@ -1185,6 +1186,18 @@ fn compile_voice_inner(
             let child_output = offset + child.output;
             for socket in &group.interface.outputs {
                 indices.insert((id.clone(), socket.id.clone()), child_output);
+            }
+            continue;
+        }
+        if node.type_id == "delay.line" {
+            let index = nodes.len();
+            nodes.push(VoiceNodePlan::with_buffer(
+                VoiceOp::Delay,
+                inputs,
+                VOICE_DELAY_SAMPLES,
+            ));
+            for port in aurtrack_graph::node_outputs(node, interface, groups)? {
+                indices.insert((id.clone(), port.id), index);
             }
             continue;
         }

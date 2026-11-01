@@ -105,6 +105,7 @@ pub struct VoiceNodePlan {
     pub op: VoiceOp,
     pub inputs: Vec<usize>,
     state: Arc<[AtomicU64; 64]>,
+    buffer: Option<Arc<[AtomicU64]>>,
 }
 
 impl VoiceNodePlan {
@@ -113,6 +114,22 @@ impl VoiceNodePlan {
             op,
             inputs,
             state: Arc::new(std::array::from_fn(|_| AtomicU64::new(0))),
+            buffer: None,
+        }
+    }
+
+    /// 历史节点在编译期分配缓冲；音频线程只读写原子槽。
+    pub fn with_buffer(op: VoiceOp, inputs: Vec<usize>, samples_per_note: usize) -> Self {
+        let samples_per_note = samples_per_note.max(1);
+        let buffer: Arc<[AtomicU64]> = (0..samples_per_note * 64)
+            .map(|_| AtomicU64::new(0))
+            .collect::<Vec<_>>()
+            .into();
+        Self {
+            op,
+            inputs,
+            state: Arc::new(std::array::from_fn(|_| AtomicU64::new(0))),
+            buffer: Some(buffer),
         }
     }
 }
@@ -138,6 +155,7 @@ pub enum VoiceOp {
     Biquad {
         highpass: bool,
     },
+    Delay,
     Repeat {
         body: Box<VoicePlan>,
         output: usize,
@@ -318,6 +336,32 @@ impl VoicePlan {
                         (adsr_held(off, attack, decay, sustain) * (1.0 - elapsed / release))
                             .max(0.0)
                     }
+                },
+                VoiceOp::Delay => {
+                    let Some(buffer) = &node.buffer else {
+                        values[index] = 0.0;
+                        continue;
+                    };
+                    let per_note = buffer.len() / node.state.len();
+                    if per_note == 0 {
+                        values[index] = 0.0;
+                        continue;
+                    }
+                    let input = node.inputs.first().map_or(0.0, |input| values[*input]);
+                    let time = node.inputs.get(1).map_or(0.01, |input| values[*input]);
+                    let feedback = node.inputs.get(2).map_or(0.0, |input| values[*input]);
+                    let rate = node.inputs.get(3).map_or(48_000.0, |input| values[*input]);
+                    let slot = context.note_index as usize % node.state.len();
+                    let write = (node.state[slot].load(Ordering::Relaxed) as usize) % per_note;
+                    let delay_samples =
+                        (time * rate).round().clamp(1.0, (per_note - 1) as f64) as usize;
+                    let read = (write + per_note - delay_samples) % per_note;
+                    let base = slot * per_note;
+                    let delayed = f64::from_bits(buffer[base + read].load(Ordering::Relaxed));
+                    let next = input + delayed * feedback.clamp(0.0, 0.95);
+                    buffer[base + write].store(next.to_bits(), Ordering::Relaxed);
+                    node.state[slot].store(((write + 1) % per_note) as u64, Ordering::Relaxed);
+                    delayed
                 },
                 VoiceOp::Biquad { highpass } => {
                     let input = node.inputs.first().map_or(0.0, |input| values[*input]);
@@ -986,6 +1030,9 @@ pub const MAX_GRAPH_NODES: usize = 256;
 
 /// 单个 Voice 子图的节点计划上限。
 pub const MAX_VOICE_NODES: usize = 256;
+
+/// 每个音符可用的 Voice 延迟采样数。
+pub const VOICE_DELAY_SAMPLES: usize = 4096;
 
 const DELAY_SLOTS: usize = 384_000;
 
@@ -1717,6 +1764,32 @@ mod tests {
             iteration: 0,
         };
         assert!((plan.sample(context) - 4.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn delay_line_reads_one_sample_back() {
+        let plan = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Constant(1.0), vec![]),
+                VoiceNodePlan::new(VoiceOp::Constant(1.0 / 48_000.0), vec![]),
+                VoiceNodePlan::new(VoiceOp::Constant(0.0), vec![]),
+                VoiceNodePlan::new(VoiceOp::Constant(48_000.0), vec![]),
+                VoiceNodePlan::with_buffer(VoiceOp::Delay, vec![0, 1, 2, 3], 8),
+                VoiceNodePlan::new(VoiceOp::Output, vec![4]),
+            ],
+            5,
+        );
+        let context = VoiceContext {
+            pitch: 440.0,
+            velocity: 1.0,
+            local_time: 0.0,
+            gate: true,
+            seed: 0,
+            note_index: 0,
+            iteration: 0,
+        };
+        assert!((plan.sample(context)).abs() < 1e-9);
+        assert!((plan.sample(context) - 1.0).abs() < 1e-9);
     }
 
     #[test]
