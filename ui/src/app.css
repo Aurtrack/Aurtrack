@@ -873,13 +873,6 @@ button.number-step:hover:not(:disabled) {
   flex: 0 0 auto;
 }
 
-.graph-notice {
-  color: var(--danger, #d66);
-  font-family: "Cascadia Mono", Consolas, monospace;
-  font-size: 9px;
-  letter-spacing: 0.04em;
-  white-space: nowrap;
-}
 
 .graph-section.compact .graph-head {
   display: none;

@@ -856,7 +856,7 @@ fn node_positions_and_batch_remove() {
 }
 
 #[test]
-fn non_source_group_node_can_be_removed() {
+fn node_removal_keeps_group_data_and_allows_source() {
     let mut session = Session::default();
     run(&mut session, "project.create", json!({}));
     run(
@@ -885,14 +885,24 @@ fn non_source_group_node_can_be_removed() {
             .get(group_id)
             .is_none()
     );
+    assert!(state["project"]["node_groups"].get("piano.voice").is_some());
 
-    let error = session
-        .execute(&CommandRequest {
-            cmd: "node.remove_many".to_string(),
-            args: json!({ "paths": ["/tracks/track-1/nodes/instrument"] }),
-        })
-        .unwrap_err();
-    assert_eq!(error.message, "不能删除轨道音源节点");
+    run(
+        &mut session,
+        "node.remove_many",
+        json!({ "paths": ["/tracks/track-1/nodes/instrument"] }),
+    );
+    let project = session.project().unwrap();
+    assert!(
+        project.tracks[0]
+            .graph
+            .node(&aurtrack_graph::NodeId::new("instrument").unwrap())
+            .is_none()
+    );
+    assert!(matches!(
+        project.tracks[0].source(),
+        Err(aurtrack_graph::GraphError::SourceMissing(_))
+    ));
 }
 
 #[test]

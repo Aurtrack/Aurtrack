@@ -1662,17 +1662,10 @@
     return `left:${left}px;top:${top}px;width:${width}px;height:${height}px`;
   }
 
-  function isDeletable(node: GraphNode): boolean {
-    if (!track) return false;
-    return (
-      nodeTypeId(node) !== "audio.output" && node.id !== track.source_node
-    );
-  }
-
   function selectedPaths(): string[] {
     if (!track) return [];
     return nodes
-      .filter((node) => selected.has(node.id) && isDeletable(node))
+      .filter((node) => selected.has(node.id))
       .map((node) => `/tracks/${track.id}/nodes/${node.id}`);
   }
 
@@ -1714,25 +1707,13 @@
     selected = new Set();
   }
 
-  let deleteNotice = $state("");
-  let deleteNoticeTimer: ReturnType<typeof setTimeout> | undefined;
-
-  function showDeleteNotice() {
-    deleteNotice = t("graph.deleteProtected");
-    clearTimeout(deleteNoticeTimer);
-    deleteNoticeTimer = setTimeout(() => (deleteNotice = ""), 2200);
-  }
-
   function deleteSelected() {
     const paths = selectedPaths().filter((path) => {
       const id = path.split("/").at(-1) ?? "";
       const node = graph?.nodes[id];
       return node && !isNodeLocked?.(node);
     });
-    if (paths.length === 0) {
-      if (selected.size > 0) showDeleteNotice();
-      return;
-    }
+    if (paths.length === 0) return;
     selected = new Set();
     onRemoveMany(paths);
   }
@@ -2062,9 +2043,6 @@
         {t("graph.noTrack")}
       {/if}
     </span>
-    {#if deleteNotice}
-      <span class="graph-notice" role="status">{deleteNotice}</span>
-    {/if}
     {#if !editingGroup}
       <button
         class="ghost small"
