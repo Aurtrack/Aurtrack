@@ -4991,14 +4991,23 @@ impl Session {
         for path in &args.paths {
             let (track_id, node) = parse_node_path(path)?;
             let node_id = NodeId::new(node).map_err(graph_error)?;
-            let node = project
+            let track = project
                 .tracks
                 .iter()
                 .find(|track| track.id == track_id)
-                .and_then(|track| track.graph.node(&node_id))
+                .ok_or_else(|| CommandError::not_found(format!("找不到轨道：{track_id}")))?;
+            let node = track
+                .graph
+                .node(&node_id)
                 .ok_or_else(|| CommandError::not_found(format!("找不到节点：{path}")))?;
-            if !node.is_device() {
-                return Err(CommandError::invalid_args("只能删除设备节点"));
+            if node.type_id == "audio.output" {
+                return Err(CommandError::invalid_args("不能删除输出节点"));
+            }
+            if node.id() == &track.source {
+                return Err(CommandError::invalid_args("不能删除轨道音源节点"));
+            }
+            if !node.is_device() && !node.is_instrument() {
+                return Err(CommandError::invalid_args("只能删除设备、乐器或组节点"));
             }
             parsed.push((track_id.to_string(), node_id));
         }

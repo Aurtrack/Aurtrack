@@ -151,6 +151,7 @@ export const en: Record<MessageKey, Message> = {
   "graph.nodes": "NODES",
   "graph.source": "SOURCE",
   "graph.duplicateGroup": "DUPLICATE AS PRESET",
+  "graph.deleteProtected": "SOURCE AND OUTPUT NODES CANNOT BE DELETED",
   "graph.noTrack": "Select a track first",
   "graph.hint": "MMB pan · wheel zoom · drag node to move · Shift+A add · X or right click delete",
   "graph.addAdsr": "+ Envelope",

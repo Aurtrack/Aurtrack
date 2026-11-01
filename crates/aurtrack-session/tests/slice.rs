@@ -856,6 +856,46 @@ fn node_positions_and_batch_remove() {
 }
 
 #[test]
+fn non_source_group_node_can_be_removed() {
+    let mut session = Session::default();
+    run(&mut session, "project.create", json!({}));
+    run(
+        &mut session,
+        "track.create",
+        json!({ "name": "lead", "source": "sine" }),
+    );
+    let group = run(
+        &mut session,
+        "node.add",
+        json!({
+            "track_id": "track-1",
+            "kind": "audio.group",
+            "group": "piano.voice"
+        }),
+    );
+    let group_id = group["node_id"].as_str().unwrap();
+    run(
+        &mut session,
+        "node.remove_many",
+        json!({ "paths": [format!("/tracks/track-1/nodes/{group_id}")] }),
+    );
+    let state = run(&mut session, "project.state", json!({}));
+    assert!(
+        state["project"]["tracks"][0]["graph"]["nodes"]
+            .get(group_id)
+            .is_none()
+    );
+
+    let error = session
+        .execute(&CommandRequest {
+            cmd: "node.remove_many".to_string(),
+            args: json!({ "paths": ["/tracks/track-1/nodes/instrument"] }),
+        })
+        .unwrap_err();
+    assert_eq!(error.message, "不能删除轨道音源节点");
+}
+
+#[test]
 fn duplicate_nodes_copies_params_and_position() {
     let mut session = Session::default();
     run(&mut session, "project.create", json!({}));
