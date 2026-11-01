@@ -565,11 +565,19 @@ impl NodeGroupInterface {
 
     pub fn partial() -> Self {
         Self {
-            inputs: vec![NodeGroupSocket::new(
-                "in",
-                "Audio",
-                NodeGroupSocketType::Audio,
-            )],
+            inputs: vec![
+                NodeGroupSocket::new("pitch", "Pitch", NodeGroupSocketType::Float),
+                NodeGroupSocket::new("velocity", "Velocity", NodeGroupSocketType::Float)
+                    .with_default(0.8),
+                NodeGroupSocket::new("time", "Time", NodeGroupSocketType::Float),
+                NodeGroupSocket::new("index", "Index", NodeGroupSocketType::Float),
+                NodeGroupSocket::new("inharmonicity", "Inharmonicity", NodeGroupSocketType::Float)
+                    .with_default(0.0004),
+                NodeGroupSocket::new("brightness", "Brightness", NodeGroupSocketType::Float)
+                    .with_default(0.5),
+                NodeGroupSocket::new("decay", "Decay", NodeGroupSocketType::Float)
+                    .with_default(1.2),
+            ],
             outputs: vec![NodeGroupSocket::new(
                 "audio",
                 "Audio",
@@ -1653,57 +1661,275 @@ impl VoiceGraph {
         }
     }
 
+    #[allow(clippy::too_many_lines)]
     pub fn partial_default() -> Self {
+        fn push(graph: &mut VoiceGraph, id: &'static str, ty: &str, position: [f64; 2]) -> NodeId {
+            let id = NodeId::fixed(id);
+            let mut node = VoiceNode::new(id.clone(), ty);
+            node.position = Some(position);
+            graph.nodes.insert(id.clone(), node);
+            id
+        }
+        fn value(
+            graph: &mut VoiceGraph,
+            id: &'static str,
+            value: f64,
+            position: [f64; 2],
+        ) -> NodeId {
+            let id = push(graph, id, "value.float", position);
+            if let Some(node) = graph.nodes.get_mut(&id) {
+                node.params.insert("value".to_string(), value);
+            }
+            id
+        }
+
         let interface = NodeGroupInterface::partial();
         let mut graph = Self::shell(&interface);
-        let pitch = VoiceNode::new(NodeId::fixed("pitch"), "voice.pitch");
-        let velocity = VoiceNode::new(NodeId::fixed("velocity"), "voice.velocity");
-        let time = VoiceNode::new(NodeId::fixed("time"), "voice.time");
-        let index = VoiceNode::new(NodeId::fixed("index"), "voice.iteration");
-        let partial = VoiceNode::new(NodeId::fixed("partial"), "voice.partial");
-        let add = VoiceNode::new(NodeId::fixed("add"), "voice.add");
-        for (node, position) in [
-            (pitch, [40.0, 220.0]),
-            (velocity, [40.0, 300.0]),
-            (time, [40.0, 380.0]),
-            (index, [40.0, 460.0]),
-            (partial, [300.0, 180.0]),
-            (add, [600.0, 100.0]),
-        ] {
-            let mut node = node;
-            node.position = Some(position);
-            graph.nodes.insert(node.id.clone(), node);
-        }
-        if let Some(output) = graph.nodes.get_mut(&NodeId::fixed("out")) {
-            output.position = Some([850.0, 100.0]);
-        }
+        let one = value(&mut graph, "one", 1.0, [80.0, 600.0]);
+        let zero = value(&mut graph, "zero", 0.0, [80.0, 680.0]);
+        let negative = value(&mut graph, "negative", -1.0, [80.0, 760.0]);
+        let half = value(&mut graph, "half", 0.5, [80.0, 840.0]);
+        let bias = value(&mut graph, "bias", 0.8, [80.0, 920.0]);
+        let slope = value(&mut graph, "slope", 0.35, [80.0, 1000.0]);
+        let gain = value(&mut graph, "gain", 0.18, [80.0, 1080.0]);
+        let min_decay = value(&mut graph, "min-decay", 0.05, [80.0, 1160.0]);
+        let max_decay = value(&mut graph, "max-decay", 1000.0, [80.0, 1240.0]);
+        let max_freq = value(&mut graph, "max-freq", 20_000.0, [80.0, 1320.0]);
+
+        let index = push(&mut graph, "index-add", "math.add", [300.0, 100.0]);
+        let index_sq = push(&mut graph, "index-square", "math.multiply", [480.0, 100.0]);
+        let inharmonic = push(&mut graph, "inharmonic", "math.multiply", [660.0, 100.0]);
+        let shape_base = push(&mut graph, "shape-base", "math.add", [840.0, 100.0]);
+        let shape = push(&mut graph, "shape", "math.sqrt", [1020.0, 100.0]);
+        let pitch_n = push(&mut graph, "pitch-n", "math.multiply", [660.0, 260.0]);
+        let frequency = push(&mut graph, "frequency", "math.multiply", [1200.0, 100.0]);
+        let sine = push(&mut graph, "sine", "osc.sine", [1380.0, 100.0]);
+        let decay_k = push(&mut graph, "decay-k", "math.multiply", [480.0, 360.0]);
+        let decay_bias = push(&mut graph, "decay-bias", "math.add", [660.0, 360.0]);
+        let decay_arg = push(&mut graph, "decay-arg", "math.multiply", [840.0, 360.0]);
+        let decay_clamp = push(&mut graph, "decay-clamp", "math.clamp", [840.0, 520.0]);
+        let decay_div = push(&mut graph, "decay-div", "math.divide", [1020.0, 360.0]);
+        let decay_neg = push(&mut graph, "decay-neg", "math.multiply", [1200.0, 360.0]);
+        let envelope = push(&mut graph, "envelope", "math.exp", [1380.0, 360.0]);
+        let velocity_clamp = push(&mut graph, "velocity-clamp", "math.clamp", [480.0, 680.0]);
+        let brightness = push(&mut graph, "brightness", "math.add", [660.0, 680.0]);
+        let velocity_pow = push(&mut graph, "velocity-pow", "math.power", [840.0, 680.0]);
+        let amplitude = push(&mut graph, "amplitude", "math.multiply", [1020.0, 680.0]);
+        let amplitude_gain = push(
+            &mut graph,
+            "amplitude-gain",
+            "math.multiply",
+            [1200.0, 680.0],
+        );
+        let amplitude_partial = push(
+            &mut graph,
+            "amplitude-partial",
+            "math.divide",
+            [1380.0, 680.0],
+        );
+        let freq_ok = push(&mut graph, "freq-ok", "math.less_than", [1560.0, 100.0]);
+        let amp_vca = push(&mut graph, "amp-vca", "voice.vca", [1560.0, 520.0]);
+        let limit_vca = push(&mut graph, "limit-vca", "voice.vca", [1740.0, 520.0]);
+
         graph.connections = vec![
             VoiceConnection::new(
-                PortRef::fixed(NodeId::fixed("voice-in"), "in"),
-                PortRef::fixed(NodeId::fixed("add"), "in1"),
+                PortRef::fixed(NodeId::fixed("voice-in"), "index"),
+                PortRef::fixed(index.clone(), "a"),
             ),
             VoiceConnection::new(
-                PortRef::fixed(NodeId::fixed("pitch"), "out"),
-                PortRef::fixed(NodeId::fixed("partial"), "pitch"),
+                PortRef::fixed(one.clone(), "out"),
+                PortRef::fixed(index.clone(), "b"),
             ),
             VoiceConnection::new(
-                PortRef::fixed(NodeId::fixed("velocity"), "out"),
-                PortRef::fixed(NodeId::fixed("partial"), "velocity"),
+                PortRef::fixed(index.clone(), "out"),
+                PortRef::fixed(index_sq.clone(), "a"),
             ),
             VoiceConnection::new(
-                PortRef::fixed(NodeId::fixed("time"), "out"),
-                PortRef::fixed(NodeId::fixed("partial"), "time"),
+                PortRef::fixed(index.clone(), "out"),
+                PortRef::fixed(index_sq.clone(), "b"),
             ),
             VoiceConnection::new(
-                PortRef::fixed(NodeId::fixed("index"), "out"),
-                PortRef::fixed(NodeId::fixed("partial"), "index"),
+                PortRef::fixed(NodeId::fixed("voice-in"), "inharmonicity"),
+                PortRef::fixed(inharmonic.clone(), "a"),
             ),
             VoiceConnection::new(
-                PortRef::fixed(NodeId::fixed("partial"), "out"),
-                PortRef::fixed(NodeId::fixed("add"), "in2"),
+                PortRef::fixed(index_sq.clone(), "out"),
+                PortRef::fixed(inharmonic.clone(), "b"),
             ),
             VoiceConnection::new(
-                PortRef::fixed(NodeId::fixed("add"), "out"),
+                PortRef::fixed(inharmonic.clone(), "out"),
+                PortRef::fixed(shape_base.clone(), "a"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(one.clone(), "out"),
+                PortRef::fixed(shape_base.clone(), "b"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(shape_base.clone(), "out"),
+                PortRef::fixed(shape.clone(), "value"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(NodeId::fixed("voice-in"), "pitch"),
+                PortRef::fixed(pitch_n.clone(), "a"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(index.clone(), "out"),
+                PortRef::fixed(pitch_n.clone(), "b"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(pitch_n.clone(), "out"),
+                PortRef::fixed(frequency.clone(), "a"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(shape.clone(), "out"),
+                PortRef::fixed(frequency.clone(), "b"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(frequency.clone(), "out"),
+                PortRef::fixed(sine.clone(), "freq"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(zero.clone(), "out"),
+                PortRef::fixed(sine.clone(), "phase"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(NodeId::fixed("voice-in"), "time"),
+                PortRef::fixed(sine.clone(), "time"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(index.clone(), "out"),
+                PortRef::fixed(decay_k.clone(), "a"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(slope.clone(), "out"),
+                PortRef::fixed(decay_k.clone(), "b"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(decay_k.clone(), "out"),
+                PortRef::fixed(decay_bias.clone(), "a"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(bias.clone(), "out"),
+                PortRef::fixed(decay_bias.clone(), "b"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(NodeId::fixed("voice-in"), "time"),
+                PortRef::fixed(decay_arg.clone(), "a"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(decay_bias.clone(), "out"),
+                PortRef::fixed(decay_arg.clone(), "b"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(NodeId::fixed("voice-in"), "decay"),
+                PortRef::fixed(decay_clamp.clone(), "value"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(min_decay.clone(), "out"),
+                PortRef::fixed(decay_clamp.clone(), "min"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(max_decay.clone(), "out"),
+                PortRef::fixed(decay_clamp.clone(), "max"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(decay_arg.clone(), "out"),
+                PortRef::fixed(decay_div.clone(), "a"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(decay_clamp.clone(), "out"),
+                PortRef::fixed(decay_div.clone(), "b"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(decay_div.clone(), "out"),
+                PortRef::fixed(decay_neg.clone(), "a"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(negative.clone(), "out"),
+                PortRef::fixed(decay_neg.clone(), "b"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(decay_neg.clone(), "out"),
+                PortRef::fixed(envelope.clone(), "value"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(NodeId::fixed("voice-in"), "velocity"),
+                PortRef::fixed(velocity_clamp.clone(), "value"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(zero.clone(), "out"),
+                PortRef::fixed(velocity_clamp.clone(), "min"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(one.clone(), "out"),
+                PortRef::fixed(velocity_clamp.clone(), "max"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(NodeId::fixed("voice-in"), "brightness"),
+                PortRef::fixed(brightness.clone(), "a"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(half.clone(), "out"),
+                PortRef::fixed(brightness.clone(), "b"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(velocity_clamp.clone(), "out"),
+                PortRef::fixed(velocity_pow.clone(), "a"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(brightness.clone(), "out"),
+                PortRef::fixed(velocity_pow.clone(), "b"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(envelope.clone(), "out"),
+                PortRef::fixed(amplitude.clone(), "a"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(velocity_pow.clone(), "out"),
+                PortRef::fixed(amplitude.clone(), "b"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(amplitude.clone(), "out"),
+                PortRef::fixed(amplitude_gain.clone(), "a"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(gain.clone(), "out"),
+                PortRef::fixed(amplitude_gain.clone(), "b"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(amplitude_gain.clone(), "out"),
+                PortRef::fixed(amplitude_partial.clone(), "a"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(index.clone(), "out"),
+                PortRef::fixed(amplitude_partial.clone(), "b"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(frequency.clone(), "out"),
+                PortRef::fixed(freq_ok.clone(), "a"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(max_freq.clone(), "out"),
+                PortRef::fixed(freq_ok.clone(), "b"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(sine.clone(), "out"),
+                PortRef::fixed(amp_vca.clone(), "in"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(amplitude_partial.clone(), "out"),
+                PortRef::fixed(amp_vca.clone(), "gain"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(amp_vca.clone(), "out"),
+                PortRef::fixed(limit_vca.clone(), "in"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(freq_ok.clone(), "out"),
+                PortRef::fixed(limit_vca.clone(), "gain"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(limit_vca.clone(), "out"),
                 PortRef::fixed(NodeId::fixed("out"), "audio"),
             ),
         ];
@@ -3553,6 +3779,34 @@ mod tests {
             PortRef::fixed(NodeId::fixed("out"), "audio"),
         ));
         assert!(matches!(graph.validate(), Err(GraphError::ZoneLeak(_))));
+    }
+
+    #[test]
+    fn piano_partial_is_open_primitive_group() {
+        let group = NodeGroup::partial_default();
+        group.validate().unwrap();
+        assert_eq!(group.interface.inputs.len(), 7);
+        assert!(
+            group
+                .graph
+                .nodes
+                .values()
+                .any(|node| node.type_id == "osc.sine")
+        );
+        assert!(
+            group
+                .graph
+                .nodes
+                .values()
+                .any(|node| node.type_id == "math.exp")
+        );
+        assert!(
+            !group
+                .graph
+                .nodes
+                .values()
+                .any(|node| node.type_id == "voice.partial")
+        );
     }
 
     #[test]
