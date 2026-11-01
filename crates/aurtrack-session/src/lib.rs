@@ -1378,6 +1378,7 @@ impl Session {
             "project.master_plugin" => self.cmd_master_plugin(&request.args),
             "project.master_plugin_off" => self.cmd_master_plugin_off(),
             "track.create" => self.cmd_track_create(&request.args),
+            "track.source" => self.cmd_track_source(&request.args),
             "track.remove" => self.cmd_track_remove(&request.args),
             "node.types" => Ok(CommandResponse::ok(json!({
                 "types": voice_types_json(),
@@ -2741,6 +2742,53 @@ impl Session {
             "node_ids": id_map.values().map(ToString::to_string).collect::<Vec<_>>(),
         }))
         .with_undo(token))
+    }
+
+    fn cmd_track_source(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct SourceArgs {
+            track_id: String,
+            node_id: Option<String>,
+        }
+        let args: SourceArgs = parse_args(args)?;
+        let project = self
+            .project
+            .as_ref()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let track = project
+            .tracks
+            .iter()
+            .find(|track| track.id == args.track_id)
+            .ok_or_else(|| CommandError::not_found(format!("找不到轨道：{}", args.track_id)))?;
+        let source = args
+            .node_id
+            .as_deref()
+            .map(|node| {
+                let node = NodeId::new(node).map_err(graph_error)?;
+                let node = track
+                    .graph
+                    .node(&node)
+                    .filter(|node| node.is_instrument())
+                    .ok_or_else(|| CommandError::invalid_args("音源节点必须是存在的乐器节点"))?;
+                Ok::<NodeId, CommandError>(node.id().clone())
+            })
+            .transpose()?;
+        let token = self.snapshot("track.source");
+        let project = self
+            .project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let track = project
+            .tracks
+            .iter_mut()
+            .find(|track| track.id == args.track_id)
+            .ok_or_else(|| CommandError::not_found(format!("找不到轨道：{}", args.track_id)))?;
+        track.source.clone_from(&source);
+        Ok(
+            CommandResponse::ok(json!({ "track_id": args.track_id, "source_node": source }))
+                .with_undo(token),
+        )
     }
 
     fn cmd_track_remove(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {

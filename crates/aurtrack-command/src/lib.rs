@@ -305,6 +305,16 @@ fn group_ungroup_schema() -> Value {
     )
 }
 
+fn track_source_schema() -> Value {
+    object_schema(
+        json!({
+            "track_id": { "type": "string" },
+            "node_id": { "type": ["string", "null"] }
+        }),
+        &["track_id", "node_id"],
+    )
+}
+
 fn group_duplicate_schema() -> Value {
     object_schema(
         json!({
@@ -973,7 +983,7 @@ fn transport_metronome_schema() -> Value {
     )
 }
 
-static COMMANDS: [CommandSpec; 74] = [
+static COMMANDS: [CommandSpec; 75] = [
     CommandSpec {
         id: "project.create",
         summary: "创建或替换当前工程",
@@ -1021,6 +1031,12 @@ static COMMANDS: [CommandSpec; 74] = [
         summary: "新建一条轨道",
         undo: UndoKind::Snapshot,
         input_schema: track_create_schema,
+    },
+    CommandSpec {
+        id: "track.source",
+        summary: "设置或清空轨道音源节点",
+        undo: UndoKind::Snapshot,
+        input_schema: track_source_schema,
     },
     CommandSpec {
         id: "track.remove",

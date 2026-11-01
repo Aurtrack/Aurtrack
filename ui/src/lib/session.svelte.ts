@@ -71,6 +71,7 @@ type Clipboard =
 
 const MUTATING_COMMANDS = new Set([
   "track.create",
+  "track.source",
   "track.remove",
   "group.voice",
   "audio_group.from_nodes",
@@ -723,6 +724,20 @@ export class SessionStore {
       this.setStatus("status.trackRemoved", { id: trackId });
     } catch (error) {
       this.fail("status.trackRemoveFailed", error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  async setTrackSource(trackId: string, nodeId: string | null) {
+    if (this.busy) return;
+    this.busy = true;
+    try {
+      await this.run("track.source", { track_id: trackId, node_id: nodeId });
+      await this.refreshProject();
+      await this.reloadIfPlaying();
+    } catch (error) {
+      this.fail("status.trackSourceFailed", error);
     } finally {
       this.busy = false;
     }

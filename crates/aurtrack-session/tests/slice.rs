@@ -380,7 +380,7 @@ fn batch_note_edits_and_cross_track_clip_move_share_snapshots() {
 fn describe_lists_all_commands() {
     let mut session = Session::default();
     let out = run(&mut session, "describe", json!({}));
-    assert_eq!(out["commands"].as_array().unwrap().len(), 74);
+    assert_eq!(out["commands"].as_array().unwrap().len(), 75);
     assert!(out["project"].is_null());
 }
 
@@ -853,6 +853,42 @@ fn node_positions_and_batch_remove() {
             .get(filter_id)
             .is_none()
     );
+}
+
+#[test]
+fn track_source_can_be_reassigned_and_cleared() {
+    let mut session = Session::default();
+    run(&mut session, "project.create", json!({}));
+    run(
+        &mut session,
+        "track.create",
+        json!({ "name": "lead", "source": "sine" }),
+    );
+    let group = run(
+        &mut session,
+        "node.add",
+        json!({
+            "track_id": "track-1",
+            "kind": "audio.group",
+            "group": "piano.voice"
+        }),
+    );
+    let group_id = group["node_id"].as_str().unwrap();
+    run(
+        &mut session,
+        "track.source",
+        json!({ "track_id": "track-1", "node_id": group_id }),
+    );
+    assert_eq!(
+        session.project().unwrap().tracks[0].source,
+        Some(aurtrack_graph::NodeId::new(group_id).unwrap())
+    );
+    run(
+        &mut session,
+        "track.source",
+        json!({ "track_id": "track-1", "node_id": null }),
+    );
+    assert_eq!(session.project().unwrap().tracks[0].source, None);
 }
 
 #[test]

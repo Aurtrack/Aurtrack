@@ -151,6 +151,8 @@ export const en: Record<MessageKey, Message> = {
   "graph.nodes": "NODES",
   "graph.source": "SOURCE",
   "graph.duplicateGroup": "DUPLICATE AS PRESET",
+  "graph.setAsSource": "SET AS SOURCE",
+  "graph.currentSource": "CURRENT SOURCE",
   "graph.noTrack": "Select a track first",
   "graph.hint": "MMB pan · wheel zoom · drag node to move · Shift+A add · X or right click delete",
   "graph.addAdsr": "+ Envelope",
@@ -304,6 +306,8 @@ export const en: Record<MessageKey, Message> = {
   "status.trackRemoved": (params) => `Removed ${params.id}`,
   "status.trackRemoveFailed": (params) =>
     `Remove track failed: ${params.message}`,
+  "status.trackSourceFailed": (params) =>
+    `Set source failed: ${params.message}`,
   "status.gainAdded": "Gain added",
   "status.gainAddFailed": (params) => `Add device failed: ${params.message}`,
   "status.adsrAdded": "ADSR added",

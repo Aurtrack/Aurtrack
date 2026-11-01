@@ -2597,6 +2597,17 @@
                 {t("graph.duplicateGroup")}
               </button>
             {/if}
+            {#if track && nodeType(node)?.category === "Instrument"}
+              <button
+                class="ghost small"
+                disabled={track.source_node === node.id}
+                onclick={() => void session.setTrackSource(track.id, node.id)}
+              >
+                {track.source_node === node.id
+                  ? t("graph.currentSource")
+                  : t("graph.setAsSource")}
+              </button>
+            {/if}
             {#each sidebarSections(node) as [panel, params] (panel)}
               {#if panel}
                 <div class="node-sidebar-panel">{panel}</div>
