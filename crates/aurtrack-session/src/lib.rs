@@ -137,6 +137,7 @@ impl Project {
 pub struct Track {
     pub id: String,
     pub name: String,
+    pub source: aurtrack_graph::NodeId,
     pub graph: aurtrack_graph::AudioGraph,
     pub clips: Vec<Clip>,
 }
@@ -651,17 +652,19 @@ fn ungroup_audio_instance(
 }
 
 impl Track {
-    pub fn source(&self) -> Source {
-        let instrument = self.graph.nodes().find(|node| node.is_instrument());
-        match instrument.map(|node| node.type_id.as_str()) {
-            Some("audio.instrument.sine") => Source::Sine {
-                frequency: instrument
-                    .and_then(|node| node.param("frequency"))
-                    .unwrap_or(440.0),
+    pub fn source(&self) -> Result<Source, GraphError> {
+        let instrument = self
+            .graph
+            .node(&self.source)
+            .filter(|node| node.is_instrument())
+            .ok_or_else(|| GraphError::SourceMissing(self.source.clone()))?;
+        Ok(match instrument.type_id.as_str() {
+            "audio.instrument.sine" => Source::Sine {
+                frequency: instrument.param("frequency").unwrap_or(440.0),
             },
-            Some("audio.group") => Source::Piano,
+            "audio.group" => Source::Piano,
             _ => Source::Silence,
-        }
+        })
     }
 
     pub fn devices(&self) -> Vec<Device> {
@@ -694,23 +697,25 @@ impl Track {
                         .is_some_and(|node| node.type_id == "audio.note")
             })
         };
-        let instrument = self.graph.nodes().find(|node| node.is_instrument());
-        let mut group_id = None;
+        let instrument = self
+            .graph
+            .node(&self.source)
+            .filter(|node| node.is_instrument())
+            .ok_or_else(|| GraphError::SourceMissing(self.source.clone()))?;
+        let mut group_id: Option<String> = None;
         let mut source_frequency = None;
         let mut adsr = None;
         let mut plugin = None;
-        if let Some(instrument) = instrument {
-            match instrument.type_id.as_str() {
-                "audio.group" => {
-                    if has_note_source(instrument.id()) {
-                        group_id.clone_from(&instrument.group);
-                    }
-                },
-                "audio.instrument.sine" => {
-                    source_frequency = Some(instrument.param("frequency").unwrap_or(440.0));
-                },
-                _ => {},
-            }
+        match instrument.type_id.as_str() {
+            "audio.group" => {
+                if has_note_source(instrument.id()) {
+                    group_id.clone_from(&instrument.group);
+                }
+            },
+            "audio.instrument.sine" => {
+                source_frequency = Some(instrument.param("frequency").unwrap_or(440.0));
+            },
+            _ => {},
         }
         for node in self.graph.nodes() {
             match node.type_id.as_str() {
@@ -1519,6 +1524,7 @@ impl Session {
         project.tracks.push(Track {
             id: track_id.clone(),
             name: args.name,
+            source: aurtrack_graph::NodeId::new("instrument").map_err(graph_error)?,
             graph,
             clips: Vec::new(),
         });
@@ -4923,7 +4929,7 @@ impl Session {
             "tracks": project.tracks.iter().map(|track| json!({
                 "id": &track.id,
                 "name": &track.name,
-                "source": track.source(),
+                "source": track.source().ok(),
                 "device_count": track.devices().len(),
             })).collect::<Vec<_>>(),
         })
@@ -4950,7 +4956,7 @@ fn project_view(project: &Project) -> Value {
         "tracks": project.tracks.iter().map(|track| json!({
             "id": &track.id,
             "name": &track.name,
-            "source": track.source(),
+            "source": track.source().ok(),
             "devices": track.devices(),
             "graph": graph_view(&track.graph),
             "clips": track.clips.iter().map(|clip| clip_view(project, clip)).collect::<Vec<_>>(),
@@ -5312,7 +5318,7 @@ fn validate_project(project: &Project) -> Result<(u64, u64, u64, u64), CommandEr
             .graph
             .validate_with_audio_groups(&project.node_groups, &project.audio_groups)
             .map_err(graph_error)?;
-        if let Source::Sine { frequency } = track.source() {
+        if let Ok(Source::Sine { frequency }) = track.source() {
             if !frequency.is_finite()
                 || frequency <= 0.0
                 || frequency >= f64::from(project.sample_rate) / 2.0
@@ -5452,7 +5458,7 @@ fn render_project(
             release: settings.release,
         });
         let piano = graph.piano.as_ref();
-        let source = track.source();
+        let source = track.source().map_err(graph_error)?;
         let silent = matches!(source, Source::Silence);
         let explicit_piano = matches!(source, Source::Piano);
         let piano_notes: Vec<NotePlan> = if piano.is_some() {

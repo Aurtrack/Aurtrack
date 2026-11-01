@@ -2605,6 +2605,26 @@ fn default_piano_partial_loop_is_explicit() {
 }
 
 #[test]
+fn track_source_is_an_explicit_node_reference() {
+    let mut session = Session::default();
+    run(&mut session, "project.create", json!({ "name": "source" }));
+    run(
+        &mut session,
+        "track.create",
+        json!({ "name": "sine", "source": "sine" }),
+    );
+    let mut project = session.project().unwrap().clone();
+    project.tracks[0].source = aurtrack_graph::NodeId::new("output").unwrap();
+    let error = project.tracks[0]
+        .playback_graph(&project.node_groups, &project.audio_groups)
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        aurtrack_graph::GraphError::SourceMissing(_)
+    ));
+}
+
+#[test]
 fn piano_track_renders_audible_wav() {
     let mut session = Session::default();
     run(&mut session, "project.create", json!({ "name": "piano" }));

@@ -532,8 +532,11 @@ fn build_plan(
                 release: settings.release,
             });
             let piano = graph.piano.clone();
+            let source = track
+                .source()
+                .map_err(|error| CommandError::invalid_args(format!("节点图错误：{error}")))?;
             let uses_implicit_notes =
-                matches!(track.source(), aurtrack_session::Source::Sine { .. }) || piano.is_some();
+                matches!(source, aurtrack_session::Source::Sine { .. }) || piano.is_some();
             let notes = if uses_implicit_notes {
                 track
                     .clips
@@ -724,6 +727,7 @@ mod tests {
             tracks: vec![Track {
                 id: "track-1".to_string(),
                 name: "lead".to_string(),
+                source: aurtrack_graph::NodeId::new("instrument").unwrap(),
                 graph: aurtrack_graph::AudioGraph::track("audio.instrument.sine"),
                 clips: vec![Clip {
                     id: "clip-1".to_string(),
@@ -776,6 +780,7 @@ mod tests {
             tracks: vec![Track {
                 id: "track-1".to_string(),
                 name: "silence".to_string(),
+                source: aurtrack_graph::NodeId::new("instrument").unwrap(),
                 graph: aurtrack_graph::AudioGraph::track("audio.instrument.silence"),
                 clips: vec![Clip {
                     id: "clip-1".to_string(),
