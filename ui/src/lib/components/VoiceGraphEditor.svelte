@@ -331,8 +331,13 @@
     syncZoneInterface(header);
   }
 
-  function zoneBoundaryPortY(node: VoiceNode, index: number): number {
-    const offset = node.type_id === "voice.zone.input" ? 1 : 0;
+  function zoneBoundaryPortY(
+    node: VoiceNode,
+    index: number,
+    side: "in" | "out",
+  ): number {
+    const offset =
+      node.type_id === "voice.zone.input" && side === "out" ? 1 : 0;
     return (
       NODE_HEADER +
       NODE_BODY_TOP +
@@ -360,7 +365,7 @@
           side === "out"
             ? (node.position?.[0] ?? 0) + nodeWidth(node)
             : (node.position?.[0] ?? 0),
-        y: (node.position?.[1] ?? 0) + zoneBoundaryPortY(node, index),
+        y: (node.position?.[1] ?? 0) + zoneBoundaryPortY(node, index, side),
       };
     }
     const headerId = node.zone;
