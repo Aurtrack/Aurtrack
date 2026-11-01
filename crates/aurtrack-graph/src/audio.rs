@@ -70,12 +70,20 @@ const AUDIO_OUT: [AudioSocketSpec; 1] = [AudioSocketSpec {
     ty: SocketType::Audio,
     default: 0.0,
 }];
-const SINE_INPUTS: [AudioSocketSpec; 1] = [AudioSocketSpec {
-    id: "frequency",
-    name: "Frequency",
-    ty: SocketType::Float,
-    default: 440.0,
-}];
+const SINE_INPUTS: [AudioSocketSpec; 2] = [
+    AudioSocketSpec {
+        id: "frequency",
+        name: "Frequency",
+        ty: SocketType::Float,
+        default: 440.0,
+    },
+    AudioSocketSpec {
+        id: "phase",
+        name: "Phase",
+        ty: SocketType::Float,
+        default: 0.0,
+    },
+];
 const FLOAT_OUT: [AudioSocketSpec; 1] = [AudioSocketSpec {
     id: "out",
     name: "Value",

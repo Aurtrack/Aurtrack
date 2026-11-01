@@ -1099,7 +1099,8 @@ impl GraphPlan {
                 GraphOp::Voice => voice,
                 GraphOp::Sine => {
                     let frequency = control_value(node, 0, &values, 440.0).clamp(20.0, 20_000.0);
-                    (std::f64::consts::TAU * frequency * time).sin() * 0.25
+                    let phase = control_value(node, 1, &values, 0.0);
+                    (std::f64::consts::TAU * frequency * time + phase).sin() * 0.25
                 },
                 GraphOp::Constant(value) => *value,
                 GraphOp::Lfo(lfo) => lfo.at(time),
@@ -1792,6 +1793,33 @@ mod tests {
         };
         assert!((plan.sample(context)).abs() < 1e-9);
         assert!((plan.sample(context) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn audio_sine_honors_phase_control() {
+        let plan = GraphPlan {
+            nodes: vec![
+                GraphNodePlan {
+                    op: GraphOp::Constant(440.0),
+                    inputs: Vec::new(),
+                    controls: Vec::new(),
+                },
+                GraphNodePlan {
+                    op: GraphOp::Constant(std::f64::consts::FRAC_PI_2),
+                    inputs: Vec::new(),
+                    controls: Vec::new(),
+                },
+                GraphNodePlan {
+                    op: GraphOp::Sine,
+                    inputs: Vec::new(),
+                    controls: vec![0, 1],
+                },
+            ],
+            output: 2,
+            plugin: None,
+            piano: None,
+        };
+        assert!((plan.sample(0.0, 48_000, 0.0) - 0.25).abs() < 1e-9);
     }
 
     #[test]
