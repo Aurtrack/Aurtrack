@@ -174,6 +174,7 @@ export type Track = {
   id: string;
   name: string;
   source: Source;
+  source_node?: string;
   devices: Device[];
   graph?: TrackGraph;
   clips: Clip[];

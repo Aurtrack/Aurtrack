@@ -2033,6 +2033,9 @@
         {t("graph.nodes")}
       {:else if track}
         {track.id} · {nodes.length} {t("graph.nodes")}
+        {#if track.source_node}
+          · {t("graph.source")} {track.source_node}
+        {/if}
       {:else}
         {t("graph.noTrack")}
       {/if}

@@ -144,6 +144,7 @@ export const zhCN = {
   "inspector.source.silence": "音符轨",
   "graph.title": "节点图",
   "graph.nodes": "个节点",
+  "graph.source": "音源",
   "graph.noTrack": "先选择一条轨道",
   "graph.hint": "中键平移 · 滚轮缩放 · 拖节点移动 · Shift+A 添加 · X 或右键删除",
   "graph.addAdsr": "+ 包络",

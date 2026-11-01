@@ -4962,6 +4962,7 @@ impl Session {
                 "id": &track.id,
                 "name": &track.name,
                 "source": track.source().ok(),
+                "source_node": &track.source,
                 "device_count": track.devices().len(),
             })).collect::<Vec<_>>(),
         })
@@ -4989,6 +4990,7 @@ fn project_view(project: &Project) -> Value {
             "id": &track.id,
             "name": &track.name,
             "source": track.source().ok(),
+            "source_node": &track.source,
             "devices": track.devices(),
             "graph": graph_view(&track.graph),
             "clips": track.clips.iter().map(|clip| clip_view(project, clip)).collect::<Vec<_>>(),

@@ -149,6 +149,7 @@ export const en: Record<MessageKey, Message> = {
   "inspector.source.silence": "NOTE TRACK",
   "graph.title": "NODE GRAPH",
   "graph.nodes": "NODES",
+  "graph.source": "SOURCE",
   "graph.noTrack": "Select a track first",
   "graph.hint": "MMB pan · wheel zoom · drag node to move · Shift+A add · X or right click delete",
   "graph.addAdsr": "+ Envelope",
