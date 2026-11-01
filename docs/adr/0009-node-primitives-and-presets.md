@@ -74,7 +74,7 @@ Aurtrack 的节点系统里有一批“看起来是节点、实际是复合算�
 | `voice.noise` / `white_noise` | 原语 | 可保留 | 补种子/颜色控制 |
 | `voice.sample_hold` | 原语 | 可保留 | 明确状态语义 |
 | `math.add` / `multiply` | 原语 | 已补 subtract/divide/pow/mod/floor/ceil/round/compare/exp/sqrt | 可继续补向量/位运算 |
-| `audio.delay` | 原语 | 音频域有，Voice 域没有 | 补 Voice 历史/延迟 |
+| `audio.delay` | 原语 | 音频域有，Voice 域没有 | `delay.line` 已补，固定 4096 采样/音符 |
 
 ## 实施顺序
 
@@ -91,6 +91,7 @@ Aurtrack 的节点系统里有一批“看起来是节点、实际是复合算�
 - 第 2 步进行中：`osc.sine`、`env.adsr`、`filter.biquad.lowpass/highpass`、`math.exp/sqrt` 已加入；`voice.partial` 预设组尚未替换。
 - 预设可复制：新增 `group.duplicate`，复制图/接口/名称并使用新 ID；UI 入口尚未添加。
 - `piano.partial` 已改用 7 路显式数值输入和原语图；默认 `piano.voice` 仍使用黑箱 `voice.partial`，下一步迁移。
+- `delay.line` 已加入，编译期为每个音符分配 4096 采样环形缓冲；缓冲上限仍是固定值。
 
 ## 非目标
 
