@@ -829,7 +829,7 @@ fn compile_voice(
     interface: &NodeGroupInterface,
     groups: &BTreeMap<String, NodeGroup>,
 ) -> Result<VoicePlan, GraphError> {
-    compile_voice_inner(voice, interface, groups, &mut Vec::new(), None, &[])
+    compile_voice_inner(voice, interface, groups, &mut Vec::new(), None, None, &[])
 }
 
 fn compile_voice_inner(
@@ -838,6 +838,7 @@ fn compile_voice_inner(
     groups: &BTreeMap<String, NodeGroup>,
     stack: &mut Vec<String>,
     input_bindings: Option<&BTreeMap<String, usize>>,
+    external_inputs: Option<&BTreeMap<(NodeId, String), usize>>,
     initial_nodes: &[VoiceNodePlan],
 ) -> Result<VoicePlan, GraphError> {
     let order = voice.topological_order_with_zones()?;
@@ -868,6 +869,12 @@ fn compile_voice_inner(
                 matches.truncate(1);
             }
             if matches.is_empty() {
+                if let Some(slot) = external_inputs
+                    .and_then(|external| external.get(&(id.clone(), port.id.clone())).copied())
+                {
+                    inputs.push(slot);
+                    continue;
+                }
                 let value = node.params.get(&port.id).copied().unwrap_or(port.default);
                 let index = nodes.len();
                 nodes.push(VoiceNodePlan::new(VoiceOp::Constant(value), Vec::new()));
@@ -1004,11 +1011,47 @@ fn compile_voice_inner(
                 })
                 .ok_or(GraphError::ZoneTerminals)?;
             let (body_graph, body_interface) = voice.zone_body(node)?;
+            let inputs = aurtrack_graph::zone_input_sockets(node);
+            let outputs = aurtrack_graph::zone_output_sockets(node);
+            if inputs.len() != outputs.len() || outputs.len() > aurtrack_engine::MAX_REPEAT_OUTPUTS
+            {
+                return Err(GraphError::ZoneTerminals);
+            }
             let mut bindings = BTreeMap::new();
             let mut body_inputs = Vec::new();
-            for (index, socket) in aurtrack_graph::zone_input_sockets(node).iter().enumerate() {
+            for (index, socket) in inputs.iter().enumerate() {
                 bindings.insert(socket.id.clone(), index);
                 body_inputs.push(VoiceNodePlan::new(VoiceOp::Input(index), Vec::new()));
+            }
+            let mut external_inputs = BTreeMap::new();
+            let mut free_values = Vec::new();
+            for connection in &voice.connections {
+                if connection.muted
+                    || body_graph.nodes.contains_key(connection.from.node())
+                    || !body_graph.nodes.contains_key(connection.to.node())
+                    || connection.to.node() == &input_node.id
+                    || connection.to.node() == &output_node.id
+                {
+                    continue;
+                }
+                let source = indices
+                    .get(&(
+                        connection.from.node().clone(),
+                        connection.from.port().to_string(),
+                    ))
+                    .copied()
+                    .ok_or(GraphError::VoiceUnknownNode)?;
+                let key = (
+                    connection.to.node().clone(),
+                    connection.to.port().to_string(),
+                );
+                if external_inputs.contains_key(&key) {
+                    continue;
+                }
+                let slot = inputs.len() + free_values.len();
+                external_inputs.insert(key, slot);
+                body_inputs.push(VoiceNodePlan::new(VoiceOp::Input(slot), Vec::new()));
+                free_values.push(source);
             }
             let body = compile_voice_inner(
                 &body_graph,
@@ -1016,14 +1059,9 @@ fn compile_voice_inner(
                 groups,
                 stack,
                 Some(&bindings),
+                Some(&external_inputs),
                 &body_inputs,
             )?;
-            let inputs = aurtrack_graph::zone_input_sockets(node);
-            let outputs = aurtrack_graph::zone_output_sockets(node);
-            if inputs.len() != outputs.len() || outputs.len() > aurtrack_engine::MAX_REPEAT_OUTPUTS
-            {
-                return Err(GraphError::ZoneTerminals);
-            }
             let mut external = Vec::new();
             let count = voice
                 .connections
@@ -1084,6 +1122,7 @@ fn compile_voice_inner(
                 });
                 external.push(index);
             }
+            external.extend(free_values);
             let mut slots = Vec::with_capacity(outputs.len());
             for socket in &outputs {
                 slots.push(
@@ -1098,6 +1137,7 @@ fn compile_voice_inner(
                 VoiceOp::Repeat {
                     body: Box::new(body),
                     outputs: slots,
+                    carried: inputs.len(),
                 },
                 external,
             ));
@@ -1143,6 +1183,7 @@ fn compile_voice_inner(
                 groups,
                 stack,
                 Some(&bindings),
+                None,
                 &[VoiceNodePlan::new(VoiceOp::Input(0), Vec::new())],
             )?;
             stack.pop();
@@ -1153,6 +1194,7 @@ fn compile_voice_inner(
                 VoiceOp::Repeat {
                     outputs: vec![body.outputs.values().next().copied().unwrap_or(body.output)],
                     body: Box::new(body),
+                    carried: 1,
                 },
                 vec![inputs.first().copied().unwrap_or(initial), initial],
             ));
@@ -1208,6 +1250,7 @@ fn compile_voice_inner(
                     groups,
                     stack,
                     Some(&bindings),
+                    None,
                     &[],
                 )?;
                 stack.pop();
@@ -1237,6 +1280,7 @@ fn compile_voice_inner(
                 groups,
                 stack,
                 Some(&bindings),
+                None,
                 &initial,
             )?;
             stack.pop();

@@ -1667,6 +1667,18 @@ impl VoiceGraph {
                     PortRef::fixed(output.id.clone(), "in"),
                 ));
             }
+            let body_ids = self.zone_members(header.id.as_str(), &mut BTreeSet::new());
+            for connection in &self.connections {
+                if body_ids.contains(connection.to.node())
+                    && !body_ids.contains(connection.from.node())
+                    && connection.from.node() != &header.id
+                {
+                    graph.connections.push(VoiceConnection::new(
+                        connection.from.clone(),
+                        PortRef::fixed(header.id.clone(), "in"),
+                    ));
+                }
+            }
         }
         graph.topological_order()
     }
@@ -1983,17 +1995,17 @@ impl VoiceGraph {
         let partials = VoiceNode::new(NodeId::fixed("partials"), "voice.zone.repeat");
         let mut zone_in = VoiceNode::new(NodeId::fixed("p-in"), "voice.zone.input");
         zone_in.params.insert("count".to_string(), 10.0);
-        zone_in.zone_inputs = vec![
-            NodeGroupSocket::new("out", "Audio", NodeGroupSocketType::Audio),
-            NodeGroupSocket::new("pitch", "Pitch", NodeGroupSocketType::Float),
-            NodeGroupSocket::new("velocity", "Velocity", NodeGroupSocketType::Float),
-        ];
+        zone_in.zone_inputs = vec![NodeGroupSocket::new(
+            "out",
+            "Audio",
+            NodeGroupSocketType::Audio,
+        )];
         let mut zone_out = VoiceNode::new(NodeId::fixed("p-out"), "voice.zone.output");
-        zone_out.zone_outputs = vec![
-            NodeGroupSocket::new("in", "Audio", NodeGroupSocketType::Audio),
-            NodeGroupSocket::new("pitch", "Pitch", NodeGroupSocketType::Float),
-            NodeGroupSocket::new("velocity", "Velocity", NodeGroupSocketType::Float),
-        ];
+        zone_out.zone_outputs = vec![NodeGroupSocket::new(
+            "in",
+            "Audio",
+            NodeGroupSocketType::Audio,
+        )];
         let mut partial = VoiceNode::new(NodeId::fixed("p-partial"), "voice.partial");
         let mut partial_add = VoiceNode::new(NodeId::fixed("p-add"), "voice.add");
         let mut partial_time = VoiceNode::new(NodeId::fixed("p-time"), "voice.time");
@@ -2115,11 +2127,11 @@ impl VoiceGraph {
                 ),
                 VoiceConnection::new(
                     PortRef::fixed(NodeId::fixed("note-separate"), "pitch"),
-                    PortRef::fixed(NodeId::fixed("p-in"), "pitch"),
+                    PortRef::fixed(NodeId::fixed("p-partial"), "pitch"),
                 ),
                 VoiceConnection::new(
                     PortRef::fixed(NodeId::fixed("note-separate"), "velocity"),
-                    PortRef::fixed(NodeId::fixed("p-in"), "velocity"),
+                    PortRef::fixed(NodeId::fixed("p-partial"), "velocity"),
                 ),
                 VoiceConnection::new(
                     PortRef::fixed(NodeId::fixed("note-separate"), "velocity"),
@@ -2222,22 +2234,6 @@ impl VoiceGraph {
                     PortRef::fixed(NodeId::fixed("p-add"), "in1"),
                 ),
                 VoiceConnection::new(
-                    PortRef::fixed(NodeId::fixed("p-in"), "pitch"),
-                    PortRef::fixed(NodeId::fixed("p-partial"), "pitch"),
-                ),
-                VoiceConnection::new(
-                    PortRef::fixed(NodeId::fixed("p-in"), "velocity"),
-                    PortRef::fixed(NodeId::fixed("p-partial"), "velocity"),
-                ),
-                VoiceConnection::new(
-                    PortRef::fixed(NodeId::fixed("p-in"), "pitch"),
-                    PortRef::fixed(NodeId::fixed("p-out"), "pitch"),
-                ),
-                VoiceConnection::new(
-                    PortRef::fixed(NodeId::fixed("p-in"), "velocity"),
-                    PortRef::fixed(NodeId::fixed("p-out"), "velocity"),
-                ),
-                VoiceConnection::new(
                     PortRef::fixed(NodeId::fixed("p-time"), "out"),
                     PortRef::fixed(NodeId::fixed("p-partial"), "time"),
                 ),
@@ -2265,32 +2261,14 @@ impl VoiceGraph {
         if let Some(node) = graph.nodes.get_mut(&partial) {
             node.type_id = "voice.group".to_string();
             node.group = Some("piano.partial".to_string());
+            node.params.insert("inharmonicity".to_string(), 0.0004);
+            node.params.insert("brightness".to_string(), 0.5);
+            node.params.insert("decay".to_string(), 1.2);
         }
         for connection in &mut graph.connections {
             if connection.from.node() == &partial && connection.from.port() == "out" {
                 connection.from = PortRef::new(partial.clone(), "audio");
             }
-        }
-        for (id, name, value, position) in [
-            (
-                "p-open-inharmonicity",
-                "Inharmonicity",
-                0.0004,
-                [40.0, 1260.0],
-            ),
-            ("p-open-brightness", "Brightness", 0.5, [40.0, 1340.0]),
-            ("p-open-decay", "Decay", 1.2, [40.0, 1420.0]),
-        ] {
-            let id = NodeId::fixed(id);
-            let mut node = VoiceNode::new(id.clone(), "value.float");
-            node.params.insert("value".to_string(), value);
-            node.position = Some(position);
-            node.zone = Some("partials".to_string());
-            graph.nodes.insert(id.clone(), node);
-            graph.connections.push(VoiceConnection::new(
-                PortRef::new(id, "out"),
-                PortRef::new(partial.clone(), name.to_lowercase()),
-            ));
         }
         graph
     }
@@ -2463,11 +2441,7 @@ impl VoiceGraph {
                     .nodes
                     .get(&connection.from.node)
                     .map(|node| node.type_id.as_str());
-                let target_type = self
-                    .nodes
-                    .get(&connection.to.node)
-                    .map(|node| node.type_id.as_str());
-                let allowed = (to_body && !from_body && target_type == Some("voice.zone.input"))
+                let allowed = (to_body && !from_body)
                     || (from_body && !to_body && source_type == Some("voice.zone.output"));
                 if !allowed {
                     return Err(GraphError::ZoneLeak(if from_body {
@@ -3895,8 +3869,8 @@ mod tests {
         let (_, interface) = graph
             .zone_body(&graph.nodes[&NodeId::fixed("partials")])
             .unwrap();
-        assert_eq!(interface.inputs.len(), 4);
-        assert_eq!(interface.outputs.len(), 4);
+        assert_eq!(interface.inputs.len(), 2);
+        assert_eq!(interface.outputs.len(), 2);
     }
 
     #[test]
@@ -3965,15 +3939,12 @@ mod tests {
                 .values()
                 .any(|node| node.type_id == "voice.pitch" || node.type_id == "voice.velocity")
         );
+        let zone_in = &graph.nodes[&NodeId::fixed("p-in")];
+        assert_eq!(zone_in.zone_inputs.len(), 1);
+        assert_eq!(zone_in.zone_inputs[0].id, "out");
         for port in ["pitch", "velocity"] {
             assert!(graph.connections.iter().any(|connection| {
                 connection.from.node == NodeId::fixed("note-separate")
-                    && connection.from.port() == port
-                    && connection.to.node == NodeId::fixed("p-in")
-                    && connection.to.port() == port
-            }));
-            assert!(graph.connections.iter().any(|connection| {
-                connection.from.node == NodeId::fixed("p-in")
                     && connection.from.port() == port
                     && connection.to.node == NodeId::fixed("p-partial")
                     && connection.to.port() == port
@@ -3990,7 +3961,7 @@ mod tests {
         let group = NodeGroup::piano_default();
         assert_eq!(group.interface.inputs.len(), 1);
         assert_eq!(group.interface.inputs[0].ty, NodeGroupSocketType::Note);
-        assert_eq!(group.graph.nodes.len(), 29);
+        assert_eq!(group.graph.nodes.len(), 26);
     }
 
     #[test]
