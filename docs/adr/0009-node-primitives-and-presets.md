@@ -67,7 +67,7 @@ Aurtrack 的节点系统里有一批“看起来是节点、实际是复合算�
 | --- | --- | --- | --- |
 | `voice.partial` | 黑箱 | 正弦、非谐性、亮度、衰减全在内部 | `piano.partial` 已改为原语组，`piano.voice` 已引用 |
 | `voice.attack` / `voice.decay` | 过粗原语 | 只有单段指数 | `env.adsr` 已补，旧节点保留兼容 |
-| `audio.instrument.sine` | 黑箱 | 固定正弦源，无相位/波表 | 暴露 `osc.sine` 或预设组 |
+| `audio.instrument.sine` | 黑箱 | 固定正弦源，无相位/波表 | 已暴露 Phase 输入；波表和预设组仍待补 |
 | `audio.adsr` | 过粗原语 | 固定 ADSR 阶段 | 由包络原语组成预设组 |
 | `audio.filter.lowpass` / `highpass` | 过粗原语 | 固定类型 | `filter.biquad.lowpass` / `highpass` 已补 |
 | `voice.repeat` / `voice.group` | 宏 | 编译期内联，不能独立编译 | 保留语义，支持展开和子计划 |
@@ -93,6 +93,7 @@ Aurtrack 的节点系统里有一批“看起来是节点、实际是复合算�
 - `piano.partial` 已改用 7 路显式数值输入和原语图；默认 `piano.voice` 已通过 `voice.group` 引用它。
 - 迁移中发现并修复嵌套组展开时输入索引未加偏移的问题；新增 `math.int_to_float`。
 - `delay.line` 已加入，编译期为每个音符分配 4096 采样环形缓冲；缓冲上限仍是固定值。
+- 音频域 `audio.instrument.sine` 已暴露 Phase 控制输入；它仍是源节点，未改由组实现。
 
 ## 非目标
 
