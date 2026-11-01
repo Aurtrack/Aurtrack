@@ -1243,6 +1243,7 @@ impl AudioGraph {
         let mut group_inputs = 0;
         let mut group_outputs = 0;
         let mut plugins = 0;
+        let mut envelopes = 0;
         for node in self.nodes.values() {
             let node_type = audio_node_type(&node.type_id)
                 .ok_or_else(|| GraphError::UnknownAudioNodeType(node.type_id.clone()))?;
@@ -1299,9 +1300,15 @@ impl AudioGraph {
             if node.type_id == "audio.plugin" {
                 plugins += 1;
             }
+            if node.type_id == "audio.adsr" {
+                envelopes += 1;
+            }
         }
         if plugins > 1 {
             return Err(GraphError::PluginCount(plugins));
+        }
+        if envelopes > 1 {
+            return Err(GraphError::AdsrCount(envelopes));
         }
         if interface.is_none() && outputs != 1 {
             return Err(GraphError::AudioOutputCount(outputs));
@@ -1428,6 +1435,19 @@ mod tests {
         }
         let error = graph.validate(&groups()).unwrap_err();
         assert!(matches!(error, GraphError::PluginCount(2)));
+    }
+
+    #[test]
+    fn multiple_adsr_are_rejected() {
+        let mut graph = AudioGraph::empty_track("piano.voice");
+        for id in ["adsr-a", "adsr-b"] {
+            let id = NodeId::new(id).unwrap();
+            graph
+                .nodes
+                .insert(id.clone(), AudioNode::new(id, "audio.adsr"));
+        }
+        let error = graph.validate(&groups()).unwrap_err();
+        assert!(matches!(error, GraphError::AdsrCount(2)));
     }
 
     #[test]
