@@ -2605,6 +2605,32 @@ fn default_piano_partial_loop_is_explicit() {
 }
 
 #[test]
+fn dangling_adsr_is_not_selected() {
+    let mut session = Session::default();
+    run(&mut session, "project.create", json!({ "name": "adsr" }));
+    run(
+        &mut session,
+        "track.create",
+        json!({ "name": "sine", "source": "sine" }),
+    );
+    run(
+        &mut session,
+        "node.add",
+        json!({
+            "track_id": "track-1",
+            "kind": "amp.adsr",
+            "params": { "attack": 10.0, "decay": 1.0, "sustain": 0.5, "release": 1.0 },
+            "position": [300.0, 300.0]
+        }),
+    );
+    let project = session.project().unwrap();
+    let (_, adsr, _) = project.tracks[0]
+        .playback_graph(&project.node_groups, &project.audio_groups)
+        .unwrap();
+    assert!(adsr.is_none());
+}
+
+#[test]
 fn track_source_is_an_explicit_node_reference() {
     let mut session = Session::default();
     run(&mut session, "project.create", json!({ "name": "source" }));

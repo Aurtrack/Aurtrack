@@ -651,6 +651,25 @@ fn ungroup_audio_instance(
     Ok(node_ids)
 }
 
+fn output_path_nodes(graph: &AudioGraph) -> BTreeSet<NodeId> {
+    let Some(output) = graph.nodes().find(|node| node.type_id == "audio.output") else {
+        return BTreeSet::new();
+    };
+    let mut path = BTreeSet::new();
+    let mut queue = vec![output.id().clone()];
+    while let Some(id) = queue.pop() {
+        if !path.insert(id.clone()) {
+            continue;
+        }
+        for connection in &graph.connections {
+            if connection.to.node() == &id {
+                queue.push(connection.from.node().clone());
+            }
+        }
+    }
+    path
+}
+
 impl Track {
     pub fn source(&self) -> Result<Source, GraphError> {
         let instrument = self
@@ -717,7 +736,11 @@ impl Track {
             },
             _ => {},
         }
+        let output_path = output_path_nodes(&self.graph);
         for node in self.graph.nodes() {
+            if !output_path.contains(node.id()) {
+                continue;
+            }
             match node.type_id.as_str() {
                 "audio.adsr" => {
                     adsr = Some(aurtrack_graph::AdsrSettings::new(
