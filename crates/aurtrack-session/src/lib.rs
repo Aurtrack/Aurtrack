@@ -1018,6 +1018,12 @@ fn compile_voice_inner(
                 Some(&bindings),
                 &body_inputs,
             )?;
+            let inputs = aurtrack_graph::zone_input_sockets(node);
+            let outputs = aurtrack_graph::zone_output_sockets(node);
+            if inputs.len() != outputs.len() || outputs.len() > aurtrack_engine::MAX_REPEAT_OUTPUTS
+            {
+                return Err(GraphError::ZoneTerminals);
+            }
             let mut external = Vec::new();
             let count = voice
                 .connections
@@ -1044,7 +1050,7 @@ fn compile_voice_inner(
                 index
             });
             external.push(count_index);
-            for socket in aurtrack_graph::zone_input_sockets(node) {
+            for socket in &inputs {
                 let source = voice
                     .connections
                     .iter()
@@ -1071,27 +1077,33 @@ fn compile_voice_inner(
                 });
                 external.push(index);
             }
-            let feedback = aurtrack_graph::zone_output_sockets(node)
-                .iter()
-                .find(|socket| socket.ty == NodeGroupSocketType::Audio)
-                .and_then(|socket| body.outputs.get(&socket.id).copied())
-                .or_else(|| body.outputs.values().next().copied())
-                .ok_or(GraphError::VoiceTerminals)?;
-            for socket in aurtrack_graph::zone_output_sockets(node) {
-                let slot = *body
-                    .outputs
-                    .get(&socket.id)
-                    .ok_or(GraphError::VoiceTerminals)?;
+            let mut slots = Vec::with_capacity(outputs.len());
+            for socket in &outputs {
+                slots.push(
+                    *body
+                        .outputs
+                        .get(&socket.id)
+                        .ok_or(GraphError::VoiceTerminals)?,
+                );
+            }
+            let repeat_index = nodes.len();
+            nodes.push(VoiceNodePlan::new(
+                VoiceOp::Repeat {
+                    body: Box::new(body),
+                    outputs: slots,
+                },
+                external,
+            ));
+            for (slot, socket) in outputs.iter().enumerate() {
                 let index = nodes.len();
                 nodes.push(VoiceNodePlan::new(
-                    VoiceOp::Repeat {
-                        body: Box::new(body.clone()),
-                        output: slot,
-                        feedback,
+                    VoiceOp::RepeatResult {
+                        source: repeat_index,
+                        slot,
                     },
-                    external.clone(),
+                    Vec::new(),
                 ));
-                indices.insert((output_node.id.clone(), socket.id), index);
+                indices.insert((output_node.id.clone(), socket.id.clone()), index);
             }
             continue;
         }
@@ -1127,14 +1139,15 @@ fn compile_voice_inner(
                 &[VoiceNodePlan::new(VoiceOp::Input(0), Vec::new())],
             )?;
             stack.pop();
+            let initial = nodes.len();
+            nodes.push(VoiceNodePlan::new(VoiceOp::Constant(0.0), Vec::new()));
             let index = nodes.len();
             nodes.push(VoiceNodePlan::new(
                 VoiceOp::Repeat {
-                    output: body.outputs.values().next().copied().unwrap_or(body.output),
-                    feedback: body.outputs.values().next().copied().unwrap_or(body.output),
+                    outputs: vec![body.outputs.values().next().copied().unwrap_or(body.output)],
                     body: Box::new(body),
                 },
-                inputs.first().copied().into_iter().collect(),
+                vec![inputs.first().copied().unwrap_or(initial), initial],
             ));
             indices.insert((id.clone(), "out".to_string()), index);
             continue;

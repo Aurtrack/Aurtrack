@@ -2349,10 +2349,29 @@ impl VoiceGraph {
             .cloned()
             .collect();
         let _ = (&input_node, &output_node);
-        let interface = NodeGroupInterface {
-            inputs: zone_input_sockets(header),
-            outputs: zone_output_sockets(header),
-        };
+        let inputs = zone_input_sockets(header);
+        let outputs = zone_output_sockets(header);
+        if inputs.len() != outputs.len() {
+            return Err(GraphError::InvalidGroupSocket {
+                socket: header.id.to_string(),
+                reason: "Repeat Zone 的输入和输出必须成对".to_string(),
+            });
+        }
+        for (input, output) in inputs.iter().zip(&outputs) {
+            if input.ty == NodeGroupSocketType::Note || output.ty == NodeGroupSocketType::Note {
+                return Err(GraphError::InvalidGroupSocket {
+                    socket: input.id.clone(),
+                    reason: "Repeat Zone 暂不支持 Note 端口".to_string(),
+                });
+            }
+            if input.ty != output.ty {
+                return Err(GraphError::InvalidGroupSocket {
+                    socket: input.id.clone(),
+                    reason: "Repeat Zone 每对输入输出类型必须一致".to_string(),
+                });
+            }
+        }
+        let interface = NodeGroupInterface { inputs, outputs };
         Ok((
             VoiceGraph {
                 nodes,
@@ -3829,7 +3848,36 @@ mod tests {
     }
 
     #[test]
-    fn inline_zone_accepts_multiple_output_sockets() {
+    fn inline_zone_accepts_paired_sockets() {
+        let mut graph = VoiceGraph::piano_default();
+        let inputs = vec![
+            NodeGroupSocket::new("out", "Audio", NodeGroupSocketType::Audio),
+            NodeGroupSocket::new("aux", "Aux", NodeGroupSocketType::Float),
+        ];
+        let outputs = vec![
+            NodeGroupSocket::new("in", "Audio", NodeGroupSocketType::Audio),
+            NodeGroupSocket::new("aux", "Aux", NodeGroupSocketType::Float),
+        ];
+        if let Some(header) = graph.nodes.get_mut(&NodeId::fixed("partials")) {
+            header.zone_inputs = inputs.clone();
+            header.zone_outputs = outputs.clone();
+        }
+        if let Some(boundary) = graph.nodes.get_mut(&NodeId::fixed("p-in")) {
+            boundary.zone_inputs = inputs;
+        }
+        if let Some(boundary) = graph.nodes.get_mut(&NodeId::fixed("p-out")) {
+            boundary.zone_outputs = outputs;
+        }
+        graph.validate().unwrap();
+        let (_, interface) = graph
+            .zone_body(&graph.nodes[&NodeId::fixed("partials")])
+            .unwrap();
+        assert_eq!(interface.inputs.len(), 2);
+        assert_eq!(interface.outputs.len(), 2);
+    }
+
+    #[test]
+    fn inline_zone_rejects_unpaired_sockets() {
         let mut graph = VoiceGraph::piano_default();
         let outputs = vec![
             NodeGroupSocket::new("in", "Audio", NodeGroupSocketType::Audio),
@@ -3841,11 +3889,10 @@ mod tests {
         if let Some(boundary) = graph.nodes.get_mut(&NodeId::fixed("p-out")) {
             boundary.zone_outputs = outputs;
         }
-        graph.validate().unwrap();
-        let (_, interface) = graph
-            .zone_body(&graph.nodes[&NodeId::fixed("partials")])
-            .unwrap();
-        assert_eq!(interface.outputs.len(), 2);
+        assert!(matches!(
+            graph.validate(),
+            Err(GraphError::InvalidGroupSocket { .. })
+        ));
     }
 
     #[test]

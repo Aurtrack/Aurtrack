@@ -67,6 +67,7 @@ pub struct VoicePlan {
     pub output: usize,
     pub outputs: BTreeMap<String, usize>,
     pub node_outputs: BTreeMap<String, usize>,
+    repeat_cache: Arc<[AtomicU64]>,
 }
 
 impl VoicePlan {
@@ -76,6 +77,10 @@ impl VoicePlan {
             output,
             outputs: BTreeMap::new(),
             node_outputs: BTreeMap::new(),
+            repeat_cache: (0..REPEAT_CACHE_SLOTS)
+                .map(|_| AtomicU64::new(0))
+                .collect::<Vec<_>>()
+                .into(),
         }
     }
 
@@ -158,8 +163,11 @@ pub enum VoiceOp {
     Delay,
     Repeat {
         body: Box<VoicePlan>,
-        output: usize,
-        feedback: usize,
+        outputs: Vec<usize>,
+    },
+    RepeatResult {
+        source: usize,
+        slot: usize,
     },
     GroupCall {
         body: Box<VoicePlan>,
@@ -578,39 +586,46 @@ impl VoicePlan {
                 },
                 VoiceOp::Repeat {
                     ref body,
-                    output,
-                    feedback,
+                    ref outputs,
                 } => {
-                    let count = node
-                        .inputs
-                        .first()
-                        .map_or(1.0, |input| values[*input])
-                        .round()
-                        .clamp(1.0, 64.0) as usize;
-                    let mut carried = node.inputs.get(1).map_or(0.0, |input| values[*input]);
-                    let extra_len = node.inputs.len().saturating_sub(2).min(64);
-                    let mut extra = [0.0_f64; 64];
-                    for (slot, input) in extra.iter_mut().zip(node.inputs.iter().skip(2)) {
-                        *slot = values[*input];
+                    if outputs.len() > MAX_REPEAT_OUTPUTS {
+                        0.0
+                    } else {
+                        let count = node
+                            .inputs
+                            .first()
+                            .map_or(1.0, |input| values[*input])
+                            .round()
+                            .clamp(0.0, 64.0) as usize;
+                        let mut carried = [0.0_f64; MAX_REPEAT_OUTPUTS];
+                        for (slot, input) in carried.iter_mut().zip(node.inputs.iter().skip(1)) {
+                            *slot = values[*input];
+                        }
+                        let mut sampled = carried;
+                        for iteration in 0..count {
+                            let mut loop_context = context;
+                            loop_context.iteration = iteration as u64;
+                            body.sample_sockets_into(
+                                outputs,
+                                loop_context,
+                                &carried[..outputs.len()],
+                                &mut sampled[..outputs.len()],
+                            )?;
+                            carried = sampled;
+                        }
+                        let base = index * MAX_REPEAT_OUTPUTS;
+                        for (slot, value) in carried.iter().enumerate() {
+                            self.repeat_cache[base + slot]
+                                .store(value.to_bits(), Ordering::Relaxed);
+                        }
+                        carried[0]
                     }
-                    let mut result = carried;
-                    let mut body_inputs = [0.0_f64; 65];
-                    let mut sampled = [0.0_f64; 2];
-                    for iteration in 0..count {
-                        let mut loop_context = context;
-                        loop_context.iteration = iteration as u64;
-                        body_inputs[0] = carried;
-                        body_inputs[1..=extra_len].copy_from_slice(&extra[..extra_len]);
-                        body.sample_sockets_into(
-                            &[feedback, output],
-                            loop_context,
-                            &body_inputs[..=extra_len],
-                            &mut sampled,
-                        )?;
-                        carried = sampled[0];
-                        result = sampled[1];
-                    }
-                    result
+                },
+                VoiceOp::RepeatResult { source, slot } => {
+                    let base = source * MAX_REPEAT_OUTPUTS + slot;
+                    self.repeat_cache
+                        .get(base)
+                        .map_or(0.0, |value| f64::from_bits(value.load(Ordering::Relaxed)))
                 },
                 VoiceOp::Output => node.inputs.first().map_or(0.0, |input| values[*input]),
             };
@@ -1049,6 +1064,11 @@ pub const MAX_VOICE_NODES: usize = 256;
 
 /// 每个 Voice 节点的状态槽数；Biquad 每音符占两槽。
 pub const VOICE_STATE_SLOTS: usize = 128;
+
+/// 一个 Repeat Zone 最多携带的输出值数量。
+pub const MAX_REPEAT_OUTPUTS: usize = 16;
+
+const REPEAT_CACHE_SLOTS: usize = MAX_VOICE_NODES * MAX_REPEAT_OUTPUTS;
 
 /// 每个音符可用的 Voice 延迟采样数。
 pub const VOICE_DELAY_SAMPLES: usize = 4096;
@@ -2206,33 +2226,37 @@ mod tests {
     }
 
     #[test]
-    fn repeat_can_expose_a_secondary_output_slot() {
-        let mut body = VoicePlan::new(
+    fn repeat_carries_multiple_values_across_iterations() {
+        let body = VoicePlan::new(
             vec![
                 VoiceNodePlan::new(VoiceOp::Input(0), vec![]),
-                VoiceNodePlan::new(VoiceOp::Constant(0.75), vec![]),
-                VoiceNodePlan::new(VoiceOp::Output, vec![0]),
+                VoiceNodePlan::new(VoiceOp::Input(1), vec![]),
+                VoiceNodePlan::new(VoiceOp::Constant(1.0), vec![]),
+                VoiceNodePlan::new(VoiceOp::Add, vec![0, 2]),
+                VoiceNodePlan::new(VoiceOp::Add, vec![1, 2]),
             ],
-            2,
+            0,
         );
-        body.set_outputs(BTreeMap::from([
-            ("audio".to_string(), 0),
-            ("aux".to_string(), 1),
-        ]));
+        let mut body = body;
+        body.set_outputs(BTreeMap::from([("a".to_string(), 3), ("b".to_string(), 4)]));
         let plan = VoicePlan::new(
             vec![
+                VoiceNodePlan::new(VoiceOp::Constant(3.0), vec![]),
+                VoiceNodePlan::new(VoiceOp::Constant(1.0), vec![]),
                 VoiceNodePlan::new(VoiceOp::Constant(2.0), vec![]),
                 VoiceNodePlan::new(
                     VoiceOp::Repeat {
                         body: Box::new(body),
-                        output: 1,
-                        feedback: 0,
+                        outputs: vec![3, 4],
                     },
-                    vec![0],
+                    vec![0, 1, 2],
                 ),
-                VoiceNodePlan::new(VoiceOp::Output, vec![1]),
+                VoiceNodePlan::new(VoiceOp::RepeatResult { source: 3, slot: 0 }, vec![]),
+                VoiceNodePlan::new(VoiceOp::RepeatResult { source: 3, slot: 1 }, vec![]),
+                VoiceNodePlan::new(VoiceOp::Add, vec![4, 5]),
+                VoiceNodePlan::new(VoiceOp::Output, vec![6]),
             ],
-            2,
+            7,
         );
         let context = VoiceContext {
             pitch: 261.63,
@@ -2243,35 +2267,36 @@ mod tests {
             note_index: 0,
             iteration: 0,
         };
-        assert!((plan.sample(context) - 0.75).abs() < 1e-9);
+        assert!((plan.sample(context) - 9.0).abs() < 1e-9);
     }
 
     #[test]
-    fn repeat_zone_accumulates_body_output() {
-        let mut body = VoicePlan::new(
+    fn repeat_result_reads_cached_slot() {
+        let body = VoicePlan::new(
             vec![
                 VoiceNodePlan::new(VoiceOp::Input(0), vec![]),
-                VoiceNodePlan::new(VoiceOp::Constant(1.0), vec![]),
+                VoiceNodePlan::new(VoiceOp::Constant(2.0), vec![]),
                 VoiceNodePlan::new(VoiceOp::Add, vec![0, 1]),
-                VoiceNodePlan::new(VoiceOp::Output, vec![2]),
             ],
-            3,
+            0,
         );
-        body.set_outputs(BTreeMap::from([("audio".to_string(), 3)]));
+        let mut body = body;
+        body.set_outputs(BTreeMap::from([("a".to_string(), 2)]));
         let plan = VoicePlan::new(
             vec![
-                VoiceNodePlan::new(VoiceOp::Constant(4.0), vec![]),
+                VoiceNodePlan::new(VoiceOp::Constant(2.0), vec![]),
+                VoiceNodePlan::new(VoiceOp::Constant(0.0), vec![]),
                 VoiceNodePlan::new(
                     VoiceOp::Repeat {
                         body: Box::new(body),
-                        output: 3,
-                        feedback: 3,
+                        outputs: vec![2],
                     },
-                    vec![0],
+                    vec![0, 1],
                 ),
-                VoiceNodePlan::new(VoiceOp::Output, vec![1]),
+                VoiceNodePlan::new(VoiceOp::RepeatResult { source: 2, slot: 0 }, vec![]),
+                VoiceNodePlan::new(VoiceOp::Output, vec![3]),
             ],
-            2,
+            4,
         );
         let context = VoiceContext {
             pitch: 261.63,

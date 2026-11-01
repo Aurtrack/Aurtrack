@@ -457,6 +457,8 @@ export const en: Record<MessageKey, Message> = {
   "voice.zoneInputs": "Input Fields",
   "voice.zoneOutputs": "Output Fields",
   "voice.addSocket": "Add Field",
+  "voice.zoneCarryPairs": "Carried Values",
+  "voice.addCarry": "Add Carried Value",
   "voice.removeSocket": "Remove Field",
   "node.voice.partial": "Partial",
   "node.voice.switch": "Switch",

@@ -85,7 +85,7 @@
     audio: "#63c763",
     note: "#d99a4e",
   };
-  const ZONE_SIDES = ["inputs", "outputs"] as const;
+
   type PortInfo = {
     id: string;
     name: string;
@@ -220,65 +220,79 @@
     touchVoice();
   }
 
-  function addZoneSocket(header: VoiceNode, side: "inputs" | "outputs"): void {
-    const list = ensureZoneSockets(header, side);
-    let number = list.length + 1;
-    const prefix = side === "inputs" ? "in" : "out";
-    while (list.some((socket) => socket.id === `${prefix}-${number}`)) {
+  function addZoneSocket(header: VoiceNode): void {
+    const inputs = ensureZoneSockets(header, "inputs");
+    const outputs = ensureZoneSockets(header, "outputs");
+    let number = Math.max(inputs.length, outputs.length) + 1;
+    while (
+      inputs.some((socket) => socket.id === `carry-${number}`) ||
+      outputs.some((socket) => socket.id === `carry-${number}`)
+    ) {
       number += 1;
     }
-    list.push({
-      id: `${prefix}-${number}`,
-      name: side === "inputs" ? `Input ${number}` : `Output ${number}`,
-      type: "audio",
-    });
-    if (side === "inputs") header.zone_inputs = [...list];
-    else header.zone_outputs = [...list];
+    const socket = {
+      id: `carry-${number}`,
+      name: `Carry ${number}`,
+      type: "float" as const,
+    };
+    inputs.push({ ...socket });
+    outputs.push({ ...socket });
+    header.zone_inputs = [...inputs];
+    header.zone_outputs = [...outputs];
     syncZoneInterface(header);
   }
 
-  function removeZoneSocket(
-    header: VoiceNode,
-    side: "inputs" | "outputs",
-    index: number,
-  ): void {
-    const list = ensureZoneSockets(header, side);
-    if (list.length <= 1) return;
-    const [removed] = list.splice(index, 1);
-    if (side === "inputs") header.zone_inputs = [...list];
-    else header.zone_outputs = [...list];
-    const boundary = zoneBoundary(
-      header,
-      side === "inputs" ? "voice.zone.input" : "voice.zone.output",
-    );
-    if (removed && boundary) {
-      voice.connections = voice.connections.filter(
-        (connection) =>
-          !(
-            connection.to.node === boundary.id &&
-            connection.to.port === removed.id
-          ) &&
-          !(
-            connection.from.node === boundary.id &&
-            connection.from.port === removed.id
-          ),
+  function removeZoneSocket(header: VoiceNode, index: number): void {
+    const inputs = ensureZoneSockets(header, "inputs");
+    const outputs = ensureZoneSockets(header, "outputs");
+    if (inputs.length <= 1 || outputs.length <= 1) return;
+    const removedInput = inputs[index];
+    const removedOutput = outputs[index];
+    inputs.splice(index, 1);
+    outputs.splice(index, 1);
+    header.zone_inputs = [...inputs];
+    header.zone_outputs = [...outputs];
+    const inputBoundary = zoneBoundary(header, "voice.zone.input");
+    const outputBoundary = zoneBoundary(header, "voice.zone.output");
+    voice.connections = voice.connections.filter((connection) => {
+      if (
+        inputBoundary &&
+        removedInput &&
+        connection.to.node === inputBoundary.id &&
+        connection.to.port === removedInput.id
+      ) {
+        return false;
+      }
+      return !(
+        outputBoundary &&
+        removedOutput &&
+        connection.from.node === outputBoundary.id &&
+        connection.from.port === removedOutput.id
       );
-    }
+    });
     syncZoneInterface(header);
   }
 
   function updateZoneSocket(
     header: VoiceNode,
-    side: "inputs" | "outputs",
     index: number,
     patch: Partial<NodeTypeSocket>,
   ): void {
-    const list = ensureZoneSockets(header, side);
-    const socket = list[index];
-    if (!socket) return;
-    Object.assign(socket, patch);
-    if (side === "inputs") header.zone_inputs = [...list];
-    else header.zone_outputs = [...list];
+    const inputs = ensureZoneSockets(header, "inputs");
+    const outputs = ensureZoneSockets(header, "outputs");
+    const input = inputs[index];
+    const output = outputs[index];
+    if (!input || !output) return;
+    if ("name" in patch) {
+      input.name = patch.name ?? input.name;
+      output.name = input.name;
+    }
+    if ("type" in patch) {
+      input.type = patch.type ?? input.type;
+      output.type = input.type;
+    }
+    header.zone_inputs = [...inputs];
+    header.zone_outputs = [...outputs];
     syncZoneInterface(header);
   }
 
@@ -304,12 +318,16 @@
     zoneSocketDrag = null;
     if (!drag || drag.headerId !== header.id || drag.side !== side) return;
     if (drag.index === index) return;
-    const list = ensureZoneSockets(header, side);
-    const [socket] = list.splice(drag.index, 1);
-    if (!socket) return;
-    list.splice(index, 0, socket);
-    if (side === "inputs") header.zone_inputs = [...list];
-    else header.zone_outputs = [...list];
+    for (const list of [
+      ensureZoneSockets(header, "inputs"),
+      ensureZoneSockets(header, "outputs"),
+    ]) {
+      const [socket] = list.splice(drag.index, 1);
+      if (!socket) continue;
+      list.splice(index, 0, socket);
+    }
+    header.zone_inputs = [...ensureZoneSockets(header, "inputs")];
+    header.zone_outputs = [...ensureZoneSockets(header, "outputs")];
     syncZoneInterface(header);
   }
 
@@ -4035,68 +4053,65 @@
             <code>{node.id}</code>
             <div class="node-sidebar-type">{node.type_id}</div>
             {#if node.type_id === "voice.zone.repeat"}
-              {#each ZONE_SIDES as side (side)}
-                {@const sockets = editableZoneSockets(node, side)}
-                <div class="zone-interface-editor">
-                  <div class="node-sidebar-label">
-                    {side === "inputs"
-                      ? t("voice.zoneInputs")
-                      : t("voice.zoneOutputs")}
-                  </div>
-                  {#each sockets as socket, index (socket.id)}
-                    <div
-                      class="zone-interface-row"
-                      role="group"
-                      aria-label={socket.name}
-                      ondragover={(event) => event.preventDefault()}
-                      ondrop={(event) => dropZoneSocket(event, node, side, index)}
-                    >
-                      <span
-                        class="zone-socket-handle"
-                        draggable="true"
-                        role="button"
-                        tabindex="-1"
-                        aria-label={socket.name}
-                        ondragstart={(event) =>
-                          startZoneSocketDrag(event, node, side, index)}
-                        ondragend={() => (zoneSocketDrag = null)}
-                      >⠿</span>
-                      <input
-                        value={socket.name}
-                        aria-label={socket.name}
-                        oninput={(event) =>
-                          updateZoneSocket(node, side, index, {
-                            name: event.currentTarget.value,
-                          })}
-                      />
-                      <select
-                        value={socket.type}
-                        aria-label={socket.type}
-                        onchange={(event) =>
-                          updateZoneSocket(node, side, index, {
-                            type: event.currentTarget.value as NodeTypeSocket["type"],
-                          })}
-                      >
-                        <option value="audio">audio</option>
-                        <option value="float">float</option>
-                        <option value="gate">gate</option>
-                      </select>
-                      <button
-                        class="ghost small"
-                        type="button"
-                        disabled={sockets.length <= 1}
-                        aria-label={t("voice.removeSocket")}
-                        onclick={() => removeZoneSocket(node, side, index)}
-                      >×</button>
-                    </div>
-                  {/each}
-                  <button
-                    class="ghost small"
-                    type="button"
-                    onclick={() => addZoneSocket(node, side)}
-                  >{t("voice.addSocket")}</button>
+              {@const sockets = editableZoneSockets(node, "inputs")}
+              <div class="zone-interface-editor">
+                <div class="node-sidebar-label">
+                  {t("voice.zoneCarryPairs")}
                 </div>
-              {/each}
+                {#each sockets as socket, index (socket.id)}
+                  <div
+                    class="zone-interface-row"
+                    role="group"
+                    aria-label={socket.name}
+                    ondragover={(event) => event.preventDefault()}
+                    ondrop={(event) => dropZoneSocket(event, node, "inputs", index)}
+                  >
+                    <span
+                      class="zone-socket-handle"
+                      draggable="true"
+                      role="button"
+                      tabindex="-1"
+                      aria-label={socket.name}
+                      ondragstart={(event) =>
+                        startZoneSocketDrag(event, node, "inputs", index)}
+                      ondragend={() => (zoneSocketDrag = null)}
+                    >⠿</span>
+                    <input
+                      value={socket.name}
+                      aria-label={socket.name}
+                      oninput={(event) =>
+                        updateZoneSocket(node, index, {
+                          name: event.currentTarget.value,
+                        })}
+                    />
+                    <select
+                      value={socket.type}
+                      aria-label={socket.type}
+                      onchange={(event) =>
+                        updateZoneSocket(node, index, {
+                          type: event.currentTarget.value as NodeTypeSocket["type"],
+                        })}
+                    >
+                      <option value="audio">audio</option>
+                      <option value="float">float</option>
+                      <option value="int">int</option>
+                      <option value="gate">gate</option>
+                    </select>
+                    <button
+                      class="ghost small"
+                      type="button"
+                      disabled={sockets.length <= 1}
+                      aria-label={t("voice.removeSocket")}
+                      onclick={() => removeZoneSocket(node, index)}
+                    >×</button>
+                  </div>
+                {/each}
+                <button
+                  class="ghost small"
+                  type="button"
+                  onclick={() => addZoneSocket(node)}
+                >{t("voice.addCarry")}</button>
+              </div>
             {/if}
             <div class="node-preview">
               <button
