@@ -2767,6 +2767,14 @@ impl Graph {
         if envelopes > 1 {
             return Err(GraphError::AdsrCount(envelopes));
         }
+        let plugins = self
+            .nodes
+            .values()
+            .filter(|node| node.kind() == NodeKind::Plugin)
+            .count();
+        if plugins > 1 {
+            return Err(GraphError::PluginCount(plugins));
+        }
 
         let mut seen = BTreeSet::new();
         let mut inputs = BTreeSet::new();
@@ -3131,6 +3139,8 @@ pub enum GraphError {
     OutputCount(usize),
     #[error("图最多只能有一个 ADSR，当前 {0} 个")]
     AdsrCount(usize),
+    #[error("图最多只能有一个插件节点，当前 {0} 个")]
+    PluginCount(usize),
     #[error("重复连接")]
     DuplicateConnection,
     #[error("图不是线性链")]

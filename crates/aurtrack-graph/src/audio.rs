@@ -1242,6 +1242,7 @@ impl AudioGraph {
         let mut outputs = 0;
         let mut group_inputs = 0;
         let mut group_outputs = 0;
+        let mut plugins = 0;
         for node in self.nodes.values() {
             let node_type = audio_node_type(&node.type_id)
                 .ok_or_else(|| GraphError::UnknownAudioNodeType(node.type_id.clone()))?;
@@ -1295,6 +1296,12 @@ impl AudioGraph {
             if node.type_id == "audio.output" {
                 outputs += 1;
             }
+            if node.type_id == "audio.plugin" {
+                plugins += 1;
+            }
+        }
+        if plugins > 1 {
+            return Err(GraphError::PluginCount(plugins));
         }
         if interface.is_none() && outputs != 1 {
             return Err(GraphError::AudioOutputCount(outputs));
@@ -1403,6 +1410,24 @@ mod tests {
             )
             .unwrap_err();
         assert!(matches!(error, GraphError::PortOccupied));
+    }
+
+    #[test]
+    fn multiple_plugins_are_rejected() {
+        let mut graph = AudioGraph::empty_track("piano.voice");
+        for id in ["plugin-a", "plugin-b"] {
+            let id = NodeId::new(id).unwrap();
+            let mut node = AudioNode::new(id.clone(), "audio.plugin");
+            node.set_plugin(Some(PluginConfig::new(
+                "plugin.so".to_string(),
+                id.to_string(),
+                None,
+            )))
+            .unwrap();
+            graph.nodes.insert(id, node);
+        }
+        let error = graph.validate(&groups()).unwrap_err();
+        assert!(matches!(error, GraphError::PluginCount(2)));
     }
 
     #[test]
