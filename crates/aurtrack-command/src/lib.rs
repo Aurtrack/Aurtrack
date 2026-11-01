@@ -305,6 +305,17 @@ fn group_ungroup_schema() -> Value {
     )
 }
 
+fn group_duplicate_schema() -> Value {
+    object_schema(
+        json!({
+            "source_id": { "type": "string" },
+            "group_id": { "type": "string" },
+            "name": { "type": "string" }
+        }),
+        &["source_id", "group_id"],
+    )
+}
+
 fn group_delete_schema() -> Value {
     object_schema(json!({ "group_id": { "type": "string" } }), &["group_id"])
 }
@@ -962,7 +973,7 @@ fn transport_metronome_schema() -> Value {
     )
 }
 
-static COMMANDS: [CommandSpec; 73] = [
+static COMMANDS: [CommandSpec; 74] = [
     CommandSpec {
         id: "project.create",
         summary: "创建或替换当前工程",
@@ -1112,6 +1123,12 @@ static COMMANDS: [CommandSpec; 73] = [
         summary: "创建一个工程级节点组",
         undo: UndoKind::Snapshot,
         input_schema: group_create_schema,
+    },
+    CommandSpec {
+        id: "group.duplicate",
+        summary: "把节点组复制成独立组",
+        undo: UndoKind::Snapshot,
+        input_schema: group_duplicate_schema,
     },
     CommandSpec {
         id: "group.delete",

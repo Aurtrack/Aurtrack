@@ -1355,6 +1355,7 @@ impl Session {
                 "audio_types": audio_types_json(),
             }))),
             "group.create" => self.cmd_group_create(&request.args),
+            "group.duplicate" => self.cmd_group_duplicate(&request.args),
             "group.delete" => self.cmd_group_delete(&request.args),
             "group.rename" => self.cmd_group_rename(&request.args),
             "group.interface" => self.cmd_group_interface(&request.args),
@@ -2020,6 +2021,58 @@ impl Session {
             "project": self.project_summary(),
         }))
         .with_undo(token))
+    }
+
+    fn cmd_group_duplicate(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct DuplicateArgs {
+            source_id: String,
+            group_id: String,
+            #[serde(default)]
+            name: Option<String>,
+        }
+        let args: DuplicateArgs = parse_args(args)?;
+        let source_id = args.source_id.trim();
+        let new_id = args.group_id.trim();
+        if source_id.is_empty() || new_id.is_empty() {
+            return Err(CommandError::invalid_args("source_id 和 group_id 不能为空"));
+        }
+        NodeId::new(new_id).map_err(graph_error)?;
+        let project = self
+            .project
+            .as_ref()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let source = project
+            .node_groups
+            .get(source_id)
+            .ok_or_else(|| CommandError::not_found(format!("找不到节点组：{source_id}")))?;
+        if project.node_groups.contains_key(new_id) {
+            return Err(CommandError::invalid_args(format!(
+                "节点组已存在：{new_id}"
+            )));
+        }
+        let name = args
+            .name
+            .unwrap_or_else(|| format!("{} 副本", source.name))
+            .trim()
+            .to_string();
+        if name.is_empty() {
+            return Err(CommandError::invalid_args("name 不能为空"));
+        }
+        let mut group = source.clone();
+        group.id = new_id.to_string();
+        group.name = name;
+        group
+            .validate_with_groups(&project.node_groups)
+            .map_err(graph_error)?;
+        let token = self.snapshot("group.duplicate");
+        let project = self
+            .project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        project.node_groups.insert(new_id.to_string(), group);
+        Ok(CommandResponse::ok(json!({ "group_id": new_id })).with_undo(token))
     }
 
     fn cmd_group_create(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {

@@ -380,7 +380,7 @@ fn batch_note_edits_and_cross_track_clip_move_share_snapshots() {
 fn describe_lists_all_commands() {
     let mut session = Session::default();
     let out = run(&mut session, "describe", json!({}));
-    assert_eq!(out["commands"].as_array().unwrap().len(), 73);
+    assert_eq!(out["commands"].as_array().unwrap().len(), 74);
     assert!(out["project"].is_null());
 }
 
@@ -1383,6 +1383,31 @@ fn group_commands_create_rename_and_delete() {
             .unwrap()
             .node_groups
             .contains_key("aux.voice")
+    );
+}
+
+#[test]
+fn group_duplicate_creates_independent_copy() {
+    let mut session = Session::default();
+    run(&mut session, "project.create", json!({ "name": "groups" }));
+    let copied = run(
+        &mut session,
+        "group.duplicate",
+        json!({
+            "source_id": "piano.partial",
+            "group_id": "piano.partial.copy"
+        }),
+    );
+    assert_eq!(copied["group_id"], "piano.partial.copy");
+    let project = session.project().unwrap();
+    assert!(project.node_groups.contains_key("piano.partial"));
+    assert_eq!(
+        project.node_groups["piano.partial.copy"].name,
+        "Piano Partial 副本"
+    );
+    assert_eq!(
+        project.node_groups["piano.partial.copy"].graph.nodes.len(),
+        project.node_groups["piano.partial"].graph.nodes.len()
     );
 }
 
