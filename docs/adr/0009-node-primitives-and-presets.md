@@ -65,7 +65,7 @@ Aurtrack 的节点系统里有一批“看起来是节点、实际是复合算�
 
 | 节点 | 分类 | 问题 | 目标 |
 | --- | --- | --- | --- |
-| `voice.partial` | 黑箱 | 正弦、非谐性、亮度、衰减全在内部 | `piano.partial` 已改为原语组，默认 `piano.voice` 尚未引用 |
+| `voice.partial` | 黑箱 | 正弦、非谐性、亮度、衰减全在内部 | `piano.partial` 已改为原语组，`piano.voice` 已引用 |
 | `voice.attack` / `voice.decay` | 过粗原语 | 只有单段指数 | `env.adsr` 已补，旧节点保留兼容 |
 | `audio.instrument.sine` | 黑箱 | 固定正弦源，无相位/波表 | 暴露 `osc.sine` 或预设组 |
 | `audio.adsr` | 过粗原语 | 固定 ADSR 阶段 | 由包络原语组成预设组 |
@@ -90,7 +90,8 @@ Aurtrack 的节点系统里有一批“看起来是节点、实际是复合算�
 - 第 1 步完成：数学原语已加入节点目录；Voice/Audio 计划上限提高到 256，超限在编译期返回 `NodeLimit`，不再静默输出 0。
 - 第 2 步进行中：`osc.sine`、`env.adsr`、`filter.biquad.lowpass/highpass`、`math.exp/sqrt` 已加入；`voice.partial` 预设组尚未替换。
 - 预设可复制：新增 `group.duplicate`，复制图/接口/名称并使用新 ID；UI 入口尚未添加。
-- `piano.partial` 已改用 7 路显式数值输入和原语图；默认 `piano.voice` 仍使用黑箱 `voice.partial`，下一步迁移。
+- `piano.partial` 已改用 7 路显式数值输入和原语图；默认 `piano.voice` 已通过 `voice.group` 引用它。
+- 迁移中发现并修复嵌套组展开时输入索引未加偏移的问题；新增 `math.int_to_float`。
 - `delay.line` 已加入，编译期为每个音符分配 4096 采样环形缓冲；缓冲上限仍是固定值。
 
 ## 非目标
