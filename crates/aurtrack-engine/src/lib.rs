@@ -160,6 +160,15 @@ pub enum VoiceOp {
     SampleHold,
     Add,
     Multiply,
+    Subtract,
+    Divide,
+    Power,
+    Modulo,
+    Floor,
+    Ceil,
+    Round,
+    GreaterThan,
+    LessThan,
     MapRange,
     Clamp,
     Output,
@@ -174,11 +183,15 @@ impl VoicePlan {
         self.sample_internal(context, inputs, None).unwrap_or(0.0)
     }
 
-    fn sample_values(&self, context: VoiceContext, inputs: &[f64]) -> Option<[f64; 64]> {
-        if self.nodes.len() > 64 || self.output >= self.nodes.len() {
+    fn sample_values(
+        &self,
+        context: VoiceContext,
+        inputs: &[f64],
+    ) -> Option<[f64; MAX_VOICE_NODES]> {
+        if self.nodes.len() > MAX_VOICE_NODES || self.output >= self.nodes.len() {
             return None;
         }
-        let mut values = [0.0_f64; 64];
+        let mut values = [0.0_f64; MAX_VOICE_NODES];
         for (index, node) in self.nodes.iter().enumerate() {
             values[index] = match node.op {
                 VoiceOp::Pitch => context.pitch,
@@ -334,6 +347,52 @@ impl VoicePlan {
                     .iter()
                     .map(|input| values[*input])
                     .product::<f64>(),
+                VoiceOp::Subtract => {
+                    let a = node.inputs.first().map_or(0.0, |input| values[*input]);
+                    let b = node.inputs.get(1).map_or(0.0, |input| values[*input]);
+                    a - b
+                },
+                VoiceOp::Divide => {
+                    let a = node.inputs.first().map_or(0.0, |input| values[*input]);
+                    let b = node.inputs.get(1).map_or(0.0, |input| values[*input]);
+                    if b.abs() < 1e-12 { 0.0 } else { a / b }
+                },
+                VoiceOp::Power => {
+                    let a = node.inputs.first().map_or(0.0, |input| values[*input]);
+                    let b = node.inputs.get(1).map_or(0.0, |input| values[*input]);
+                    let value = a.powf(b);
+                    if value.is_finite() { value } else { 0.0 }
+                },
+                VoiceOp::Modulo => {
+                    let a = node.inputs.first().map_or(0.0, |input| values[*input]);
+                    let b = node.inputs.get(1).map_or(0.0, |input| values[*input]);
+                    if b.abs() < 1e-12 { 0.0 } else { a % b }
+                },
+                VoiceOp::Floor => node
+                    .inputs
+                    .first()
+                    .map_or(0.0, |input| values[*input])
+                    .floor(),
+                VoiceOp::Ceil => node
+                    .inputs
+                    .first()
+                    .map_or(0.0, |input| values[*input])
+                    .ceil(),
+                VoiceOp::Round => node
+                    .inputs
+                    .first()
+                    .map_or(0.0, |input| values[*input])
+                    .round(),
+                VoiceOp::GreaterThan => {
+                    let a = node.inputs.first().map_or(0.0, |input| values[*input]);
+                    let b = node.inputs.get(1).map_or(0.0, |input| values[*input]);
+                    f64::from(u8::from(a > b))
+                },
+                VoiceOp::LessThan => {
+                    let a = node.inputs.first().map_or(0.0, |input| values[*input]);
+                    let b = node.inputs.get(1).map_or(0.0, |input| values[*input]);
+                    f64::from(u8::from(a < b))
+                },
                 VoiceOp::MapRange => {
                     let value = node.inputs.first().map_or(0.0, |input| values[*input]);
                     let from_min = node.inputs.get(1).map_or(0.0, |input| values[*input]);
@@ -803,7 +862,10 @@ impl LfoPlan {
 }
 
 /// DAG 计划最多允许的节点数。
-pub const MAX_GRAPH_NODES: usize = 64;
+pub const MAX_GRAPH_NODES: usize = 256;
+
+/// 单个 Voice 子图的节点计划上限。
+pub const MAX_VOICE_NODES: usize = 256;
 
 const DELAY_SLOTS: usize = 384_000;
 
@@ -1511,6 +1573,35 @@ fn advance(position: u64, loop_frames: u64, loop_start: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn math_primitives_sample() {
+        let plan = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Constant(8.0), vec![]),
+                VoiceNodePlan::new(VoiceOp::Constant(2.0), vec![]),
+                VoiceNodePlan::new(VoiceOp::Divide, vec![0, 1]),
+                VoiceNodePlan::new(VoiceOp::Constant(3.0), vec![]),
+                VoiceNodePlan::new(VoiceOp::Power, vec![3, 1]),
+                VoiceNodePlan::new(VoiceOp::Subtract, vec![0, 1]),
+                VoiceNodePlan::new(VoiceOp::Constant(7.6), vec![]),
+                VoiceNodePlan::new(VoiceOp::Floor, vec![6]),
+                VoiceNodePlan::new(VoiceOp::Add, vec![2, 4]),
+                VoiceNodePlan::new(VoiceOp::Output, vec![8]),
+            ],
+            9,
+        );
+        let context = VoiceContext {
+            pitch: 440.0,
+            velocity: 1.0,
+            local_time: 0.0,
+            gate: true,
+            seed: 0,
+            note_index: 0,
+            iteration: 0,
+        };
+        assert!((plan.sample(context) - 13.0).abs() < 1e-9);
+    }
 
     fn plan() -> PlaybackPlan {
         PlaybackPlan {

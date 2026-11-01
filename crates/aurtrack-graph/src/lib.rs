@@ -952,6 +952,10 @@ const WHITE_NOISE_OUT: [VoiceSocketSpec; 1] =
         .with_default(0.0)
         .with_range(0.0, 1.0)
         .with_step(0.001)];
+const ONE_FLOAT_IN: [VoiceSocketSpec; 1] =
+    [VoiceSocketSpec::new("value", "Value", SocketType::Float)
+        .with_default(0.0)
+        .with_range(-1000.0, 1000.0)];
 const TWO_FLOAT_IN: [VoiceSocketSpec; 2] = [
     VoiceSocketSpec::new("a", "A", SocketType::Float)
         .with_default(0.0)
@@ -1254,6 +1258,78 @@ pub const VOICE_NODE_TYPES: &[VoiceNodeType] = &[
     VoiceNodeType {
         id: "math.multiply",
         name: "Multiply",
+        category: "Math",
+        inputs: &TWO_FLOAT_IN,
+        outputs: &FLOAT_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "math.subtract",
+        name: "Subtract",
+        category: "Math",
+        inputs: &TWO_FLOAT_IN,
+        outputs: &FLOAT_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "math.divide",
+        name: "Divide",
+        category: "Math",
+        inputs: &TWO_FLOAT_IN,
+        outputs: &FLOAT_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "math.power",
+        name: "Power",
+        category: "Math",
+        inputs: &TWO_FLOAT_IN,
+        outputs: &FLOAT_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "math.modulo",
+        name: "Modulo",
+        category: "Math",
+        inputs: &TWO_FLOAT_IN,
+        outputs: &FLOAT_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "math.floor",
+        name: "Floor",
+        category: "Math",
+        inputs: &ONE_FLOAT_IN,
+        outputs: &FLOAT_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "math.ceil",
+        name: "Ceil",
+        category: "Math",
+        inputs: &ONE_FLOAT_IN,
+        outputs: &FLOAT_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "math.round",
+        name: "Round",
+        category: "Math",
+        inputs: &ONE_FLOAT_IN,
+        outputs: &FLOAT_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "math.greater_than",
+        name: "Greater Than",
+        category: "Math",
+        inputs: &TWO_FLOAT_IN,
+        outputs: &FLOAT_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "math.less_than",
+        name: "Less Than",
         category: "Math",
         inputs: &TWO_FLOAT_IN,
         outputs: &FLOAT_OUT,
@@ -3141,6 +3217,8 @@ pub enum GraphError {
     AdsrCount(usize),
     #[error("图最多只能有一个插件节点，当前 {0} 个")]
     PluginCount(usize),
+    #[error("节点计划超过上限：{count} > {limit}")]
+    NodeLimit { count: usize, limit: usize },
     #[error("重复连接")]
     DuplicateConnection,
     #[error("图不是线性链")]

@@ -30,8 +30,8 @@ use std::path::Path;
 use aurtrack_command::{CommandError, CommandRequest, CommandResponse, registry};
 use aurtrack_engine::{
     AdsrPlan, DelayPlan, FilterPlan, FilterSettings, GraphNodePlan, GraphOp, GraphPlan,
-    HighpassPlan, LfoPlan, NotePlan, PluginPlan, VoiceNodePlan, VoiceOp, VoicePlan, adsr_envelope,
-    midi_to_hz, note_envelope,
+    HighpassPlan, LfoPlan, MAX_GRAPH_NODES, MAX_VOICE_NODES, NotePlan, PluginPlan, VoiceNodePlan,
+    VoiceOp, VoicePlan, adsr_envelope, midi_to_hz, note_envelope,
 };
 use aurtrack_graph::{
     AudioConnection, AudioGraph, AudioGroup, AudioNode, GraphError, NodeGroup, NodeGroupInterface,
@@ -534,6 +534,12 @@ fn compile_audio_graph(
                 });
             },
         }
+    }
+    if nodes.len() > MAX_GRAPH_NODES {
+        return Err(GraphError::NodeLimit {
+            count: nodes.len(),
+            limit: MAX_GRAPH_NODES,
+        });
     }
     compiled.nodes = nodes;
     Ok(compiled)
@@ -1206,6 +1212,15 @@ fn compile_voice_inner(
             "voice.time" => VoiceOp::Time,
             "voice.white_noise" => VoiceOp::WhiteNoise,
             "math.multiply" => VoiceOp::Multiply,
+            "math.subtract" => VoiceOp::Subtract,
+            "math.divide" => VoiceOp::Divide,
+            "math.power" => VoiceOp::Power,
+            "math.modulo" => VoiceOp::Modulo,
+            "math.floor" => VoiceOp::Floor,
+            "math.ceil" => VoiceOp::Ceil,
+            "math.round" => VoiceOp::Round,
+            "math.greater_than" => VoiceOp::GreaterThan,
+            "math.less_than" => VoiceOp::LessThan,
             "math.map_range" => VoiceOp::MapRange,
             "math.clamp" => VoiceOp::Clamp,
             "value.float" => VoiceOp::Constant(param("value", 0.0)),
@@ -1229,6 +1244,12 @@ fn compile_voice_inner(
                 }
             }
         }
+    }
+    if nodes.len() > MAX_VOICE_NODES {
+        return Err(GraphError::NodeLimit {
+            count: nodes.len(),
+            limit: MAX_VOICE_NODES,
+        });
     }
     let mut plan = VoicePlan::new(nodes, output);
     plan.set_outputs(outputs);
