@@ -104,7 +104,7 @@ impl VoicePlan {
 pub struct VoiceNodePlan {
     pub op: VoiceOp,
     pub inputs: Vec<usize>,
-    state: Arc<[AtomicU64; 64]>,
+    state: Arc<[AtomicU64; VOICE_STATE_SLOTS]>,
     buffer: Option<Arc<[AtomicU64]>>,
 }
 
@@ -121,7 +121,7 @@ impl VoiceNodePlan {
     /// 历史节点在编译期分配缓冲；音频线程只读写原子槽。
     pub fn with_buffer(op: VoiceOp, inputs: Vec<usize>, samples_per_note: usize) -> Self {
         let samples_per_note = samples_per_note.max(1);
-        let buffer: Arc<[AtomicU64]> = (0..samples_per_note * 64)
+        let buffer: Arc<[AtomicU64]> = (0..samples_per_note * VOICE_STATE_SLOTS)
             .map(|_| AtomicU64::new(0))
             .collect::<Vec<_>>()
             .into();
@@ -1032,6 +1032,9 @@ pub const MAX_GRAPH_NODES: usize = 256;
 
 /// 单个 Voice 子图的节点计划上限。
 pub const MAX_VOICE_NODES: usize = 256;
+
+/// 每个 Voice 节点的状态槽数；Biquad 每音符占两槽。
+pub const VOICE_STATE_SLOTS: usize = 128;
 
 /// 每个音符可用的 Voice 延迟采样数。
 pub const VOICE_DELAY_SAMPLES: usize = 4096;
