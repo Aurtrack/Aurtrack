@@ -65,7 +65,7 @@
 | `Track::source` | 取第一个 instrument 决定音源 | 已修：`Track.source` 显式节点引用 |
 | `Track::playback_graph` | 扫描任意 `audio.group` 的 Note 输入生成全局 piano | 已修：只从 `Track.source` 读取 |
 | `GraphOp::Voice` | 所有 Voice 节点共享轨道级 voice | 部分：唯一 source + 唯一 instrument；仍需节点槽位 |
-| ADSR/plugin 选择 | 扫描任意节点取 ADSR/插件 | 待审计 |
+| ADSR/plugin 选择 | 扫描任意节点取 ADSR/插件 | 已修：只接受输出路径上的节点 |
 | `audio.instrument.silence` | 曾编译为 Voice，透传全局声部 | 已修 |
 | 节点 mute | 旁通与静音语义混用 | 已修 |
 | Zone 边界 | header 承载外部端口，CLI/UI 不一致 | 已修 |
