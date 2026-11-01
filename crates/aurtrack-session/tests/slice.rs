@@ -2612,7 +2612,9 @@ fn default_piano_partial_loop_is_explicit() {
             .graph
             .nodes
             .values()
-            .any(|node| node.type_id == "voice.partial" && node.zone.as_deref() == Some("partials"))
+            .any(|node| node.type_id == "voice.group"
+                && node.group.as_deref() == Some("piano.partial")
+                && node.zone.as_deref() == Some("partials"))
     );
     assert!(
         voice

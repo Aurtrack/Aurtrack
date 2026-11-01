@@ -330,7 +330,7 @@ impl NodeGroup {
             id: "piano.voice".to_string(),
             name: "Piano Voice".to_string(),
             interface: NodeGroupInterface::piano(),
-            graph: VoiceGraph::piano_default(),
+            graph: VoiceGraph::piano_open(),
         }
     }
 
@@ -570,7 +570,7 @@ impl NodeGroupInterface {
                 NodeGroupSocket::new("velocity", "Velocity", NodeGroupSocketType::Float)
                     .with_default(0.8),
                 NodeGroupSocket::new("time", "Time", NodeGroupSocketType::Float),
-                NodeGroupSocket::new("index", "Index", NodeGroupSocketType::Float),
+                NodeGroupSocket::new("index", "Index", NodeGroupSocketType::Int),
                 NodeGroupSocket::new("inharmonicity", "Inharmonicity", NodeGroupSocketType::Float)
                     .with_default(0.0004),
                 NodeGroupSocket::new("brightness", "Brightness", NodeGroupSocketType::Float)
@@ -971,6 +971,8 @@ const SINE_INPUTS: [VoiceSocketSpec; 3] = [
         .with_default(0.0)
         .with_range(-1000.0, 1000.0),
 ];
+const INT_IN: [VoiceSocketSpec; 1] =
+    [VoiceSocketSpec::new("value", "Value", SocketType::Int).with_default(0.0)];
 const DELAY_INPUTS: [VoiceSocketSpec; 4] = [
     VoiceSocketSpec::new("in", "Audio", SocketType::Audio),
     VoiceSocketSpec::new("time", "Time", SocketType::Float)
@@ -1397,6 +1399,14 @@ pub const VOICE_NODE_TYPES: &[VoiceNodeType] = &[
         params: &[],
     },
     VoiceNodeType {
+        id: "math.int_to_float",
+        name: "Int to Float",
+        category: "Math",
+        inputs: &INT_IN,
+        outputs: &FLOAT_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
         id: "math.floor",
         name: "Floor",
         category: "Math",
@@ -1716,7 +1726,13 @@ impl VoiceGraph {
         let max_decay = value(&mut graph, "max-decay", 1000.0, [80.0, 1240.0]);
         let max_freq = value(&mut graph, "max-freq", 20_000.0, [80.0, 1320.0]);
 
-        let index = push(&mut graph, "index-add", "math.add", [300.0, 100.0]);
+        let index_float = push(
+            &mut graph,
+            "index-to-float",
+            "math.int_to_float",
+            [300.0, 180.0],
+        );
+        let index = push(&mut graph, "index-add", "math.add", [480.0, 100.0]);
         let index_sq = push(&mut graph, "index-square", "math.multiply", [480.0, 100.0]);
         let inharmonic = push(&mut graph, "inharmonic", "math.multiply", [660.0, 100.0]);
         let shape_base = push(&mut graph, "shape-base", "math.add", [840.0, 100.0]);
@@ -1754,6 +1770,10 @@ impl VoiceGraph {
         graph.connections = vec![
             VoiceConnection::new(
                 PortRef::fixed(NodeId::fixed("voice-in"), "index"),
+                PortRef::fixed(index_float.clone(), "value"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(index_float.clone(), "out"),
                 PortRef::fixed(index.clone(), "a"),
             ),
             VoiceConnection::new(
@@ -2206,6 +2226,43 @@ impl VoiceGraph {
             ],
             frames: BTreeMap::new(),
         }
+    }
+
+    /// 默认钢琴的开放版本：Partial 由可打开的 `piano.partial` 组实现。
+    pub fn piano_open() -> Self {
+        let mut graph = Self::piano_default();
+        let partial = NodeId::fixed("p-partial");
+        if let Some(node) = graph.nodes.get_mut(&partial) {
+            node.type_id = "voice.group".to_string();
+            node.group = Some("piano.partial".to_string());
+        }
+        for connection in &mut graph.connections {
+            if connection.from.node() == &partial && connection.from.port() == "out" {
+                connection.from = PortRef::new(partial.clone(), "audio");
+            }
+        }
+        for (id, name, value, position) in [
+            (
+                "p-open-inharmonicity",
+                "Inharmonicity",
+                0.0004,
+                [40.0, 1260.0],
+            ),
+            ("p-open-brightness", "Brightness", 0.5, [40.0, 1340.0]),
+            ("p-open-decay", "Decay", 1.2, [40.0, 1420.0]),
+        ] {
+            let id = NodeId::fixed(id);
+            let mut node = VoiceNode::new(id.clone(), "value.float");
+            node.params.insert("value".to_string(), value);
+            node.position = Some(position);
+            node.zone = Some("partials".to_string());
+            graph.nodes.insert(id.clone(), node);
+            graph.connections.push(VoiceConnection::new(
+                PortRef::new(id, "out"),
+                PortRef::new(partial.clone(), name.to_lowercase()),
+            ));
+        }
+        graph
     }
 
     pub fn validate(&self) -> Result<(), GraphError> {
@@ -3838,7 +3895,7 @@ mod tests {
         let group = NodeGroup::piano_default();
         assert_eq!(group.interface.inputs.len(), 1);
         assert_eq!(group.interface.inputs[0].ty, NodeGroupSocketType::Note);
-        assert_eq!(group.graph.nodes.len(), 28);
+        assert_eq!(group.graph.nodes.len(), 31);
     }
 
     #[test]

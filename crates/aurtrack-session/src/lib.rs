@@ -1172,7 +1172,7 @@ fn compile_voice_inner(
                 bindings.insert(socket.id.clone(), index);
             }
             stack.push(group_id.to_string());
-            let child = compile_voice_inner(
+            let mut child = compile_voice_inner(
                 &group.graph,
                 &group.interface,
                 groups,
@@ -1182,6 +1182,11 @@ fn compile_voice_inner(
             )?;
             stack.pop();
             let offset = nodes.len();
+            for node in &mut child.nodes {
+                for input in &mut node.inputs {
+                    *input += offset;
+                }
+            }
             nodes.extend(child.nodes);
             let child_output = offset + child.output;
             for socket in &group.interface.outputs {
@@ -1238,6 +1243,7 @@ fn compile_voice_inner(
             "math.round" => VoiceOp::Round,
             "math.exp" => VoiceOp::Exp,
             "math.sqrt" => VoiceOp::Sqrt,
+            "math.int_to_float" => VoiceOp::IntToFloat,
             "math.greater_than" => VoiceOp::GreaterThan,
             "math.less_than" => VoiceOp::LessThan,
             "math.map_range" => VoiceOp::MapRange,

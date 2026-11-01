@@ -192,6 +192,7 @@ pub enum VoiceOp {
     Round,
     Exp,
     Sqrt,
+    IntToFloat,
     GreaterThan,
     LessThan,
     MapRange,
@@ -531,6 +532,7 @@ impl VoicePlan {
                     let value = node.inputs.first().map_or(0.0, |input| values[*input]);
                     if value < 0.0 { 0.0 } else { value.sqrt() }
                 },
+                VoiceOp::IntToFloat => node.inputs.first().map_or(0.0, |input| values[*input]),
                 VoiceOp::GreaterThan => {
                     let a = node.inputs.first().map_or(0.0, |input| values[*input]);
                     let b = node.inputs.get(1).map_or(0.0, |input| values[*input]);
