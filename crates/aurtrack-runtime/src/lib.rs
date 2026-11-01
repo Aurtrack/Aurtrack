@@ -727,7 +727,7 @@ mod tests {
             tracks: vec![Track {
                 id: "track-1".to_string(),
                 name: "lead".to_string(),
-                source: aurtrack_graph::NodeId::new("instrument").unwrap(),
+                source: Some(aurtrack_graph::NodeId::new("instrument").unwrap()),
                 graph: aurtrack_graph::AudioGraph::track("audio.instrument.sine"),
                 clips: vec![Clip {
                     id: "clip-1".to_string(),
@@ -780,7 +780,7 @@ mod tests {
             tracks: vec![Track {
                 id: "track-1".to_string(),
                 name: "silence".to_string(),
-                source: aurtrack_graph::NodeId::new("instrument").unwrap(),
+                source: Some(aurtrack_graph::NodeId::new("instrument").unwrap()),
                 graph: aurtrack_graph::AudioGraph::track("audio.instrument.silence"),
                 clips: vec![Clip {
                     id: "clip-1".to_string(),

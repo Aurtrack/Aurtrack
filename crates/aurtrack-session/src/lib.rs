@@ -138,7 +138,8 @@ impl Project {
 pub struct Track {
     pub id: String,
     pub name: String,
-    pub source: aurtrack_graph::NodeId,
+    #[serde(default)]
+    pub source: Option<aurtrack_graph::NodeId>,
     pub graph: aurtrack_graph::AudioGraph,
     pub clips: Vec<Clip>,
 }
@@ -687,11 +688,14 @@ fn output_path_nodes(graph: &AudioGraph) -> BTreeSet<NodeId> {
 
 impl Track {
     pub fn source(&self) -> Result<Source, GraphError> {
+        let Some(source) = &self.source else {
+            return Ok(Source::Silence);
+        };
         let instrument = self
             .graph
-            .node(&self.source)
+            .node(source)
             .filter(|node| node.is_instrument())
-            .ok_or_else(|| GraphError::SourceMissing(self.source.clone()))?;
+            .ok_or_else(|| GraphError::SourceMissing(source.clone()))?;
         Ok(match instrument.type_id.as_str() {
             "audio.instrument.sine" => Source::Sine {
                 frequency: instrument.param("frequency").unwrap_or(440.0),
@@ -731,25 +735,31 @@ impl Track {
                         .is_some_and(|node| node.type_id == "audio.note")
             })
         };
-        let instrument = self
-            .graph
-            .node(&self.source)
-            .filter(|node| node.is_instrument())
-            .ok_or_else(|| GraphError::SourceMissing(self.source.clone()))?;
+        let instrument = match &self.source {
+            Some(source) => Some(
+                self.graph
+                    .node(source)
+                    .filter(|node| node.is_instrument())
+                    .ok_or_else(|| GraphError::SourceMissing(source.clone()))?,
+            ),
+            None => None,
+        };
         let mut group_id: Option<String> = None;
         let mut source_frequency = None;
         let mut adsr = None;
         let mut plugin = None;
-        match instrument.type_id.as_str() {
-            "audio.group" => {
-                if has_note_source(instrument.id()) {
-                    group_id.clone_from(&instrument.group);
-                }
-            },
-            "audio.instrument.sine" => {
-                source_frequency = Some(instrument.param("frequency").unwrap_or(440.0));
-            },
-            _ => {},
+        if let Some(instrument) = instrument {
+            match instrument.type_id.as_str() {
+                "audio.group" => {
+                    if has_note_source(instrument.id()) {
+                        group_id.clone_from(&instrument.group);
+                    }
+                },
+                "audio.instrument.sine" => {
+                    source_frequency = Some(instrument.param("frequency").unwrap_or(440.0));
+                },
+                _ => {},
+            }
         }
         let output_path = output_path_nodes(&self.graph);
         for node in self.graph.nodes() {
@@ -779,7 +789,7 @@ impl Track {
             audio_groups,
             None,
             None,
-            Some(&self.source),
+            self.source.as_ref(),
             &mut Vec::new(),
         )?;
         let nodes = compiled.nodes;
@@ -1603,7 +1613,7 @@ impl Session {
         project.tracks.push(Track {
             id: track_id.clone(),
             name: args.name,
-            source: aurtrack_graph::NodeId::new("instrument").map_err(graph_error)?,
+            source: Some(aurtrack_graph::NodeId::new("instrument").map_err(graph_error)?),
             graph,
             clips: Vec::new(),
         });
@@ -5012,6 +5022,9 @@ impl Session {
                 .iter_mut()
                 .find(|track| track.id == track_id)
                 .ok_or_else(|| CommandError::not_found(format!("找不到轨道：{track_id}")))?;
+            if track.source.as_ref() == Some(&node_id) {
+                track.source = None;
+            }
             track.graph.remove_node(&node_id).map_err(graph_error)?;
         }
         Ok(CommandResponse::ok(json!({ "paths": args.paths })).with_undo(token))

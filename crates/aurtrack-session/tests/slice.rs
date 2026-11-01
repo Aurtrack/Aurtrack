@@ -901,7 +901,7 @@ fn node_removal_keeps_group_data_and_allows_source() {
     );
     assert!(matches!(
         project.tracks[0].source(),
-        Err(aurtrack_graph::GraphError::SourceMissing(_))
+        Ok(aurtrack_session::Source::Silence)
     ));
 }
 
@@ -2717,7 +2717,7 @@ fn track_source_is_an_explicit_node_reference() {
         json!({ "name": "sine", "source": "sine" }),
     );
     let mut project = session.project().unwrap().clone();
-    project.tracks[0].source = aurtrack_graph::NodeId::new("output").unwrap();
+    project.tracks[0].source = Some(aurtrack_graph::NodeId::new("output").unwrap());
     let error = project.tracks[0]
         .playback_graph(&project.node_groups, &project.audio_groups)
         .unwrap_err();
