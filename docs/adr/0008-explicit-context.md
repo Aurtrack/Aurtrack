@@ -76,6 +76,8 @@
 
 审计结论：上表中的禁止路径已经清零；clips/notes 和 transport 作为显式声明的轨道级/全局上下文保留。新增执行上下文必须先进入本表。
 
+复查补充：`Track.source` 是显式文档字段，不是图端口，按本 ADR 合规定义成立；如果要求“所有音源都必须由端口连接决定”，它仍不满足，需要改成专用 source 节点。`audio.instrument.silence` 输出的是 Audio 类型的 0 值，不是隐藏 voice。
+
 ## 强制手段
 
 1. `AGENTS.md` 架构红线增加“禁止隐式上下文”。
