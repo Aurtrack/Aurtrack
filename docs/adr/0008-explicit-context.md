@@ -62,9 +62,9 @@
 
 | 位置 | 隐式行为 | 状态 |
 | --- | --- | --- |
-| `Track::source` | 取第一个 instrument 决定音源 | 待修 |
-| `Track::playback_graph` | 扫描任意 `audio.group` 的 Note 输入生成全局 piano | 待修 |
-| `GraphOp::Voice` | 所有 Voice 节点共享轨道级 voice | 待修 |
+| `Track::source` | 取第一个 instrument 决定音源 | 待修：需要显式 source 字段 |
+| `Track::playback_graph` | 扫描任意 `audio.group` 的 Note 输入生成全局 piano | 部分修复：只从唯一 instrument 读取 |
+| `GraphOp::Voice` | 所有 Voice 节点共享轨道级 voice | 待修：需要绑定节点/槽位 |
 | ADSR/plugin 选择 | 扫描任意节点取 ADSR/插件 | 待审计 |
 | `audio.instrument.silence` | 曾编译为 Voice，透传全局声部 | 已修 |
 | 节点 mute | 旁通与静音语义混用 | 已修 |
