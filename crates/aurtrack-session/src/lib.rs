@@ -1147,60 +1147,88 @@ fn compile_voice_inner(
             let group = groups
                 .get(group_id)
                 .ok_or_else(|| GraphError::GroupMissing(group_id.to_string()))?;
-            let mut bindings = BTreeMap::new();
-            for connection in &incoming {
-                let input = indices
-                    .get(&(
-                        connection.from.node().clone(),
-                        connection.from.port().to_string(),
-                    ))
-                    .copied()
-                    .ok_or(GraphError::VoiceUnknownNode)?;
-                bindings.insert(connection.to.port().to_string(), input);
-            }
-            for socket in &group.interface.inputs {
-                if socket.ty == NodeGroupSocketType::Note {
-                    if !incoming
-                        .iter()
-                        .any(|connection| connection.to.port() == socket.id)
-                    {
-                        bindings.insert(socket.id.clone(), NO_NOTE_BINDING);
+            if group
+                .interface
+                .inputs
+                .iter()
+                .any(|socket| socket.ty == NodeGroupSocketType::Note)
+            {
+                let mut bindings = BTreeMap::new();
+                for connection in &incoming {
+                    let input = indices
+                        .get(&(
+                            connection.from.node().clone(),
+                            connection.from.port().to_string(),
+                        ))
+                        .copied()
+                        .ok_or(GraphError::VoiceUnknownNode)?;
+                    bindings.insert(connection.to.port().to_string(), input);
+                }
+                for socket in &group.interface.inputs {
+                    if socket.ty == NodeGroupSocketType::Note {
+                        continue;
                     }
-                    continue;
+                    if bindings.contains_key(&socket.id) {
+                        continue;
+                    }
+                    let value = node
+                        .params
+                        .get(&socket.id)
+                        .copied()
+                        .or_else(|| socket.effective_default())
+                        .unwrap_or(0.0);
+                    let index = nodes.len();
+                    nodes.push(VoiceNodePlan::new(VoiceOp::Constant(value), Vec::new()));
+                    bindings.insert(socket.id.clone(), index);
                 }
-                if bindings.contains_key(&socket.id) {
-                    continue;
+                stack.push(group_id.to_string());
+                let mut child = compile_voice_inner(
+                    &group.graph,
+                    &group.interface,
+                    groups,
+                    stack,
+                    Some(&bindings),
+                    &[],
+                )?;
+                stack.pop();
+                let offset = nodes.len();
+                for child_node in &mut child.nodes {
+                    for input in &mut child_node.inputs {
+                        *input += offset;
+                    }
                 }
-                let value = node
-                    .params
-                    .get(&socket.id)
-                    .copied()
-                    .or_else(|| socket.effective_default())
-                    .unwrap_or(0.0);
-                let index = nodes.len();
-                nodes.push(VoiceNodePlan::new(VoiceOp::Constant(value), Vec::new()));
-                bindings.insert(socket.id.clone(), index);
+                nodes.extend(child.nodes);
+                let child_output = offset + child.output;
+                for socket in &group.interface.outputs {
+                    indices.insert((id.clone(), socket.id.clone()), child_output);
+                }
+                continue;
+            }
+            let mut bindings = BTreeMap::new();
+            let mut initial = Vec::with_capacity(group.interface.inputs.len());
+            for (slot, socket) in group.interface.inputs.iter().enumerate() {
+                bindings.insert(socket.id.clone(), slot);
+                initial.push(VoiceNodePlan::new(VoiceOp::Input(slot), Vec::new()));
             }
             stack.push(group_id.to_string());
-            let mut child = compile_voice_inner(
+            let body = compile_voice_inner(
                 &group.graph,
                 &group.interface,
                 groups,
                 stack,
                 Some(&bindings),
-                &[],
+                &initial,
             )?;
             stack.pop();
-            let offset = nodes.len();
-            for node in &mut child.nodes {
-                for input in &mut node.inputs {
-                    *input += offset;
-                }
-            }
-            nodes.extend(child.nodes);
-            let child_output = offset + child.output;
+            let index = nodes.len();
+            nodes.push(VoiceNodePlan::new(
+                VoiceOp::GroupCall {
+                    body: Box::new(body),
+                },
+                inputs.clone(),
+            ));
             for socket in &group.interface.outputs {
-                indices.insert((id.clone(), socket.id.clone()), child_output);
+                indices.insert((id.clone(), socket.id.clone()), index);
             }
             continue;
         }

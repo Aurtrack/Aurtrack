@@ -161,6 +161,9 @@ pub enum VoiceOp {
         output: usize,
         feedback: usize,
     },
+    GroupCall {
+        body: Box<VoicePlan>,
+    },
     OscPartials {
         partials: usize,
         inharmonicity: f64,
@@ -561,6 +564,17 @@ impl VoicePlan {
                     let min = node.inputs.get(1).map_or(0.0, |input| values[*input]);
                     let max = node.inputs.get(2).map_or(1.0, |input| values[*input]);
                     value.clamp(min, max)
+                },
+                VoiceOp::GroupCall { ref body } => {
+                    if node.inputs.len() > 64 {
+                        0.0
+                    } else {
+                        let mut args = [0.0_f64; 64];
+                        for (slot, input) in args.iter_mut().zip(&node.inputs) {
+                            *slot = values[*input];
+                        }
+                        body.sample_with_inputs(context, &args[..node.inputs.len()])
+                    }
                 },
                 VoiceOp::Repeat {
                     ref body,
@@ -2081,6 +2095,43 @@ mod tests {
             };
             assert!((plan.sample(context) - expected).abs() < 1e-9);
         }
+    }
+
+    #[test]
+    fn group_call_reads_inputs_by_slot() {
+        let body = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Input(0), vec![]),
+                VoiceNodePlan::new(VoiceOp::Input(1), vec![]),
+                VoiceNodePlan::new(VoiceOp::Add, vec![0, 1]),
+                VoiceNodePlan::new(VoiceOp::Output, vec![2]),
+            ],
+            3,
+        );
+        let plan = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Constant(2.0), vec![]),
+                VoiceNodePlan::new(VoiceOp::Constant(3.0), vec![]),
+                VoiceNodePlan::new(
+                    VoiceOp::GroupCall {
+                        body: Box::new(body),
+                    },
+                    vec![0, 1],
+                ),
+                VoiceNodePlan::new(VoiceOp::Output, vec![2]),
+            ],
+            3,
+        );
+        let context = VoiceContext {
+            pitch: 261.63,
+            velocity: 0.8,
+            local_time: 0.0,
+            gate: true,
+            seed: 0,
+            note_index: 0,
+            iteration: 0,
+        };
+        assert!((plan.sample(context) - 5.0).abs() < f64::EPSILON);
     }
 
     #[test]

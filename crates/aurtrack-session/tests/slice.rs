@@ -2614,7 +2614,7 @@ fn audio_group_instance_expands_effect_nodes() {
     let (_, _, plan) = project.tracks[0]
         .playback_graph(&project.node_groups, &project.audio_groups)
         .unwrap();
-    assert_eq!(plan.nodes.len(), 5);
+    assert_eq!(plan.nodes.len(), 6);
     assert!(
         plan.nodes
             .iter()
@@ -2801,7 +2801,12 @@ fn piano_track_renders_audible_wav() {
         json!({ "path": path, "duration_seconds": 1.0 }),
     );
     let rms = rendered["rms"].as_f64().unwrap();
+    let peak = rendered["peak"].as_f64().unwrap();
     assert!(rms > 0.001, "钢琴轨渲染没有声音：{rms}");
+    assert!(
+        peak / rms > 1.5,
+        "钢琴轨输出接近直流，嵌套组输入可能未正确绑定：rms={rms} peak={peak}"
+    );
     let _ = std::fs::remove_file(path);
 }
 
