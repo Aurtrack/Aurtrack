@@ -66,7 +66,7 @@ Aurtrack 的节点系统里有一批“看起来是节点、实际是复合算�
 | 节点 | 分类 | 问题 | 目标 |
 | --- | --- | --- | --- |
 | `voice.partial` | 黑箱 | 正弦、非谐性、亮度、衰减全在内部 | 拆成 `osc.sine` + 包络 + 数学的预设组 |
-| `voice.attack` / `voice.decay` | 过粗原语 | 只有单段指数 | 补完整 `env.adsr` |
+| `voice.attack` / `voice.decay` | 过粗原语 | 只有单段指数 | `env.adsr` 已补，旧节点保留兼容 |
 | `audio.instrument.sine` | 黑箱 | 固定正弦源，无相位/波表 | 暴露 `osc.sine` 或预设组 |
 | `audio.adsr` | 过粗原语 | 固定 ADSR 阶段 | 由包络原语组成预设组 |
 | `audio.filter.lowpass` / `highpass` | 过粗原语 | 固定类型 | 补 `filter.biquad` |
@@ -88,7 +88,7 @@ Aurtrack 的节点系统里有一批“看起来是节点、实际是复合算�
 ## 进展
 
 - 第 1 步完成：数学原语已加入节点目录；Voice/Audio 计划上限提高到 256，超限在编译期返回 `NodeLimit`，不再静默输出 0。
-- 第 2 步进行中：`osc.sine` 已加入，显式接收频率、相位和时间；`voice.partial` 预设组尚未替换。
+- 第 2 步进行中：`osc.sine` 已加入，显式接收频率、相位和时间；`env.adsr` 已加入完整 attack/decay/sustain/release；`voice.partial` 预设组尚未替换。
 
 ## 非目标
 
