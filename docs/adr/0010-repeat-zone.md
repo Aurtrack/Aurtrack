@@ -95,6 +95,18 @@ p-open-* 常量节点
 
 也可以显式执行 `project.migrate`。迁移不改 `format_version`，重复执行无副作用。
 
+### 迭代预览
+
+`voice.preview` 的诊断结果包含 `repeat_traces`：
+
+```text
+zone         Zone 头节点 ID
+iterations   每一轮结束时的数值携带槽
+```
+
+UI 在 Zone 侧栏点击“采样迭代”即可看到 `#0`、`#1` … 的实际携带值。
+追踪只在离线诊断路径启用；音频路径传入 `None`，不分配，不记录。
+
 ## 非目标
 
 - 不做 Geometry/Collection 端口；Aurtrack 目前是 Voice/Audio 域。
@@ -103,4 +115,4 @@ p-open-* 常量节点
 
 ## 后续
 
-- UI 显示每个携带值在当前迭代的实时值。
+- 预览目前按固定上下文采样一次，还不能跟随播放头实时刷新。
