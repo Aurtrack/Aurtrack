@@ -47,6 +47,10 @@ lto = "thin"
 codegen-units = 1
 debug = "line-tables-only"
 
+[profile.dev]
+# 开发构建也跑实时音频；opt-level 0 在第二个音起就会欠采样。
+opt-level = 2
+
 [profile.dev.package."*"]
 opt-level = 2
 
