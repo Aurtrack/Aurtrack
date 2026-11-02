@@ -1622,7 +1622,7 @@
       return;
     }
     if (cutLine) {
-      const point = boardPoint(event);
+      const point = worldPoint(event);
       if (point) {
         const previous = cutLine.at(-1);
         if (
@@ -1635,7 +1635,7 @@
       return;
     }
     if (muteLine) {
-      const point = boardPoint(event);
+      const point = worldPoint(event);
       if (point) {
         const previous = muteLine.at(-1);
         if (
@@ -1752,7 +1752,7 @@
     }
     if (event.button === 2 && event.ctrlKey && event.altKey) {
       event.preventDefault();
-      const point = boardPoint(event);
+      const point = worldPoint(event);
       if (point) {
         muteLine = [point];
         addMenu = null;
@@ -1762,7 +1762,7 @@
     }
     if (event.button === 2 && event.ctrlKey) {
       event.preventDefault();
-      const point = boardPoint(event);
+      const point = worldPoint(event);
       if (point) {
         cutLine = [point];
         addMenu = null;
@@ -3825,17 +3825,6 @@
         </div>
         {/if}
       {/each}
-      </div>
-      {#if marquee}
-        <div class="voice-marquee" style={marqueeStyle()}></div>
-      {/if}
-      {#if lasso}
-        <svg class="voice-lasso" aria-hidden="true">
-          <polyline
-            points={lasso.points.map((point) => `${point.x},${point.y}`).join(" ")}
-          />
-        </svg>
-      {/if}
       {#if cutLine}
         <svg class="voice-cut" aria-hidden="true">
           <polyline
@@ -3847,6 +3836,17 @@
         <svg class="voice-cut voice-mute-line" aria-hidden="true">
           <polyline
             points={muteLine.map((point) => `${point.x},${point.y}`).join(" ")}
+          />
+        </svg>
+      {/if}
+      </div>
+      {#if marquee}
+        <div class="voice-marquee" style={marqueeStyle()}></div>
+      {/if}
+      {#if lasso}
+        <svg class="voice-lasso" aria-hidden="true">
+          <polyline
+            points={lasso.points.map((point) => `${point.x},${point.y}`).join(" ")}
           />
         </svg>
       {/if}
