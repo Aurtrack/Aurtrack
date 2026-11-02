@@ -67,7 +67,7 @@ Aurtrack 的节点系统里有一批“看起来是节点、实际是复合算�
 | --- | --- | --- | --- |
 | `voice.partial` | 黑箱 | 正弦、非谐性、亮度、衰减全在内部 | `piano.partial` 已改为原语组，`piano.voice` 已引用 |
 | `voice.attack` / `voice.decay` | 过粗原语 | 只有单段指数 | `env.adsr` 已补，旧节点保留兼容 |
-| `audio.instrument.sine` | 黑箱 | 固定正弦源，无相位/波表 | 已暴露 Phase 输入；波表和预设组仍待补 |
+| `audio.instrument.sine` | 黑箱 | 固定正弦源，无相位/波表 | 默认 sine 轨改用 `sine.voice` 组；旧节点保留兼容 |
 | `audio.adsr` | 过粗原语 | 固定 ADSR 阶段 | 由包络原语组成预设组 |
 | `audio.filter.lowpass` / `highpass` | 过粗原语 | 固定类型 | `filter.biquad.lowpass` / `highpass` 已补 |
 | `voice.repeat` / `voice.group` | 宏 | 编译期内联，不能独立编译 | 保留语义，支持展开和子计划 |
@@ -93,7 +93,7 @@ Aurtrack 的节点系统里有一批“看起来是节点、实际是复合算�
 - `piano.partial` 已改用 7 路显式数值输入和原语图；默认 `piano.voice` 已通过 `voice.group` 引用它。
 - 迁移中发现并修复嵌套组展开时输入索引未加偏移的问题；新增 `math.int_to_float`。
 - `delay.line` 编译期为每个音符分配 4096 采样环形缓冲；状态槽为 128，约 4 MiB / delay 节点。
-- 音频域 `audio.instrument.sine` 已暴露 Phase 控制输入；它仍是源节点，未改由组实现。
+- 默认 sine 轨已改为 `sine.voice` 组：`note.separate → osc.sine → env.adsr → voice.vca`，可进入编辑；旧的 `audio.instrument.sine` 保留兼容。
 - 新增 `track.source` 命令和节点侧栏“设为音源”入口；删除源后可以重新指定，传 null 清空。
 - 数值输入的 Voice 组改为 `GroupCall` 子计划，按插槽传入父图的值；修复嵌套组把父索引误当子节点、导致 `piano.partial` 的 time 绑到内部常量的问题。
 - 默认钢琴不再用 `voice.pitch` / `voice.velocity` 读取隐式上下文；`note.separate` 的 pitch/velocity 作为外部自由变量直接进入 `piano.partial`，不占 Repeat 携带端口。
@@ -105,7 +105,7 @@ Aurtrack 的节点系统里有一批“看起来是节点、实际是复合算�
 ## 剩余缺口
 
 - `buffer.sample` 需要 Buffer 端口/资产和采样插值，尚未实现。
-- `audio.instrument.sine` 还未组化；波表和采样尚未暴露。
+- `sine.voice` 已组化，但波表和采样尚未暴露。
 - 节点计划仍是固定 256 上限，状态是固定 128 槽；动态 scratch 未实现。
 - 带 Note 输入的组仍回退到内联展开。
 - `group.duplicate` 只解决预设复制，不改变编译单元边界。

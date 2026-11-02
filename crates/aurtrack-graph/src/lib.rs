@@ -335,6 +335,15 @@ impl NodeGroup {
         }
     }
 
+    pub fn sine_default() -> Self {
+        Self {
+            id: "sine.voice".to_string(),
+            name: "Sine Voice".to_string(),
+            interface: NodeGroupInterface::sine_voice(),
+            graph: VoiceGraph::sine_default(),
+        }
+    }
+
     pub fn partial_default() -> Self {
         Self {
             id: "piano.partial".to_string(),
@@ -568,6 +577,23 @@ impl NodeGroupInterface {
                 "Note",
                 NodeGroupSocketType::Note,
             )],
+            outputs: vec![NodeGroupSocket::new(
+                "audio",
+                "Audio",
+                NodeGroupSocketType::Audio,
+            )],
+        }
+    }
+
+    pub fn sine_voice() -> Self {
+        Self {
+            inputs: vec![
+                NodeGroupSocket::new("note", "Note", NodeGroupSocketType::Note),
+                NodeGroupSocket::new("frequency", "Frequency", NodeGroupSocketType::Float)
+                    .with_default(440.0)
+                    .with_range(20.0, 20_000.0)
+                    .with_step(0.01),
+            ],
             outputs: vec![NodeGroupSocket::new(
                 "audio",
                 "Audio",
@@ -2275,6 +2301,67 @@ impl VoiceGraph {
             ],
             frames: BTreeMap::new(),
         }
+    }
+
+    /// 默认正弦音色：由 Note 分离、振荡器、ADSR 和 VCA 组成，可进入组编辑。
+    pub fn sine_default() -> Self {
+        let interface = NodeGroupInterface::sine_voice();
+        let mut graph = Self::shell(&interface);
+        for (id, ty, position) in [
+            ("note-separate", "note.separate", [40.0, 220.0]),
+            ("time", "voice.time", [40.0, 340.0]),
+            ("phase", "value.float", [40.0, 440.0]),
+            ("osc", "osc.sine", [320.0, 220.0]),
+            ("env", "env.adsr", [320.0, 360.0]),
+            ("vca", "voice.vca", [620.0, 220.0]),
+        ] {
+            let id = NodeId::fixed(id);
+            let mut node = VoiceNode::new(id.clone(), ty);
+            node.position = Some(position);
+            graph.nodes.insert(id, node);
+        }
+        if let Some(phase) = graph.nodes.get_mut(&NodeId::fixed("phase")) {
+            phase.params.insert("value".to_string(), 0.0);
+        }
+        graph.connections = vec![
+            VoiceConnection::new(
+                PortRef::new(NodeId::fixed("voice-in"), "note"),
+                PortRef::new(NodeId::fixed("note-separate"), "note"),
+            ),
+            VoiceConnection::new(
+                PortRef::new(NodeId::fixed("note-separate"), "pitch"),
+                PortRef::new(NodeId::fixed("osc"), "freq"),
+            ),
+            VoiceConnection::new(
+                PortRef::new(NodeId::fixed("phase"), "out"),
+                PortRef::new(NodeId::fixed("osc"), "phase"),
+            ),
+            VoiceConnection::new(
+                PortRef::new(NodeId::fixed("time"), "out"),
+                PortRef::new(NodeId::fixed("osc"), "time"),
+            ),
+            VoiceConnection::new(
+                PortRef::new(NodeId::fixed("note-separate"), "gate"),
+                PortRef::new(NodeId::fixed("env"), "gate"),
+            ),
+            VoiceConnection::new(
+                PortRef::new(NodeId::fixed("time"), "out"),
+                PortRef::new(NodeId::fixed("env"), "time"),
+            ),
+            VoiceConnection::new(
+                PortRef::new(NodeId::fixed("osc"), "out"),
+                PortRef::new(NodeId::fixed("vca"), "in"),
+            ),
+            VoiceConnection::new(
+                PortRef::new(NodeId::fixed("env"), "out"),
+                PortRef::new(NodeId::fixed("vca"), "gain"),
+            ),
+            VoiceConnection::new(
+                PortRef::new(NodeId::fixed("vca"), "out"),
+                PortRef::new(NodeId::fixed("out"), "audio"),
+            ),
+        ];
+        graph
     }
 
     /// 默认钢琴的开放版本：Partial 由可打开的 `piano.partial` 组实现。

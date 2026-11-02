@@ -380,7 +380,7 @@ fn batch_note_edits_and_cross_track_clip_move_share_snapshots() {
 fn describe_lists_all_commands() {
     let mut session = Session::default();
     let out = run(&mut session, "describe", json!({}));
-    assert_eq!(out["commands"].as_array().unwrap().len(), 75);
+    assert_eq!(out["commands"].as_array().unwrap().len(), 76);
     assert!(out["project"].is_null());
 }
 
@@ -539,7 +539,7 @@ fn project_save_and_open_round_trip() {
             .as_array()
             .unwrap()
             .len(),
-        2
+        3
     );
     assert_eq!(state["project"]["tracks"][0]["clips"][0]["id"], "clip-1");
     assert_eq!(
@@ -1294,7 +1294,7 @@ fn branch_graph_connects_mix_and_renders() {
             .as_array()
             .unwrap()
             .len(),
-        4
+        5
     );
 
     let branch = temp_path("branch");
@@ -1320,7 +1320,7 @@ fn branch_graph_connects_mix_and_renders() {
             .as_array()
             .unwrap()
             .len(),
-        3
+        4
     );
     run(&mut session, "undo", json!({}));
     let state = run(&mut session, "project.state", json!({}));
@@ -1329,7 +1329,7 @@ fn branch_graph_connects_mix_and_renders() {
             .as_array()
             .unwrap()
             .len(),
-        4
+        5
     );
 }
 
@@ -2679,7 +2679,7 @@ fn audio_group_instance_expands_effect_nodes() {
     let (_, _, plan) = project.tracks[0]
         .playback_graph(&project.node_groups, &project.audio_groups)
         .unwrap();
-    assert_eq!(plan.nodes.len(), 6);
+    assert_eq!(plan.nodes.len(), 5);
     assert!(
         plan.nodes
             .iter()
@@ -2767,14 +2767,12 @@ fn default_piano_partial_loop_is_explicit() {
                 && node.group.as_deref() == Some("piano.partial")
                 && node.zone.as_deref() == Some("partials"))
     );
-    assert!(
-        voice
-            .graph
-            .nodes
-            .values()
-            .any(|node| node.type_id == "voice.iteration"
-                && node.zone.as_deref() == Some("partials"))
-    );
+    assert!(voice.graph.connections.iter().any(|connection| {
+        connection.from.node().as_str() == "p-in"
+            && connection.from.port() == "iteration"
+            && connection.to.node().as_str() == "p-partial"
+            && connection.to.port() == "index"
+    }));
     let plan = project.tracks[0]
         .playback_graph(&project.node_groups, &project.audio_groups)
         .unwrap()

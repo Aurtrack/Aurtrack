@@ -210,7 +210,12 @@ pub const AUDIO_NODE_TYPES: &[AudioNodeType] = &[
         category: "Instrument",
         inputs: &[],
         outputs: &AUDIO_OUT,
-        params: &[],
+        params: &[ParamSpec {
+            name: "frequency",
+            default: 440.0,
+            minimum: 20.0,
+            maximum: 20_000.0,
+        }],
     },
     AudioNodeType {
         id: "audio.instrument.sine",

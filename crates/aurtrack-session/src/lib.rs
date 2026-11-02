@@ -700,7 +700,15 @@ impl Track {
             "audio.instrument.sine" => Source::Sine {
                 frequency: instrument.param("frequency").unwrap_or(440.0),
             },
-            "audio.group" => Source::Piano,
+            "audio.group" => {
+                if instrument.group.as_deref() == Some("sine.voice") {
+                    Source::Sine {
+                        frequency: instrument.param("frequency").unwrap_or(440.0),
+                    }
+                } else {
+                    Source::Piano
+                }
+            },
             _ => Source::Silence,
         })
     }
@@ -753,6 +761,9 @@ impl Track {
                 "audio.group" => {
                     if has_note_source(instrument.id()) {
                         group_id.clone_from(&instrument.group);
+                        if instrument.group.as_deref() == Some("sine.voice") {
+                            source_frequency = Some(instrument.param("frequency").unwrap_or(440.0));
+                        }
                     }
                 },
                 "audio.instrument.sine" => {
@@ -1899,9 +1910,9 @@ impl Session {
             .as_ref()
             .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?
             .sample_rate;
-        let (instrument, frequency) = match args.source.as_deref().unwrap_or("silence") {
-            "silence" => ("audio.instrument.silence", None),
-            "piano" => ("audio.group", None),
+        let (instrument, frequency, group_id) = match args.source.as_deref().unwrap_or("silence") {
+            "silence" => ("audio.instrument.silence", None, None),
+            "piano" => ("audio.group", None, Some("piano.voice")),
             "sine" => {
                 let frequency = args.frequency.unwrap_or(440.0);
                 if !frequency.is_finite() || !(20.0..=20_000.0).contains(&frequency) {
@@ -1912,7 +1923,7 @@ impl Session {
                 if frequency >= f64::from(sample_rate) / 2.0 {
                     return Err(CommandError::invalid_args("frequency 必须小于采样率的一半"));
                 }
-                ("audio.instrument.sine", Some(frequency))
+                ("audio.group", Some(frequency), Some("sine.voice"))
             },
             other => {
                 return Err(CommandError::invalid_args(format!(
@@ -1920,19 +1931,18 @@ impl Session {
                 )));
             },
         };
-        let mut graph = if instrument == "audio.group" {
-            aurtrack_graph::AudioGraph::empty_track("piano.voice")
+        let mut graph = if let Some(group_id) = group_id {
+            aurtrack_graph::AudioGraph::empty_track(group_id)
         } else {
             aurtrack_graph::AudioGraph::track(instrument)
         };
         if let Some(frequency) = frequency {
-            graph
-                .set_param(
-                    &NodeId::new("instrument").map_err(graph_error)?,
-                    "frequency",
-                    frequency,
-                )
-                .map_err(graph_error)?;
+            if let Some(node) = graph
+                .nodes
+                .get_mut(&NodeId::new("instrument").map_err(graph_error)?)
+            {
+                node.params.insert("frequency".to_string(), frequency);
+            }
         }
         let token = self.snapshot("track.create");
         self.next_track += 1;
@@ -1943,6 +1953,12 @@ impl Session {
             .project
             .as_mut()
             .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        if group_id == Some("sine.voice") {
+            project
+                .node_groups
+                .entry("sine.voice".to_string())
+                .or_insert_with(NodeGroup::sine_default);
+        }
         project.tracks.push(Track {
             id: track_id.clone(),
             name: args.name,
@@ -6035,12 +6051,28 @@ fn render_project(
             Vec::new()
         };
         let release = adsr.map_or(0.0, |envelope| envelope.release.max(0.001));
+        let fallback_sine = if matches!(source, Source::Sine { .. })
+            && piano_notes.is_empty()
+            && piano.is_some()
+            && track
+                .source
+                .as_ref()
+                .and_then(|id| track.graph.node(id))
+                .is_some_and(|node| !node.muted)
+        {
+            source_frequency
+        } else {
+            None
+        };
         for (index, slot) in mix.iter_mut().enumerate() {
             let time = start_seconds + index as f64 / sample_rate_f64;
             let mut sample = if silent {
                 0.0
             } else if let Some(piano) = piano.as_ref() {
                 piano.sample(&piano_notes, time)
+                    + fallback_sine.map_or(0.0, |frequency| {
+                        (std::f64::consts::TAU * frequency * time).sin() * 0.25
+                    })
             } else {
                 let mut sample = source_frequency.map_or(0.0, |frequency| {
                     (std::f64::consts::TAU * frequency * time).sin() * 0.25
@@ -6403,6 +6435,22 @@ struct ClipPasteArgs {
 #[allow(clippy::unwrap_used)]
 mod repeat_zone_tests {
     use super::*;
+
+    #[test]
+    fn sine_group_renders_a_note() {
+        let group = NodeGroup::sine_default();
+        let plan = compile_voice(&group.graph, &group.interface, &BTreeMap::new()).unwrap();
+        let context = aurtrack_engine::VoiceContext {
+            pitch: 440.0,
+            velocity: 0.8,
+            local_time: 0.1013,
+            gate: true,
+            seed: 0,
+            note_index: 0,
+            iteration: 0,
+        };
+        assert!(plan.sample(context).abs() > 1e-9);
+    }
 
     #[test]
     fn multi_output_group_maps_each_socket() {
