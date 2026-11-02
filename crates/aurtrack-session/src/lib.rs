@@ -1579,6 +1579,10 @@ impl Session {
         project.loop_end_tick = project.length_ticks();
         let token = self.snapshot("project.create");
         self.project = Some(project);
+        self.next_track = 0;
+        self.next_device = 0;
+        self.next_clip = 0;
+        self.next_note = 0;
         Ok(CommandResponse::ok(json!({ "project": self.project_summary() })).with_undo(token))
     }
 

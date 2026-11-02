@@ -19,7 +19,7 @@
   let { tracks, selectedId, busy, onSelect, onRemove, onAdd }: Props = $props();
 
   let name = $state("");
-  let source = $state<"sine" | "silence" | "piano">("silence");
+  let source = $state<"sine" | "silence" | "piano">("piano");
   let frequency = $state(220);
 
   function submit() {
