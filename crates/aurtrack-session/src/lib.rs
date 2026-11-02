@@ -7021,6 +7021,26 @@ mod buffer_tests {
             .source()
             .unwrap();
         assert!(matches!(source, Source::Physical));
+        let project = session.project.as_ref().unwrap();
+        assert!(
+            project.tracks[0]
+                .graph
+                .nodes
+                .values()
+                .any(|node| node.type_id == "audio.soundboard")
+        );
+        session
+            .execute(&CommandRequest {
+                cmd: "param.set".to_string(),
+                args: json!({
+                    "path": "/tracks/track-1/nodes/instrument/params/pedal",
+                    "value": 0.5
+                }),
+            })
+            .unwrap();
+        let node =
+            &session.project.as_ref().unwrap().tracks[0].graph.nodes[&NodeId::fixed("instrument")];
+        assert_eq!(node.port_value("pedal"), Some(0.5));
         let _ = std::fs::remove_file(wav);
     }
 
