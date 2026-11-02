@@ -298,6 +298,19 @@ pub const AUDIO_NODE_TYPES: &[AudioNodeType] = &[
         params: &[],
     },
     AudioNodeType {
+        id: "audio.soundboard",
+        name: "Soundboard",
+        category: "Resonator",
+        inputs: &[AudioSocketSpec {
+            id: "in",
+            name: "Audio",
+            ty: SocketType::Audio,
+            default: 0.0,
+        }],
+        outputs: &AUDIO_OUT,
+        params: &[],
+    },
+    AudioNodeType {
         id: "audio.gain",
         name: "Gain",
         category: "Audio",
@@ -635,7 +648,7 @@ impl AudioNode {
             "audio.instrument.silence" => NodeKind::InstrumentSilence,
             "audio.group" => NodeKind::VoiceGroup,
             "audio.adsr" => NodeKind::AmpAdsr,
-            "audio.gain" | "audio.drive" | "audio.delay" => NodeKind::Gain,
+            "audio.gain" | "audio.drive" | "audio.delay" | "audio.soundboard" => NodeKind::Gain,
             "audio.mix" => NodeKind::Mix,
             "audio.filter.lowpass" | "audio.filter.highpass" => NodeKind::FilterLowpass,
             "audio.plugin" => NodeKind::Plugin,
@@ -653,6 +666,7 @@ impl AudioNode {
                 | "audio.filter.highpass"
                 | "audio.drive"
                 | "audio.delay"
+                | "audio.soundboard"
                 | "audio.plugin"
         )
     }

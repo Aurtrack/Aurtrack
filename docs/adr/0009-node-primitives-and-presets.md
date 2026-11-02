@@ -106,12 +106,13 @@ Aurtrack 的节点系统里有一批“看起来是节点、实际是复合算�
 - 默认钢琴不再用 `voice.pitch` / `voice.velocity` 读取隐式上下文；`note.separate` 的 pitch/velocity 作为外部自由变量直接进入 `piano.partial`，不占 Repeat 携带端口。
 - Repeat Input 现在提供 `iteration` 输出；旧的独立 `p-index` 已从默认图移除。
 - Repeat 支持数值多输出、任意嵌套、自由变量和 Note 上下文端口；旧 `piano.voice` 图在打开时自动迁移。
-- 当前节点目录有 58 个 Voice 节点、22 个 Audio 节点；具体清单以 `node.types` 为准。
+- 当前节点目录有 58 个 Voice 节点、23 个 Audio 节点；具体清单以 `node.types` 为准。
 - 新增 `buffer.import`：导入 16/24/32 位 PCM 或 32 位浮点 WAV，多声道下混为单声道。
 - 新增 `buffer.sample` 节点和 `sampler.voice` 组；`track.create` 支持 `source: "sampler" | "wavetable"`，文件菜单“导入采样…”会创建采样轨。
 - `buffer.sample` 的 `loop` 参数为 1 时按单周期循环，可作为波表使用。
 - 非采样物理钢琴已有第一版：`hammer.exciter`、`string.waveguide`、`damper` 和 `piano.physical` 组；`track.create` 支持 `source: "physical"`。
 - 默认物理钢琴有三根同音弦（固定 ±5 cents），`pedal` 是显式 0..1 输入；`damper` 同时受 gate 和 pedal 控制。
+- 新增音频域 `audio.soundboard`：在声部混合后处理四条短共振，物理钢琴轨自动插入；因此音板尾音是跨音符共享的。
 - `string.waveguide` 的 `sample_rate` 是显式输入，由物理钢琴组实例的 `port_values.sample_rate` 提供；音频线程按分数延迟读弦。
 - 多输出数值组改为 `GroupCall` 子计划加每输出 `GroupResult` 读取缓存，不再把所有输出映射到同一个槽。
 
@@ -120,7 +121,7 @@ Aurtrack 的节点系统里有一批“看起来是节点、实际是复合算�
 - `buffer.sample` 已支持工程 buffer、线性插值和循环；图形化 buffer 选择器尚未加入。
 - `sine.voice` 已组化，但波表和采样尚未暴露。
 - 节点值 scratch 已动态按计划分配；每节点状态仍是固定 128 个音符槽。
-- 物理钢琴已有固定三弦和连续 pedal 值；还缺共享音板模态、全琴共鸣总线和踏板自动化（目前 pedal 是组实例值，不是时间线曲线）。
+- 物理钢琴已有固定三弦、连续 pedal 值和音频域共享音板；还缺真正的琴弦耦合共振、踏板自动化（pedal 仍是组实例值）和立体声。
 - 带 Note 输入的组仍回退到内联展开。
 - `group.duplicate` 只解决预设复制，不改变编译单元边界。
 

@@ -532,6 +532,9 @@ fn compile_audio_graph(
                         node.param("resonance").unwrap_or(0.2),
                     )),
                     "audio.drive" => GraphOp::Drive,
+                    "audio.soundboard" => {
+                        GraphOp::Soundboard(aurtrack_engine::SoundboardPlan::new())
+                    },
                     "audio.delay" => GraphOp::Delay(DelayPlan::new(
                         node.param("time").unwrap_or(0.25),
                         node.param("feedback").unwrap_or(0.2),
@@ -2093,13 +2096,33 @@ impl Session {
         } else {
             aurtrack_graph::AudioGraph::track(instrument)
         };
-        if group_id.as_deref() == Some("piano.physical")
-            && let Some(node) = graph
+        if group_id.as_deref() == Some("piano.physical") {
+            if let Some(node) = graph
                 .nodes
                 .get_mut(&NodeId::new("instrument").map_err(graph_error)?)
-        {
-            node.port_values
-                .insert("sample_rate".to_string(), f64::from(sample_rate));
+            {
+                node.port_values
+                    .insert("sample_rate".to_string(), f64::from(sample_rate));
+            }
+            let soundboard = NodeId::new("soundboard").map_err(graph_error)?;
+            let mut node = aurtrack_graph::AudioNode::new(soundboard.clone(), "audio.soundboard");
+            node.position = Some([620.0, 220.0]);
+            graph.nodes.insert(soundboard.clone(), node);
+            graph.connections.retain(|connection| {
+                !(connection.from.node().as_str() == "instrument"
+                    && connection.to.node().as_str() == "output")
+            });
+            graph.connections.push(aurtrack_graph::AudioConnection::new(
+                aurtrack_graph::PortRef::new(
+                    NodeId::new("instrument").map_err(graph_error)?,
+                    "out",
+                ),
+                aurtrack_graph::PortRef::new(soundboard.clone(), "in"),
+            ));
+            graph.connections.push(aurtrack_graph::AudioConnection::new(
+                aurtrack_graph::PortRef::new(soundboard, "out"),
+                aurtrack_graph::PortRef::new(NodeId::new("output").map_err(graph_error)?, "in"),
+            ));
         }
         if let Some(frequency) = frequency {
             if let Some(node) = graph
@@ -2169,6 +2192,7 @@ impl Session {
             "filter.highpass" | "audio.filter.highpass" => "audio.filter.highpass",
             "drive" | "audio.drive" => "audio.drive",
             "delay" | "audio.delay" => "audio.delay",
+            "soundboard" | "audio.soundboard" => "audio.soundboard",
             "mix" | "audio.mix" => "audio.mix",
             "plugin" | "audio.plugin" => "audio.plugin",
             "value" | "audio.value" => "audio.value",

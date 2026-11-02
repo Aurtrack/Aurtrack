@@ -1511,6 +1511,76 @@ impl DelayPlan {
     }
 }
 
+const SOUNDBOARD_SLOTS: usize = 8192;
+
+#[derive(Debug, Clone)]
+struct SoundboardComb {
+    buffer: Arc<Vec<AtomicU64>>,
+    write: Arc<AtomicUsize>,
+    delay: f64,
+    feedback: f64,
+}
+
+/// 音频域共享音板：所有声部先混合，再进入四条短共振。
+#[derive(Debug, Clone)]
+pub struct SoundboardPlan {
+    combs: Vec<SoundboardComb>,
+}
+
+impl SoundboardPlan {
+    pub fn new() -> Self {
+        let delays = [0.007, 0.011, 0.017, 0.023];
+        let feedback = [0.72, 0.66, 0.58, 0.52];
+        Self {
+            combs: delays
+                .iter()
+                .zip(feedback)
+                .map(|(delay, feedback)| SoundboardComb {
+                    buffer: Arc::new((0..SOUNDBOARD_SLOTS).map(|_| AtomicU64::new(0)).collect()),
+                    write: Arc::new(AtomicUsize::new(0)),
+                    delay: *delay,
+                    feedback,
+                })
+                .collect(),
+        }
+    }
+
+    pub fn process(&self, sample_rate: u32, input: f64) -> f64 {
+        let rate = f64::from(sample_rate.max(1));
+        let mut wet = 0.0;
+        for comb in &self.combs {
+            let delay = (comb.delay * rate).round() as usize;
+            let delay = delay.clamp(2, SOUNDBOARD_SLOTS - 2);
+            let write = comb.write.load(Ordering::Relaxed) % SOUNDBOARD_SLOTS;
+            let read = (write + SOUNDBOARD_SLOTS - delay) % SOUNDBOARD_SLOTS;
+            let delayed = f64::from_bits(comb.buffer[read].load(Ordering::Relaxed));
+            comb.buffer[write].store(
+                (input * 0.25 + delayed * comb.feedback).to_bits(),
+                Ordering::Relaxed,
+            );
+            comb.write
+                .store((write + 1) % SOUNDBOARD_SLOTS, Ordering::Relaxed);
+            wet += delayed;
+        }
+        input * 0.7 + wet * 0.075
+    }
+
+    pub fn reset(&self) {
+        for comb in &self.combs {
+            for slot in comb.buffer.iter() {
+                slot.store(0.0_f64.to_bits(), Ordering::Relaxed);
+            }
+            comb.write.store(0, Ordering::Relaxed);
+        }
+    }
+}
+
+impl Default for SoundboardPlan {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// 低频振荡器，输出 Float 控制值。
 #[derive(Debug, Clone, Copy)]
 pub struct LfoPlan {
@@ -1573,6 +1643,7 @@ pub enum GraphOp {
     Filter(FilterPlan),
     Highpass(HighpassPlan),
     Delay(DelayPlan),
+    Soundboard(SoundboardPlan),
     Gain,
     Drive,
     Mix,
@@ -1659,6 +1730,10 @@ impl GraphPlan {
                         control_value(node, 0, &values, filter.cutoff),
                         control_value(node, 1, &values, filter.resonance),
                     )
+                },
+                GraphOp::Soundboard(soundboard) => {
+                    let value = node.inputs.first().map_or(0.0, |input| values[*input]);
+                    soundboard.process(sample_rate, value)
                 },
                 GraphOp::Delay(delay) => {
                     let value = node.inputs.first().map_or(0.0, |input| values[*input]);
@@ -1842,6 +1917,9 @@ impl Playback {
                 for node in &graph.nodes {
                     if let GraphOp::Filter(filter) = &node.op {
                         filter.reset();
+                    }
+                    if let GraphOp::Soundboard(soundboard) = &node.op {
+                        soundboard.reset();
                     }
                 }
             }
@@ -2925,6 +3003,42 @@ mod tests {
         let early_energy: f32 = early.iter().map(|sample| sample.abs()).sum();
         let late_energy: f32 = late.iter().map(|sample| sample.abs()).sum();
         assert!(late_energy < early_energy);
+    }
+
+    #[test]
+    fn soundboard_rings_after_voice_stops() {
+        let plan = GraphPlan {
+            nodes: vec![
+                GraphNodePlan {
+                    op: GraphOp::Voice,
+                    inputs: Vec::new(),
+                    controls: Vec::new(),
+                },
+                GraphNodePlan {
+                    op: GraphOp::Soundboard(SoundboardPlan::new()),
+                    inputs: vec![0],
+                    controls: Vec::new(),
+                },
+                GraphNodePlan {
+                    op: GraphOp::Output,
+                    inputs: vec![1],
+                    controls: Vec::new(),
+                },
+            ],
+            output: 2,
+            plugin: None,
+            piano: None,
+        };
+        for index in 0..500 {
+            let _ = plan.sample(1.0, 48_000, index as f64 / 48_000.0);
+        }
+        let mut tail = 0.0_f64;
+        for index in 0..500 {
+            tail += plan
+                .sample(0.0, 48_000, (500 + index) as f64 / 48_000.0)
+                .abs();
+        }
+        assert!(tail > 1e-6);
     }
 
     #[test]
