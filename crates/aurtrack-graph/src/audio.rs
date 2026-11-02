@@ -573,15 +573,20 @@ pub struct AudioNode {
 
 impl AudioNode {
     pub fn new(id: NodeId, type_id: &str) -> Self {
-        let params = audio_node_type(type_id)
-            .map(|node_type| {
-                node_type
-                    .params
-                    .iter()
-                    .map(|param| (param.name.to_string(), param.default))
-                    .collect()
-            })
-            .unwrap_or_default();
+        // 组参数由实例接口决定，不能在建节点时无条件塞入 frequency。
+        let params = if type_id == "audio.group" {
+            BTreeMap::new()
+        } else {
+            audio_node_type(type_id)
+                .map(|node_type| {
+                    node_type
+                        .params
+                        .iter()
+                        .map(|param| (param.name.to_string(), param.default))
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
         Self {
             id,
             type_id: type_id.to_string(),

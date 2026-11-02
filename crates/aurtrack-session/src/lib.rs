@@ -1746,6 +1746,36 @@ fn migrate_legacy_repeat_groups(project: &mut Project) -> usize {
         })
 }
 
+/// 旧版 `audio.group` 默认带 `frequency`；只有组接口声明了该输入才保留。
+fn migrate_group_instance_params(project: &mut Project) -> usize {
+    let mut migrated = 0;
+    let groups = &project.node_groups;
+    for track in &mut project.tracks {
+        for node in track
+            .graph
+            .nodes
+            .values_mut()
+            .filter(|node| node.type_id == "audio.group")
+        {
+            let declares = node
+                .group
+                .as_ref()
+                .and_then(|id| groups.get(id))
+                .is_some_and(|group| {
+                    group
+                        .interface
+                        .inputs
+                        .iter()
+                        .any(|socket| socket.id == "frequency")
+                });
+            if !declares && node.params.remove("frequency").is_some() {
+                migrated += 1;
+            }
+        }
+    }
+    migrated
+}
+
 #[derive(Debug, Clone)]
 struct Snapshot {
     project: Option<Project>,
@@ -2543,6 +2573,7 @@ impl Session {
         })?;
         let mut project = file.project;
         let migrated_groups = migrate_legacy_repeat_groups(&mut project);
+        let migrated_params = migrate_group_instance_params(&mut project);
         let (next_track, next_device, next_clip, next_note) = validate_project(&project)?;
         let token = self.snapshot("project.open");
         self.project = Some(project);
@@ -2553,6 +2584,7 @@ impl Session {
         Ok(CommandResponse::ok(json!({
             "path": path,
             "migrated_groups": migrated_groups,
+            "migrated_params": migrated_params,
             "project": self.project_summary(),
         }))
         .with_undo(token))
@@ -7026,6 +7058,61 @@ mod migration_tests {
                 && connection.to.port() == "index"
         }));
         assert!(!migrate_piano_voice_graph(&mut graph));
+    }
+
+    #[test]
+    fn project_open_drops_undeclared_group_frequency() {
+        let path = std::env::temp_dir()
+            .join(format!(
+                "aurtrack-group-param-{}.aurtrack.json",
+                std::process::id()
+            ))
+            .to_string_lossy()
+            .into_owned();
+        let mut session = Session::default();
+        session
+            .execute(&CommandRequest {
+                cmd: "project.create".to_string(),
+                args: json!({ "name": "params" }),
+            })
+            .unwrap();
+        session
+            .execute(&CommandRequest {
+                cmd: "track.create".to_string(),
+                args: json!({ "name": "piano", "source": "piano" }),
+            })
+            .unwrap();
+        if let Some(track) = session
+            .project
+            .as_mut()
+            .and_then(|project| project.tracks.first_mut())
+        {
+            if let Some(instrument) = track.graph.nodes.get_mut(&NodeId::fixed("instrument")) {
+                instrument.params.insert("frequency".to_string(), 440.0);
+            }
+        }
+        session
+            .execute(&CommandRequest {
+                cmd: "project.save".to_string(),
+                args: json!({ "path": path }),
+            })
+            .unwrap();
+        let mut opened = Session::default();
+        let response = opened
+            .execute(&CommandRequest {
+                cmd: "project.open".to_string(),
+                args: json!({ "path": path }),
+            })
+            .unwrap();
+        assert_eq!(response.data["migrated_params"], 1);
+        let project = opened.project.as_ref().unwrap();
+        let instrument = project.tracks[0]
+            .graph
+            .nodes
+            .get(&NodeId::fixed("instrument"))
+            .unwrap();
+        assert!(!instrument.params.contains_key("frequency"));
+        let _ = std::fs::remove_file(path);
     }
 
     #[test]
