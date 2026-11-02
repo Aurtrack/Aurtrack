@@ -513,6 +513,10 @@ fn project_state_schema() -> Value {
     object_schema(json!({}), &[])
 }
 
+fn project_migrate_schema() -> Value {
+    object_schema(json!({}), &[])
+}
+
 fn project_path_schema() -> Value {
     object_schema(
         json!({
@@ -983,7 +987,7 @@ fn transport_metronome_schema() -> Value {
     )
 }
 
-static COMMANDS: [CommandSpec; 75] = [
+static COMMANDS: [CommandSpec; 76] = [
     CommandSpec {
         id: "project.create",
         summary: "创建或替换当前工程",
@@ -1001,6 +1005,12 @@ static COMMANDS: [CommandSpec; 75] = [
         summary: "返回完整工程状态",
         undo: UndoKind::None,
         input_schema: project_state_schema,
+    },
+    CommandSpec {
+        id: "project.migrate",
+        summary: "迁移旧版 Repeat Zone 图",
+        undo: UndoKind::Snapshot,
+        input_schema: project_migrate_schema,
     },
     CommandSpec {
         id: "project.save",

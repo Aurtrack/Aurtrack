@@ -57,7 +57,8 @@ impl NodeId {
         &self.0
     }
 
-    fn fixed(value: &'static str) -> Self {
+    /// 用静态合法 ID 构造，避免在内部常量路径上重复校验。
+    pub fn fixed(value: &'static str) -> Self {
         Self(value.to_string())
     }
 }

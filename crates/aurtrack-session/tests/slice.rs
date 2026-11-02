@@ -408,6 +408,48 @@ fn remove_track_supports_undo_and_redo() {
 }
 
 #[test]
+fn piano_repeat_free_inputs_survive_save_open() {
+    let path = project_temp_path("repeat-free");
+    let mut session = Session::default();
+    run(&mut session, "project.create", json!({ "name": "free" }));
+    run(
+        &mut session,
+        "track.create",
+        json!({ "name": "piano", "source": "piano" }),
+    );
+    run(&mut session, "project.save", json!({ "path": path }));
+
+    let mut opened = Session::default();
+    run(&mut opened, "project.open", json!({ "path": path }));
+    let state = run(&mut opened, "project.state", json!({}));
+    let graph = &state["project"]["node_groups"]["piano.voice"]["graph"];
+    let connections = graph["connections"].as_array().unwrap();
+    for port in ["pitch", "velocity"] {
+        assert!(connections.iter().any(|connection| {
+            connection["from"]["node"] == "note-separate"
+                && connection["from"]["port"] == port
+                && connection["to"]["node"] == "p-partial"
+                && connection["to"]["port"] == port
+        }));
+    }
+    assert_eq!(
+        graph["nodes"]["p-in"]["zone_inputs"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(graph["nodes"].get("p-index").is_none());
+    assert!(connections.iter().any(|connection| {
+        connection["from"]["node"] == "p-in"
+            && connection["from"]["port"] == "iteration"
+            && connection["to"]["node"] == "p-partial"
+            && connection["to"]["port"] == "index"
+    }));
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn project_save_and_open_round_trip() {
     let mut session = Session::default();
     run(&mut session, "project.create", json!({ "name": "saved" }));

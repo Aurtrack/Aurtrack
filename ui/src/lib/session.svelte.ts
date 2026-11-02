@@ -105,6 +105,7 @@ const MUTATING_COMMANDS = new Set([
   "undo",
   "redo",
   "project.open",
+  "project.migrate",
 ]);
 
 const RECENT_KEY = "aurtrack.recent.v1";

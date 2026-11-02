@@ -1436,6 +1436,191 @@ struct ProjectFile {
     project: Project,
 }
 
+fn remove_group_socket(sockets: &mut Vec<NodeGroupSocket>, id: &str) -> bool {
+    let before = sockets.len();
+    sockets.retain(|socket| socket.id != id);
+    sockets.len() != before
+}
+
+fn migrate_piano_voice_graph(graph: &mut VoiceGraph) -> bool {
+    let Some(header_id) = graph
+        .nodes
+        .values()
+        .find(|node| node.type_id == "voice.zone.repeat")
+        .map(|node| node.id.clone())
+    else {
+        return false;
+    };
+    let input_id = graph
+        .nodes
+        .values()
+        .find(|node| {
+            node.zone.as_deref() == Some(header_id.as_str()) && node.type_id == "voice.zone.input"
+        })
+        .map(|node| node.id.clone());
+    let output_id = graph
+        .nodes
+        .values()
+        .find(|node| {
+            node.zone.as_deref() == Some(header_id.as_str()) && node.type_id == "voice.zone.output"
+        })
+        .map(|node| node.id.clone());
+    let (Some(input_id), Some(output_id)) = (input_id, output_id) else {
+        return false;
+    };
+    let partial_id = NodeId::fixed("p-partial");
+    let separate_id = NodeId::fixed("note-separate");
+    let mut changed = false;
+
+    for port in ["pitch", "velocity"] {
+        let paired = graph
+            .nodes
+            .get(&input_id)
+            .is_some_and(|node| node.zone_inputs.iter().any(|socket| socket.id == port));
+        let source = graph
+            .connections
+            .iter()
+            .find(|connection| {
+                connection.to.node() == &input_id
+                    && connection.to.port() == port
+                    && connection.from.node() != &input_id
+            })
+            .map(|connection| connection.from.clone());
+        let target = graph
+            .connections
+            .iter()
+            .find(|connection| {
+                connection.from.node() == &input_id
+                    && connection.from.port() == port
+                    && connection.to.node() != &output_id
+            })
+            .map(|connection| connection.to.clone());
+        let direct = graph.connections.iter().any(|connection| {
+            connection.from.node() == &separate_id
+                && connection.from.port() == port
+                && connection.to.node() == &partial_id
+                && connection.to.port() == port
+        });
+        if !direct {
+            let source = if graph.nodes.contains_key(&separate_id) {
+                Some(PortRef::new(separate_id.clone(), port))
+            } else {
+                source
+            };
+            let target = target.or_else(|| {
+                graph
+                    .nodes
+                    .contains_key(&partial_id)
+                    .then(|| PortRef::new(partial_id.clone(), port))
+            });
+            if let (Some(source), Some(target)) = (source, target) {
+                graph.connections.push(VoiceConnection::new(source, target));
+                changed = true;
+            }
+        }
+        if paired {
+            let before = graph.connections.len();
+            graph.connections.retain(|connection| {
+                let into = connection.to.node() == &input_id && connection.to.port() == port;
+                let out = connection.from.node() == &input_id && connection.from.port() == port;
+                !(into || out)
+            });
+            changed |= before != graph.connections.len();
+            if let Some(node) = graph.nodes.get_mut(&input_id) {
+                changed |= remove_group_socket(&mut node.zone_inputs, port);
+            }
+            if let Some(node) = graph.nodes.get_mut(&output_id) {
+                changed |= remove_group_socket(&mut node.zone_outputs, port);
+            }
+            if let Some(header) = graph.nodes.get_mut(&header_id) {
+                changed |= remove_group_socket(&mut header.zone_inputs, port);
+                changed |= remove_group_socket(&mut header.zone_outputs, port);
+            }
+        }
+    }
+
+    for id in ["p-pitch", "p-velocity"] {
+        let id = NodeId::fixed(id);
+        if graph.nodes.remove(&id).is_some() {
+            graph
+                .connections
+                .retain(|connection| connection.from.node() != &id && connection.to.node() != &id);
+            changed = true;
+        }
+    }
+
+    let open_ids: Vec<NodeId> = graph
+        .nodes
+        .iter()
+        .filter(|(id, _)| id.as_str().starts_with("p-open-"))
+        .map(|(id, _)| id.clone())
+        .collect();
+    for id in open_ids {
+        let value = graph
+            .nodes
+            .get(&id)
+            .and_then(|node| node.params.get("value").copied())
+            .unwrap_or(0.0);
+        let targets: Vec<(NodeId, String)> = graph
+            .connections
+            .iter()
+            .filter(|connection| connection.from.node() == &id)
+            .map(|connection| {
+                (
+                    connection.to.node().clone(),
+                    connection.to.port().to_string(),
+                )
+            })
+            .collect();
+        for (target, port) in targets {
+            if target == partial_id {
+                if let Some(node) = graph.nodes.get_mut(&target) {
+                    node.params.entry(port).or_insert(value);
+                }
+            }
+        }
+        graph.nodes.remove(&id);
+        graph
+            .connections
+            .retain(|connection| connection.from.node() != &id && connection.to.node() != &id);
+        changed = true;
+    }
+
+    let legacy_index = NodeId::fixed("p-index");
+    if graph.nodes.remove(&legacy_index).is_some() {
+        graph.connections.retain(|connection| {
+            connection.from.node() != &legacy_index && connection.to.node() != &legacy_index
+        });
+        changed = true;
+    }
+    let has_iteration = graph.connections.iter().any(|connection| {
+        connection.from.node() == &input_id
+            && connection.from.port() == "iteration"
+            && connection.to.node() == &partial_id
+            && connection.to.port() == "index"
+    });
+    if !has_iteration
+        && graph.nodes.contains_key(&input_id)
+        && graph.nodes.contains_key(&partial_id)
+    {
+        graph.connections.push(VoiceConnection::new(
+            PortRef::new(input_id, "iteration"),
+            PortRef::new(partial_id, "index"),
+        ));
+        changed = true;
+    }
+    changed
+}
+
+fn migrate_legacy_repeat_groups(project: &mut Project) -> usize {
+    project
+        .node_groups
+        .get_mut("piano.voice")
+        .map_or(0, |group| {
+            usize::from(migrate_piano_voice_graph(&mut group.graph))
+        })
+}
+
 #[derive(Debug, Clone)]
 struct Snapshot {
     project: Option<Project>,
@@ -1467,6 +1652,7 @@ impl Session {
             "project.create" => self.cmd_project_create(&request.args),
             "project.update" => self.cmd_project_update(&request.args),
             "project.state" => Ok(self.cmd_project_state()),
+            "project.migrate" => self.cmd_project_migrate(),
             "project.save" => self.cmd_project_save(&request.args),
             "project.open" => self.cmd_project_open(&request.args),
             "project.master_plugin" => self.cmd_master_plugin(&request.args),
@@ -2037,6 +2223,16 @@ impl Session {
         CommandResponse::ok(json!({ "project": project }))
     }
 
+    fn cmd_project_migrate(&mut self) -> Result<CommandResponse, CommandError> {
+        let token = self.snapshot("project.migrate");
+        let project = self
+            .project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let changed_groups = migrate_legacy_repeat_groups(project);
+        Ok(CommandResponse::ok(json!({ "changed_groups": changed_groups })).with_undo(token))
+    }
+
     fn cmd_master_plugin(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
@@ -2137,15 +2333,18 @@ impl Session {
         let file: ProjectFile = serde_json::from_value(value).map_err(|error| {
             CommandError::invalid_args(format!("工程文件不是合法 JSON：{error}"))
         })?;
-        let (next_track, next_device, next_clip, next_note) = validate_project(&file.project)?;
+        let mut project = file.project;
+        let migrated_groups = migrate_legacy_repeat_groups(&mut project);
+        let (next_track, next_device, next_clip, next_note) = validate_project(&project)?;
         let token = self.snapshot("project.open");
-        self.project = Some(file.project);
+        self.project = Some(project);
         self.next_track = next_track;
         self.next_device = next_device;
         self.next_clip = next_clip;
         self.next_note = next_note;
         Ok(CommandResponse::ok(json!({
             "path": path,
+            "migrated_groups": migrated_groups,
             "project": self.project_summary(),
         }))
         .with_undo(token))
@@ -6176,5 +6375,190 @@ mod repeat_zone_tests {
                 .iter()
                 .any(|node| matches!(node.op, aurtrack_engine::VoiceOp::RepeatResult { .. }))
         );
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod migration_tests {
+    use super::*;
+
+    fn add_legacy_pair(
+        graph: &mut VoiceGraph,
+        port: &str,
+        input: &NodeId,
+        output: &NodeId,
+        header: &NodeId,
+    ) {
+        let socket = NodeGroupSocket::new(port, port, NodeGroupSocketType::Float);
+        for id in [input, header] {
+            if let Some(node) = graph.nodes.get_mut(id) {
+                node.zone_inputs.push(socket.clone());
+            }
+        }
+        for id in [output, header] {
+            if let Some(node) = graph.nodes.get_mut(id) {
+                node.zone_outputs.push(socket.clone());
+            }
+        }
+        graph.connections.push(VoiceConnection::new(
+            PortRef::new(NodeId::fixed("note-separate"), port),
+            PortRef::new(input.clone(), port),
+        ));
+        graph.connections.push(VoiceConnection::new(
+            PortRef::new(input.clone(), port),
+            PortRef::new(NodeId::fixed("p-partial"), port),
+        ));
+        graph.connections.push(VoiceConnection::new(
+            PortRef::new(input.clone(), port),
+            PortRef::new(output.clone(), port),
+        ));
+    }
+
+    #[test]
+    fn migrates_legacy_piano_pairs_and_index() {
+        let mut graph = VoiceGraph::piano_default();
+        let input = NodeId::fixed("p-in");
+        let output = NodeId::fixed("p-out");
+        let header = NodeId::fixed("partials");
+        graph.connections.retain(|connection| {
+            !(connection.from.node() == &NodeId::fixed("note-separate")
+                && matches!(connection.from.port(), "pitch" | "velocity")
+                && connection.to.node() == &NodeId::fixed("p-partial"))
+        });
+        add_legacy_pair(&mut graph, "pitch", &input, &output, &header);
+        add_legacy_pair(&mut graph, "velocity", &input, &output, &header);
+        let index = VoiceNode::new(NodeId::fixed("p-index"), "voice.iteration");
+        graph.nodes.insert(index.id.clone(), index);
+        graph.connections.retain(|connection| {
+            !(connection.from.node() == &input
+                && connection.from.port() == "iteration"
+                && connection.to.node() == &NodeId::fixed("p-partial"))
+        });
+        graph.connections.push(VoiceConnection::new(
+            PortRef::new(NodeId::fixed("p-index"), "out"),
+            PortRef::new(NodeId::fixed("p-partial"), "index"),
+        ));
+        let open = VoiceNode::new(NodeId::fixed("p-open-decay"), "value.float");
+        let mut open = open;
+        open.params.insert("value".to_string(), 2.5);
+        graph.nodes.insert(open.id.clone(), open);
+        graph.connections.push(VoiceConnection::new(
+            PortRef::new(NodeId::fixed("p-open-decay"), "out"),
+            PortRef::new(NodeId::fixed("p-partial"), "decay"),
+        ));
+
+        assert!(migrate_piano_voice_graph(&mut graph));
+        assert_eq!(graph.nodes[&input].zone_inputs.len(), 1);
+        for port in ["pitch", "velocity"] {
+            assert!(graph.connections.iter().any(|connection| {
+                connection.from.node() == &NodeId::fixed("note-separate")
+                    && connection.from.port() == port
+                    && connection.to.node() == &NodeId::fixed("p-partial")
+                    && connection.to.port() == port
+            }));
+        }
+        assert!(!graph.nodes.contains_key(&NodeId::fixed("p-index")));
+        assert!(!graph.nodes.contains_key(&NodeId::fixed("p-open-decay")));
+        assert!((graph.nodes[&NodeId::fixed("p-partial")].params["decay"] - 2.5).abs() < 1e-9);
+        assert!(graph.connections.iter().any(|connection| {
+            connection.from.node() == &input
+                && connection.from.port() == "iteration"
+                && connection.to.node() == &NodeId::fixed("p-partial")
+                && connection.to.port() == "index"
+        }));
+        assert!(!migrate_piano_voice_graph(&mut graph));
+    }
+
+    #[test]
+    fn project_open_migrates_legacy_piano_graph() {
+        let path = std::env::temp_dir()
+            .join(format!(
+                "aurtrack-migrate-open-{}.aurtrack.json",
+                std::process::id()
+            ))
+            .to_string_lossy()
+            .into_owned();
+        let mut session = Session::default();
+        session
+            .execute(&CommandRequest {
+                cmd: "project.create".to_string(),
+                args: json!({ "name": "legacy" }),
+            })
+            .unwrap();
+        {
+            let project = session.project.as_mut().unwrap();
+            let graph = &mut project.node_groups.get_mut("piano.voice").unwrap().graph;
+            let input = NodeId::fixed("p-in");
+            let output = NodeId::fixed("p-out");
+            let header = NodeId::fixed("partials");
+            graph.connections.retain(|connection| {
+                !(connection.from.node() == &NodeId::fixed("note-separate")
+                    && matches!(connection.from.port(), "pitch" | "velocity")
+                    && connection.to.node() == &NodeId::fixed("p-partial"))
+            });
+            add_legacy_pair(graph, "pitch", &input, &output, &header);
+            add_legacy_pair(graph, "velocity", &input, &output, &header);
+            let index = VoiceNode::new(NodeId::fixed("p-index"), "voice.iteration");
+            graph.nodes.insert(index.id.clone(), index);
+            graph.connections.retain(|connection| {
+                !(connection.from.node() == &input
+                    && connection.from.port() == "iteration"
+                    && connection.to.node() == &NodeId::fixed("p-partial"))
+            });
+            graph.connections.push(VoiceConnection::new(
+                PortRef::new(NodeId::fixed("p-index"), "out"),
+                PortRef::new(NodeId::fixed("p-partial"), "index"),
+            ));
+        }
+        session
+            .execute(&CommandRequest {
+                cmd: "project.save".to_string(),
+                args: json!({ "path": path }),
+            })
+            .unwrap();
+
+        let mut opened = Session::default();
+        let response = opened
+            .execute(&CommandRequest {
+                cmd: "project.open".to_string(),
+                args: json!({ "path": path }),
+            })
+            .unwrap();
+        assert_eq!(response.data["migrated_groups"], 1);
+        let graph = &opened
+            .project
+            .as_ref()
+            .unwrap()
+            .node_groups
+            .get("piano.voice")
+            .unwrap()
+            .graph;
+        assert_eq!(graph.nodes[&NodeId::fixed("p-in")].zone_inputs.len(), 1);
+        assert!(!graph.nodes.contains_key(&NodeId::fixed("p-index")));
+        assert!(graph.connections.iter().any(|connection| {
+            connection.from.node() == &NodeId::fixed("note-separate")
+                && connection.from.port() == "pitch"
+                && connection.to.node() == &NodeId::fixed("p-partial")
+                && connection.to.port() == "pitch"
+        }));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn repairs_missing_free_inputs() {
+        let mut graph = VoiceGraph::piano_default();
+        graph.connections.retain(|connection| {
+            !(connection.from.node() == &NodeId::fixed("note-separate")
+                && connection.to.node() == &NodeId::fixed("p-partial")
+                && matches!(connection.to.port(), "pitch" | "velocity"))
+        });
+        assert!(migrate_piano_voice_graph(&mut graph));
+        assert!(graph.connections.iter().any(|connection| {
+            connection.from.node() == &NodeId::fixed("note-separate")
+                && connection.from.port() == "pitch"
+                && connection.to.node() == &NodeId::fixed("p-partial")
+                && connection.to.port() == "pitch"
+        }));
     }
 }
