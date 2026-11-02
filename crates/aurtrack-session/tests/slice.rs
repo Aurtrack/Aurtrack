@@ -1574,8 +1574,9 @@ fn piano_tracks_share_one_node_group() {
         );
     }
     let project = session.project().unwrap().clone();
-    assert_eq!(project.node_groups.len(), 2);
+    assert_eq!(project.node_groups.len(), 3);
     assert!(project.node_groups.contains_key("piano.partial"));
+    assert!(project.node_groups.contains_key("piano.physical"));
     let group_ids: Vec<String> = project
         .tracks
         .iter()
@@ -1595,7 +1596,7 @@ fn piano_tracks_share_one_node_group() {
         "group.voice",
         json!({ "group_id": "piano.voice", "voice": voice }),
     );
-    assert_eq!(session.project().unwrap().node_groups.len(), 2);
+    assert_eq!(session.project().unwrap().node_groups.len(), 3);
 }
 
 #[test]

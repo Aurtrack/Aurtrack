@@ -110,15 +110,18 @@
     );
   });
 
+  function groupSearchTerms(group: NodeGroup): string[] {
+    const terms = [group.name.toLowerCase(), group.id.toLowerCase()];
+    if (group.id === "piano.physical") terms.push("物理钢琴", "物理");
+    if (group.id === "piano.voice") terms.push("钢琴");
+    if (group.id === "sine.voice") terms.push("正弦");
+    return terms;
+  }
+
   const groupResults = $derived.by(() => {
     const needle = query.trim().toLowerCase();
     if (!needle) return [];
-    return ranked(
-      needle,
-      groups,
-      (group) => [group.name.toLowerCase(), group.id.toLowerCase()],
-      (group) => group.name,
-    );
+    return ranked(needle, groups, groupSearchTerms, (group) => group.name);
   });
 
   const audioGroupResults = $derived.by(() => {

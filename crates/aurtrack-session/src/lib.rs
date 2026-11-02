@@ -1952,6 +1952,7 @@ impl Session {
             node_groups: BTreeMap::from([
                 ("piano.voice".to_string(), NodeGroup::piano_default()),
                 ("piano.partial".to_string(), NodeGroup::partial_default()),
+                ("piano.physical".to_string(), NodeGroup::physical_default()),
             ]),
             audio_groups: BTreeMap::new(),
             master_plugin: None,
@@ -2644,6 +2645,10 @@ impl Session {
             CommandError::invalid_args(format!("工程文件不是合法 JSON：{error}"))
         })?;
         let mut project = file.project;
+        project
+            .node_groups
+            .entry("piano.physical".to_string())
+            .or_insert_with(NodeGroup::physical_default);
         let migrated_groups = migrate_legacy_repeat_groups(&mut project);
         let migrated_params = migrate_group_instance_params(&mut project);
         let (next_track, next_device, next_clip, next_note) = validate_project(&project)?;
