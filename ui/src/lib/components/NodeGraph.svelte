@@ -444,9 +444,17 @@
 
   function extraParams(node: GraphNode) {
     const ports = new Set(nodeInputs(node).map((port) => port.id));
-    return (nodeType(node)?.params ?? []).filter(
-      (param) => !ports.has(param.name),
-    );
+    const params = nodeType(node)?.params ?? [];
+    if (nodeTypeId(node) === "audio.group") {
+      const group = node.group ? session.nodeGroups[node.group] : undefined;
+      const sockets = new Set(
+        group?.interface.inputs.map((socket) => socket.id) ?? [],
+      );
+      return params.filter(
+        (param) => sockets.has(param.name) && !ports.has(param.name),
+      );
+    }
+    return params.filter((param) => !ports.has(param.name));
   }
 
   function infoRows(node: GraphNode): number {
@@ -652,8 +660,8 @@
   }
 
   function sidebarParams(node: GraphNode) {
-    const params = [...(nodeType(node)?.params ?? [])];
     const type = nodeTypeId(node);
+    const params = type === "audio.group" ? [] : [...(nodeType(node)?.params ?? [])];
     if (type === "audio.group.instance" || type === "audio.group") {
       const group =
         type === "audio.group"

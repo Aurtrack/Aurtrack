@@ -348,7 +348,7 @@ impl NodeGroup {
         Self {
             id: format!("sampler.{buffer_id}"),
             name: format!("Sampler {buffer_id}"),
-            interface: NodeGroupInterface::sine_voice(),
+            interface: NodeGroupInterface::sampler_voice(),
             graph: VoiceGraph::sampler_default(buffer_id, looped),
         }
     }
@@ -603,6 +603,21 @@ impl NodeGroupInterface {
                     .with_range(20.0, 20_000.0)
                     .with_step(0.01),
             ],
+            outputs: vec![NodeGroupSocket::new(
+                "audio",
+                "Audio",
+                NodeGroupSocketType::Audio,
+            )],
+        }
+    }
+
+    pub fn sampler_voice() -> Self {
+        Self {
+            inputs: vec![NodeGroupSocket::new(
+                "note",
+                "Note",
+                NodeGroupSocketType::Note,
+            )],
             outputs: vec![NodeGroupSocket::new(
                 "audio",
                 "Audio",
@@ -2408,7 +2423,7 @@ impl VoiceGraph {
 
     /// 采样器 / 波表音色：Buffer Sample 加 ADSR 和 VCA。
     pub fn sampler_default(buffer_id: &str, looped: bool) -> Self {
-        let interface = NodeGroupInterface::sine_voice();
+        let interface = NodeGroupInterface::sampler_voice();
         let mut graph = Self::shell(&interface);
         for (id, ty, position) in [
             ("note-separate", "note.separate", [40.0, 220.0]),
