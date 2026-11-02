@@ -739,6 +739,25 @@
   } | null>(null);
   let previewError = $state("");
   let previewLoading = $state(false);
+  let repeatTrace = $state<{ zone: string; iterations: number[][] } | null>(null);
+  let repeatTraceError = $state("");
+  let repeatTraceLoading = $state(false);
+
+  async function loadRepeatTrace(): Promise<void> {
+    if (!active) return;
+    repeatTraceLoading = true;
+    repeatTraceError = "";
+    try {
+      const result = await session.previewVoice(groupId, active);
+      repeatTrace =
+        result.repeat_traces?.find((trace) => trace.zone === active) ?? null;
+    } catch (cause) {
+      repeatTraceError = errorMessage(cause);
+      repeatTrace = null;
+    } finally {
+      repeatTraceLoading = false;
+    }
+  }
 
   async function loadPreview(): Promise<void> {
     if (!active) return;
@@ -4165,6 +4184,30 @@
                   type="button"
                   onclick={() => addZoneSocket(node)}
                 >{t("voice.addCarry")}</button>
+              </div>
+              {@const traceSockets = sockets.filter(
+                (socket) => socket.type !== "note",
+              )}
+              <div class="zone-trace-section">
+                <div class="node-sidebar-label">{t("voice.iterationPreview")}</div>
+                <button
+                  class="ghost small"
+                  type="button"
+                  disabled={repeatTraceLoading}
+                  onclick={() => void loadRepeatTrace()}
+                >{t("voice.sampleIterations")}</button>
+                {#if repeatTraceError}
+                  <span class="node-preview-error">{repeatTraceError}</span>
+                {:else if repeatTrace}
+                  {#each repeatTrace.iterations as values, iteration (iteration)}
+                    <div class="zone-trace-row">
+                      <span>#{iteration}</span>
+                      {#each values as value, index (index)}
+                        <code>{traceSockets[index]?.name ?? index} = {value.toFixed(3)}</code>
+                      {/each}
+                    </div>
+                  {/each}
+                {/if}
               </div>
             {/if}
             <div class="node-preview">

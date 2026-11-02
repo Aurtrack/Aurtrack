@@ -3080,6 +3080,23 @@ button:disabled {
   padding: 6px;
 }
 
+.zone-trace-section {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  border: 1px solid var(--line);
+  padding: 6px;
+}
+
+.zone-trace-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  color: var(--muted);
+  font-family: var(--mono);
+  font-size: 9px;
+}
+
 .zone-interface-row {
   display: grid;
   grid-template-columns: 12px 1fr 62px 24px;

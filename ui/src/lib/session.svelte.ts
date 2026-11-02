@@ -950,7 +950,12 @@ export class SessionStore {
   async previewVoice(
     groupId: string,
     nodeId: string,
-  ): Promise<{ values: number[]; minimum: number; maximum: number }> {
+  ): Promise<{
+    values: number[];
+    minimum: number;
+    maximum: number;
+    repeat_traces?: { zone: string; iterations: number[][] }[];
+  }> {
     return this.run("voice.preview", { group_id: groupId, node_id: nodeId });
   }
 

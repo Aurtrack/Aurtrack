@@ -469,6 +469,8 @@ export const en: Record<MessageKey, Message> = {
   "voice.zoneCarryPairs": "Carried Values",
   "voice.repeatCount": "Iterations",
   "voice.addCarry": "Add Carried Value",
+  "voice.iterationPreview": "Iteration Carry Preview",
+  "voice.sampleIterations": "Sample Iterations",
   "voice.removeSocket": "Remove Field",
   "node.voice.partial": "Partial",
   "node.voice.switch": "Switch",
