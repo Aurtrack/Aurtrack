@@ -508,17 +508,23 @@ impl VoicePlan {
                         .get(1)
                         .map_or(1.0, |input| scratch_value(*input))
                         > 0.5;
-                    let damping = node
+                    let pedal = node
                         .inputs
                         .get(2)
+                        .map_or(0.0, |input| scratch_value(*input))
+                        .clamp(0.0, 1.0);
+                    let damping = node
+                        .inputs
+                        .get(3)
                         .map_or(0.01, |input| scratch_value(*input))
                         .clamp(0.0001, 0.2);
                     let slot = context.note_index as usize % node.state.len();
                     let stored = f64::from_bits(node.state[slot].load(Ordering::Relaxed));
+                    let target = if gate { 1.0 } else { pedal };
                     let level = if stored.is_nan() {
-                        1.0
-                    } else if gate {
-                        (stored + 0.01).min(1.0)
+                        target
+                    } else if target > 0.001 {
+                        stored + (target - stored) * 0.01
                     } else {
                         (stored - damping).max(0.0)
                     };
@@ -2919,6 +2925,33 @@ mod tests {
         let early_energy: f32 = early.iter().map(|sample| sample.abs()).sum();
         let late_energy: f32 = late.iter().map(|sample| sample.abs()).sum();
         assert!(late_energy < early_energy);
+    }
+
+    #[test]
+    fn damper_follows_continuous_pedal() {
+        let nodes = vec![
+            VoiceNodePlan::new(VoiceOp::Constant(1.0), Vec::new()),
+            VoiceNodePlan::new(VoiceOp::Constant(0.0), Vec::new()),
+            VoiceNodePlan::new(VoiceOp::Constant(1.0), Vec::new()),
+            VoiceNodePlan::new(VoiceOp::Constant(0.01), Vec::new()),
+            VoiceNodePlan::new(VoiceOp::Damper, vec![0, 1, 2, 3]),
+            VoiceNodePlan::new(VoiceOp::Output, vec![4]),
+        ];
+        let plan = VoicePlan::new(nodes, 5);
+        let mut context = VoiceContext {
+            pitch: 440.0,
+            velocity: 1.0,
+            local_time: 0.0,
+            gate: false,
+            seed: 0,
+            note_index: 0,
+            iteration: 0,
+        };
+        for _ in 0..200 {
+            context.local_time += 1.0 / 48_000.0;
+            let _ = plan.sample(context);
+        }
+        assert!(plan.sample(context) > 0.5);
     }
 
     #[test]

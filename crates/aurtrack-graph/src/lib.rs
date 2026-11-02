@@ -628,6 +628,10 @@ impl NodeGroupInterface {
                     .with_default(48_000.0)
                     .with_range(8_000.0, 192_000.0)
                     .with_step(1.0),
+                NodeGroupSocket::new("pedal", "Pedal", NodeGroupSocketType::Float)
+                    .with_default(0.0)
+                    .with_range(0.0, 1.0)
+                    .with_step(0.01),
             ],
             outputs: vec![NodeGroupSocket::new(
                 "audio",
@@ -1103,9 +1107,13 @@ const WAVEGUIDE_INPUTS: [VoiceSocketSpec; 5] = [
         .with_range(0.0, 1.0)
         .with_step(0.01),
 ];
-const DAMPER_INPUTS: [VoiceSocketSpec; 3] = [
+const DAMPER_INPUTS: [VoiceSocketSpec; 4] = [
     VoiceSocketSpec::new("audio", "Audio", SocketType::Audio),
     VoiceSocketSpec::new("gate", "Gate", SocketType::Gate).with_default(1.0),
+    VoiceSocketSpec::new("pedal", "Pedal", SocketType::Float)
+        .with_default(0.0)
+        .with_range(0.0, 1.0)
+        .with_step(0.01),
     VoiceSocketSpec::new("damping", "Damping", SocketType::Float)
         .with_default(0.01)
         .with_range(0.0001, 0.2)
@@ -2509,29 +2517,50 @@ impl VoiceGraph {
     }
 
     /// 非采样物理钢琴的第一版：锤激励 + 波导弦 + 制音器。
+    #[allow(clippy::too_many_lines)]
     pub fn physical_default() -> Self {
         let interface = NodeGroupInterface::physical_voice();
         let mut graph = Self::shell(&interface);
         for (id, ty, position) in [
             ("note-separate", "note.separate", [40.0, 220.0]),
-            ("hammer", "hammer.exciter", [320.0, 120.0]),
-            ("string", "string.waveguide", [560.0, 220.0]),
-            ("damper", "damper", [820.0, 220.0]),
-            ("hardness", "value.float", [40.0, 420.0]),
-            ("damping", "value.float", [40.0, 520.0]),
-            ("brightness", "value.float", [40.0, 620.0]),
+            ("hammer", "hammer.exciter", [300.0, 120.0]),
+            ("string-center", "string.waveguide", [520.0, 40.0]),
+            ("string-left", "string.waveguide", [520.0, 220.0]),
+            ("string-right", "string.waveguide", [520.0, 400.0]),
+            ("ratio-left", "value.float", [40.0, 420.0]),
+            ("ratio-right", "value.float", [40.0, 500.0]),
+            ("freq-left", "math.multiply", [300.0, 420.0]),
+            ("freq-right", "math.multiply", [300.0, 500.0]),
+            ("sum", "voice.sum", [760.0, 220.0]),
+            ("string-gain", "voice.vca", [760.0, 40.0]),
+            ("level", "value.float", [760.0, 820.0]),
+            ("damper", "damper", [940.0, 220.0]),
+            ("hardness", "value.float", [40.0, 580.0]),
+            ("damping", "value.float", [40.0, 660.0]),
+            ("brightness", "value.float", [40.0, 740.0]),
+            ("release", "value.float", [760.0, 740.0]),
         ] {
             let id = NodeId::fixed(id);
             let mut node = VoiceNode::new(id.clone(), ty);
             node.position = Some(position);
             graph.nodes.insert(id, node);
         }
-        for (id, value) in [("hardness", 0.6), ("damping", 0.997), ("brightness", 0.6)] {
+        for (id, value) in [
+            ("ratio-left", 0.9995),
+            ("ratio-right", 1.0005),
+            ("hardness", 0.6),
+            ("damping", 0.997),
+            ("brightness", 0.6),
+            ("release", 0.01),
+            ("level", 0.33),
+        ] {
             if let Some(node) = graph.nodes.get_mut(&NodeId::fixed(id)) {
                 node.params.insert("value".to_string(), value);
             }
         }
-        graph.connections = vec![
+        let pitch = PortRef::new(NodeId::fixed("note-separate"), "pitch");
+        let hammer = PortRef::new(NodeId::fixed("hammer"), "out");
+        let mut connections = vec![
             VoiceConnection::new(
                 PortRef::new(NodeId::fixed("voice-in"), "note"),
                 PortRef::new(NodeId::fixed("note-separate"), "note"),
@@ -2545,27 +2574,19 @@ impl VoiceGraph {
                 PortRef::new(NodeId::fixed("hammer"), "hardness"),
             ),
             VoiceConnection::new(
-                PortRef::new(NodeId::fixed("hammer"), "out"),
-                PortRef::new(NodeId::fixed("string"), "excitation"),
+                pitch.clone(),
+                PortRef::new(NodeId::fixed("string-center"), "frequency"),
             ),
             VoiceConnection::new(
-                PortRef::new(NodeId::fixed("note-separate"), "pitch"),
-                PortRef::new(NodeId::fixed("string"), "frequency"),
+                PortRef::new(NodeId::fixed("sum"), "out"),
+                PortRef::new(NodeId::fixed("string-gain"), "in"),
             ),
             VoiceConnection::new(
-                PortRef::new(NodeId::fixed("voice-in"), "sample_rate"),
-                PortRef::new(NodeId::fixed("string"), "sample_rate"),
+                PortRef::new(NodeId::fixed("level"), "out"),
+                PortRef::new(NodeId::fixed("string-gain"), "gain"),
             ),
             VoiceConnection::new(
-                PortRef::new(NodeId::fixed("damping"), "out"),
-                PortRef::new(NodeId::fixed("string"), "damping"),
-            ),
-            VoiceConnection::new(
-                PortRef::new(NodeId::fixed("brightness"), "out"),
-                PortRef::new(NodeId::fixed("string"), "brightness"),
-            ),
-            VoiceConnection::new(
-                PortRef::new(NodeId::fixed("string"), "out"),
+                PortRef::new(NodeId::fixed("string-gain"), "out"),
                 PortRef::new(NodeId::fixed("damper"), "audio"),
             ),
             VoiceConnection::new(
@@ -2573,10 +2594,64 @@ impl VoiceGraph {
                 PortRef::new(NodeId::fixed("damper"), "gate"),
             ),
             VoiceConnection::new(
+                PortRef::new(NodeId::fixed("voice-in"), "pedal"),
+                PortRef::new(NodeId::fixed("damper"), "pedal"),
+            ),
+            VoiceConnection::new(
+                PortRef::new(NodeId::fixed("release"), "out"),
+                PortRef::new(NodeId::fixed("damper"), "damping"),
+            ),
+            VoiceConnection::new(
                 PortRef::new(NodeId::fixed("damper"), "out"),
                 PortRef::new(NodeId::fixed("out"), "audio"),
             ),
         ];
+        for string in ["string-center", "string-left", "string-right"] {
+            let string = NodeId::fixed(string);
+            connections.extend([
+                VoiceConnection::new(hammer.clone(), PortRef::new(string.clone(), "excitation")),
+                VoiceConnection::new(
+                    PortRef::new(NodeId::fixed("voice-in"), "sample_rate"),
+                    PortRef::new(string.clone(), "sample_rate"),
+                ),
+                VoiceConnection::new(
+                    PortRef::new(NodeId::fixed("damping"), "out"),
+                    PortRef::new(string.clone(), "damping"),
+                ),
+                VoiceConnection::new(
+                    PortRef::new(NodeId::fixed("brightness"), "out"),
+                    PortRef::new(string.clone(), "brightness"),
+                ),
+                VoiceConnection::new(
+                    PortRef::new(string.clone(), "out"),
+                    PortRef::new(NodeId::fixed("sum"), "in"),
+                ),
+            ]);
+        }
+        connections.extend([
+            VoiceConnection::new(pitch.clone(), PortRef::new(NodeId::fixed("freq-left"), "a")),
+            VoiceConnection::new(
+                PortRef::new(NodeId::fixed("ratio-left"), "out"),
+                PortRef::new(NodeId::fixed("freq-left"), "b"),
+            ),
+            VoiceConnection::new(
+                PortRef::new(NodeId::fixed("freq-left"), "out"),
+                PortRef::new(NodeId::fixed("string-left"), "frequency"),
+            ),
+            VoiceConnection::new(
+                PortRef::new(NodeId::fixed("note-separate"), "pitch"),
+                PortRef::new(NodeId::fixed("freq-right"), "a"),
+            ),
+            VoiceConnection::new(
+                PortRef::new(NodeId::fixed("ratio-right"), "out"),
+                PortRef::new(NodeId::fixed("freq-right"), "b"),
+            ),
+            VoiceConnection::new(
+                PortRef::new(NodeId::fixed("freq-right"), "out"),
+                PortRef::new(NodeId::fixed("string-right"), "frequency"),
+            ),
+        ]);
+        graph.connections = connections;
         graph
     }
 
