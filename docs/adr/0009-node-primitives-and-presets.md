@@ -96,7 +96,10 @@ Aurtrack 的节点系统里有一批“看起来是节点、实际是复合算�
 - 音频域 `audio.instrument.sine` 已暴露 Phase 控制输入；它仍是源节点，未改由组实现。
 - 新增 `track.source` 命令和节点侧栏“设为音源”入口；删除源后可以重新指定，传 null 清空。
 - 数值输入的 Voice 组改为 `GroupCall` 子计划，按插槽传入父图的值；修复嵌套组把父索引误当子节点、导致 `piano.partial` 的 time 绑到内部常量的问题。
-- 默认钢琴不再用 `voice.pitch` / `voice.velocity` 读取隐式上下文；`note.separate` 的 pitch/velocity 作为 Repeat 成对输入进入 `piano.partial`。
+- 默认钢琴不再用 `voice.pitch` / `voice.velocity` 读取隐式上下文；`note.separate` 的 pitch/velocity 作为外部自由变量直接进入 `piano.partial`，不占 Repeat 携带端口。
+- Repeat Input 现在提供 `iteration` 输出；旧的独立 `p-index` 已从默认图移除。
+- Repeat 支持数值多输出、任意嵌套、自由变量和 Note 上下文端口；旧 `piano.voice` 图在打开时自动迁移。
+- 当前节点目录有 54 个 Voice 节点、22 个 Audio 节点；具体清单以 `node.types` 为准。
 
 ## 剩余缺口
 
