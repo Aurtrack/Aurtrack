@@ -51,6 +51,9 @@
     if (track.source.kind === "piano") {
       return t("tracks.meta.piano", { devices: track.devices.length });
     }
+    if (track.source.kind === "physical") {
+      return t("tracks.meta.physical", { devices: track.devices.length });
+    }
     if (track.source.kind === "sampler") {
       return t("tracks.meta.sampler", {
         buffer: track.source.buffer_id,
@@ -79,6 +82,7 @@
       <option value="silence">{t("tracks.source.silence")}</option>
       <option value="sine">{t("tracks.source.sine")}</option>
       <option value="piano">{t("tracks.source.piano")}</option>
+      <option value="physical">{t("tracks.source.physical")}</option>
     </select>
     <div class="track-frequency">
       <NumberField

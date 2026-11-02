@@ -45,6 +45,7 @@ export type Source =
   | { kind: "silence" }
   | { kind: "sine"; frequency: number }
   | { kind: "piano" }
+  | { kind: "physical" }
   | { kind: "sampler"; buffer_id: string };
 
 export type GraphNode = {

@@ -120,6 +120,7 @@ export const zhCN = {
   "tracks.source.sine": "正弦持续音",
   "tracks.source.silence": "音符轨",
   "tracks.source.piano": "加法钢琴",
+  "tracks.source.physical": "物理钢琴",
   "tracks.add": "添加",
   "tracks.empty": "还没有轨道",
   "tracks.removeTitle": "删除轨道",
@@ -130,6 +131,7 @@ export const zhCN = {
     `正弦持续音 ${params.frequency} Hz · ${params.devices} 设备`,
   "tracks.meta.silence": (params) => `音符轨 · ${params.devices} 设备`,
   "tracks.meta.piano": (params) => `加法钢琴 · ${params.devices} 设备`,
+  "tracks.meta.physical": (params) => `物理钢琴 · ${params.devices} 设备`,
   "tracks.meta.sampler": (params) =>
     `采样器 ${params.buffer} · ${params.devices} 设备`,
 

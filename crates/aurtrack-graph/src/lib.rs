@@ -344,6 +344,15 @@ impl NodeGroup {
         }
     }
 
+    pub fn physical_default() -> Self {
+        Self {
+            id: "piano.physical".to_string(),
+            name: "Physical Piano Voice".to_string(),
+            interface: NodeGroupInterface::physical_voice(),
+            graph: VoiceGraph::physical_default(),
+        }
+    }
+
     pub fn sampler_default(buffer_id: &str, looped: bool) -> Self {
         Self {
             id: format!("sampler.{buffer_id}"),
@@ -602,6 +611,23 @@ impl NodeGroupInterface {
                     .with_default(440.0)
                     .with_range(20.0, 20_000.0)
                     .with_step(0.01),
+            ],
+            outputs: vec![NodeGroupSocket::new(
+                "audio",
+                "Audio",
+                NodeGroupSocketType::Audio,
+            )],
+        }
+    }
+
+    pub fn physical_voice() -> Self {
+        Self {
+            inputs: vec![
+                NodeGroupSocket::new("note", "Note", NodeGroupSocketType::Note),
+                NodeGroupSocket::new("sample_rate", "Sample Rate", NodeGroupSocketType::Float)
+                    .with_default(48_000.0)
+                    .with_range(8_000.0, 192_000.0)
+                    .with_step(1.0),
             ],
             outputs: vec![NodeGroupSocket::new(
                 "audio",
@@ -1048,6 +1074,43 @@ const SINE_INPUTS: [VoiceSocketSpec; 3] = [
         .with_default(0.0)
         .with_range(-1000.0, 1000.0),
 ];
+const HAMMER_INPUTS: [VoiceSocketSpec; 2] = [
+    VoiceSocketSpec::new("velocity", "Velocity", SocketType::Float)
+        .with_default(0.8)
+        .with_range(0.0, 1.0)
+        .with_step(0.01),
+    VoiceSocketSpec::new("hardness", "Hardness", SocketType::Float)
+        .with_default(0.5)
+        .with_range(0.0, 1.0)
+        .with_step(0.01),
+];
+const WAVEGUIDE_INPUTS: [VoiceSocketSpec; 5] = [
+    VoiceSocketSpec::new("excitation", "Excitation", SocketType::Audio),
+    VoiceSocketSpec::new("frequency", "Frequency", SocketType::Float)
+        .with_default(261.63)
+        .with_range(8.0, 20_000.0)
+        .with_step(0.01),
+    VoiceSocketSpec::new("sample_rate", "Sample Rate", SocketType::Float)
+        .with_default(48_000.0)
+        .with_range(8_000.0, 192_000.0)
+        .with_step(1.0),
+    VoiceSocketSpec::new("damping", "Damping", SocketType::Float)
+        .with_default(0.995)
+        .with_range(0.0, 0.9999)
+        .with_step(0.0001),
+    VoiceSocketSpec::new("brightness", "Brightness", SocketType::Float)
+        .with_default(0.5)
+        .with_range(0.0, 1.0)
+        .with_step(0.01),
+];
+const DAMPER_INPUTS: [VoiceSocketSpec; 3] = [
+    VoiceSocketSpec::new("audio", "Audio", SocketType::Audio),
+    VoiceSocketSpec::new("gate", "Gate", SocketType::Gate).with_default(1.0),
+    VoiceSocketSpec::new("damping", "Damping", SocketType::Float)
+        .with_default(0.01)
+        .with_range(0.0001, 0.2)
+        .with_step(0.0001),
+];
 const BUFFER_SAMPLE_INPUTS: [VoiceSocketSpec; 3] = [
     VoiceSocketSpec::new("time", "Time", SocketType::Float)
         .with_default(0.0)
@@ -1369,6 +1432,30 @@ pub const VOICE_NODE_TYPES: &[VoiceNodeType] = &[
         name: "Sine",
         category: "Oscillator",
         inputs: &SINE_INPUTS,
+        outputs: &AUDIO_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "hammer.exciter",
+        name: "Hammer Exciter",
+        category: "Exciter",
+        inputs: &HAMMER_INPUTS,
+        outputs: &AUDIO_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "string.waveguide",
+        name: "String Waveguide",
+        category: "String",
+        inputs: &WAVEGUIDE_INPUTS,
+        outputs: &AUDIO_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "damper",
+        name: "Damper",
+        category: "String",
+        inputs: &DAMPER_INPUTS,
         outputs: &AUDIO_OUT,
         params: &[],
     },
@@ -2415,6 +2502,78 @@ impl VoiceGraph {
             ),
             VoiceConnection::new(
                 PortRef::new(NodeId::fixed("vca"), "out"),
+                PortRef::new(NodeId::fixed("out"), "audio"),
+            ),
+        ];
+        graph
+    }
+
+    /// 非采样物理钢琴的第一版：锤激励 + 波导弦 + 制音器。
+    pub fn physical_default() -> Self {
+        let interface = NodeGroupInterface::physical_voice();
+        let mut graph = Self::shell(&interface);
+        for (id, ty, position) in [
+            ("note-separate", "note.separate", [40.0, 220.0]),
+            ("hammer", "hammer.exciter", [320.0, 120.0]),
+            ("string", "string.waveguide", [560.0, 220.0]),
+            ("damper", "damper", [820.0, 220.0]),
+            ("hardness", "value.float", [40.0, 420.0]),
+            ("damping", "value.float", [40.0, 520.0]),
+            ("brightness", "value.float", [40.0, 620.0]),
+        ] {
+            let id = NodeId::fixed(id);
+            let mut node = VoiceNode::new(id.clone(), ty);
+            node.position = Some(position);
+            graph.nodes.insert(id, node);
+        }
+        for (id, value) in [("hardness", 0.6), ("damping", 0.997), ("brightness", 0.6)] {
+            if let Some(node) = graph.nodes.get_mut(&NodeId::fixed(id)) {
+                node.params.insert("value".to_string(), value);
+            }
+        }
+        graph.connections = vec![
+            VoiceConnection::new(
+                PortRef::new(NodeId::fixed("voice-in"), "note"),
+                PortRef::new(NodeId::fixed("note-separate"), "note"),
+            ),
+            VoiceConnection::new(
+                PortRef::new(NodeId::fixed("note-separate"), "velocity"),
+                PortRef::new(NodeId::fixed("hammer"), "velocity"),
+            ),
+            VoiceConnection::new(
+                PortRef::new(NodeId::fixed("hardness"), "out"),
+                PortRef::new(NodeId::fixed("hammer"), "hardness"),
+            ),
+            VoiceConnection::new(
+                PortRef::new(NodeId::fixed("hammer"), "out"),
+                PortRef::new(NodeId::fixed("string"), "excitation"),
+            ),
+            VoiceConnection::new(
+                PortRef::new(NodeId::fixed("note-separate"), "pitch"),
+                PortRef::new(NodeId::fixed("string"), "frequency"),
+            ),
+            VoiceConnection::new(
+                PortRef::new(NodeId::fixed("voice-in"), "sample_rate"),
+                PortRef::new(NodeId::fixed("string"), "sample_rate"),
+            ),
+            VoiceConnection::new(
+                PortRef::new(NodeId::fixed("damping"), "out"),
+                PortRef::new(NodeId::fixed("string"), "damping"),
+            ),
+            VoiceConnection::new(
+                PortRef::new(NodeId::fixed("brightness"), "out"),
+                PortRef::new(NodeId::fixed("string"), "brightness"),
+            ),
+            VoiceConnection::new(
+                PortRef::new(NodeId::fixed("string"), "out"),
+                PortRef::new(NodeId::fixed("damper"), "audio"),
+            ),
+            VoiceConnection::new(
+                PortRef::new(NodeId::fixed("note-separate"), "gate"),
+                PortRef::new(NodeId::fixed("damper"), "gate"),
+            ),
+            VoiceConnection::new(
+                PortRef::new(NodeId::fixed("damper"), "out"),
                 PortRef::new(NodeId::fixed("out"), "audio"),
             ),
         ];

@@ -724,6 +724,8 @@ impl Track {
                     Source::Sine {
                         frequency: instrument.port_value("frequency").unwrap_or(440.0),
                     }
+                } else if group == "piano.physical" {
+                    Source::Physical
                 } else if let Some(buffer_id) = group.strip_prefix("sampler.") {
                     Source::Sampler {
                         buffer_id: buffer_id.to_string(),
@@ -1424,6 +1426,18 @@ fn compile_voice_inner(
             continue;
         }
         let param = |name: &str, default: f64| node.params.get(name).copied().unwrap_or(default);
+        if node.type_id == "string.waveguide" {
+            let index = nodes.len();
+            nodes.push(VoiceNodePlan::with_buffer(
+                VoiceOp::Waveguide,
+                inputs,
+                VOICE_DELAY_SAMPLES,
+            ));
+            for port in aurtrack_graph::node_outputs(node, interface, groups)? {
+                indices.insert((id.clone(), port.id), index);
+            }
+            continue;
+        }
         if node.type_id == "buffer.sample" {
             let buffer_id = node
                 .buffer
@@ -1450,6 +1464,8 @@ fn compile_voice_inner(
         }
         let op = match node.type_id.as_str() {
             "osc.sine" => VoiceOp::Sine,
+            "hammer.exciter" => VoiceOp::Hammer,
+            "damper" => VoiceOp::Damper,
             "voice.partial" => VoiceOp::Partial,
             "voice.iteration" => VoiceOp::Iteration,
             "voice.pitch" => VoiceOp::Pitch,
@@ -1544,6 +1560,7 @@ pub enum Source {
     Silence,
     Sine { frequency: f64 },
     Piano,
+    Physical,
     Sampler { buffer_id: String },
 }
 
@@ -2028,6 +2045,7 @@ impl Session {
         let (instrument, frequency, group_id) = match args.source.as_deref().unwrap_or("silence") {
             "silence" => ("audio.instrument.silence", None, None),
             "piano" => ("audio.group", None, Some("piano.voice".to_string())),
+            "physical" => ("audio.group", None, Some("piano.physical".to_string())),
             "sine" => {
                 let frequency = args.frequency.unwrap_or(440.0);
                 if !frequency.is_finite() || !(20.0..=20_000.0).contains(&frequency) {
@@ -2075,6 +2093,14 @@ impl Session {
         } else {
             aurtrack_graph::AudioGraph::track(instrument)
         };
+        if group_id.as_deref() == Some("piano.physical")
+            && let Some(node) = graph
+                .nodes
+                .get_mut(&NodeId::new("instrument").map_err(graph_error)?)
+        {
+            node.port_values
+                .insert("sample_rate".to_string(), f64::from(sample_rate));
+        }
         if let Some(frequency) = frequency {
             if let Some(node) = graph
                 .nodes
@@ -2097,6 +2123,12 @@ impl Session {
                 .node_groups
                 .entry("sine.voice".to_string())
                 .or_insert_with(NodeGroup::sine_default);
+        }
+        if group_id.as_deref() == Some("piano.physical") {
+            project
+                .node_groups
+                .entry("piano.physical".to_string())
+                .or_insert_with(NodeGroup::physical_default);
         }
         if let Some((buffer_id, looped)) = sampler {
             let group_id = format!("sampler.{buffer_id}");
@@ -6916,6 +6948,57 @@ mod repeat_zone_tests {
 #[allow(clippy::unwrap_used)]
 mod buffer_tests {
     use super::*;
+
+    #[test]
+    fn physical_piano_track_renders() {
+        let wav = std::env::temp_dir()
+            .join(format!("aurtrack-physical-{}.wav", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
+        let mut session = Session::default();
+        session
+            .execute(&CommandRequest {
+                cmd: "project.create".to_string(),
+                args: json!({ "name": "physical" }),
+            })
+            .unwrap();
+        session
+            .execute(&CommandRequest {
+                cmd: "track.create".to_string(),
+                args: json!({ "name": "piano", "source": "physical" }),
+            })
+            .unwrap();
+        session
+            .execute(&CommandRequest {
+                cmd: "clip.create".to_string(),
+                args: json!({ "track_id": "track-1", "start": 0.0, "duration": 1.0 }),
+            })
+            .unwrap();
+        session
+            .execute(&CommandRequest {
+                cmd: "note.add".to_string(),
+                args: json!({
+                    "path": "/tracks/track-1/clips/clip-1",
+                    "pitch": 69,
+                    "start": 0.0,
+                    "duration": 0.3,
+                    "velocity": 0.9
+                }),
+            })
+            .unwrap();
+        let rendered = session
+            .execute(&CommandRequest {
+                cmd: "render.segment".to_string(),
+                args: json!({ "duration_seconds": 0.5, "path": wav }),
+            })
+            .unwrap();
+        assert!(rendered.data["peak"].as_f64().unwrap() > 0.0);
+        let source = session.project.as_ref().unwrap().tracks[0]
+            .source()
+            .unwrap();
+        assert!(matches!(source, Source::Physical));
+        let _ = std::fs::remove_file(wav);
+    }
 
     #[test]
     fn imports_wav_and_renders_sampler_track() {

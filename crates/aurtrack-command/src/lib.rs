@@ -208,7 +208,7 @@ fn track_create_schema() -> Value {
             "name": { "type": "string", "description": "轨道名，不能为空" },
             "source": {
                 "type": "string",
-                "enum": ["silence", "sine", "piano", "sampler", "wavetable"],
+                "enum": ["silence", "sine", "piano", "physical", "sampler", "wavetable"],
                 "default": "silence"
             },
             "frequency": { "type": "number", "minimum": 20, "maximum": 20000, "default": 440 },

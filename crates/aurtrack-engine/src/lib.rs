@@ -199,6 +199,9 @@ pub enum VoiceOp {
     WhiteNoise,
     Constant(f64),
     Sine,
+    Hammer,
+    Waveguide,
+    Damper,
     BufferSample {
         samples: Arc<[f32]>,
         sample_rate: f64,
@@ -414,6 +417,113 @@ impl VoicePlan {
                         brightness,
                         decay,
                     )
+                },
+                VoiceOp::Hammer => {
+                    let velocity = node
+                        .inputs
+                        .first()
+                        .map_or(context.velocity, |input| scratch_value(*input))
+                        .clamp(0.0, 1.0);
+                    let hardness = node
+                        .inputs
+                        .get(1)
+                        .map_or(0.5, |input| scratch_value(*input))
+                        .clamp(0.0, 1.0);
+                    let time = context.local_time.max(0.0);
+                    let decay = 90.0 + hardness * 260.0;
+                    let envelope = (-time * decay).exp();
+                    let noise = (hash64(context.seed ^ time.to_bits().rotate_left(17) ^ 0x51ed_2701)
+                        as f64
+                        / u64::MAX as f64)
+                        * 2.0
+                        - 1.0;
+                    noise * envelope * velocity * (0.5 + hardness * 0.5)
+                },
+                VoiceOp::Waveguide => {
+                    let Some(buffer) = &node.buffer else {
+                        self.scratch[base + index].store(0.0_f64.to_bits(), Ordering::Relaxed);
+                        continue;
+                    };
+                    let capacity = VOICE_DELAY_SAMPLES;
+                    if capacity < 8 || buffer.len() < capacity * node.state.len() {
+                        self.scratch[base + index].store(0.0_f64.to_bits(), Ordering::Relaxed);
+                        continue;
+                    }
+                    let slot = context.note_index as usize % node.state.len();
+                    let excitation = node
+                        .inputs
+                        .first()
+                        .map_or(0.0, |input| scratch_value(*input));
+                    let frequency = node
+                        .inputs
+                        .get(1)
+                        .map_or(context.pitch, |input| scratch_value(*input))
+                        .clamp(8.0, 20_000.0);
+                    let sample_rate = node
+                        .inputs
+                        .get(2)
+                        .map_or(48_000.0, |input| scratch_value(*input))
+                        .clamp(8_000.0, 192_000.0);
+                    let damping = node
+                        .inputs
+                        .get(3)
+                        .map_or(0.995, |input| scratch_value(*input))
+                        .clamp(0.0, 0.9999);
+                    let brightness = node
+                        .inputs
+                        .get(4)
+                        .map_or(0.5, |input| scratch_value(*input))
+                        .clamp(0.0, 1.0);
+                    let delay = (sample_rate / frequency).clamp(2.0, (capacity - 2) as f64);
+                    let write = ((context.local_time.max(0.0) * sample_rate) as usize) % capacity;
+                    let read = (write as f64 - delay).rem_euclid(capacity as f64);
+                    let read_index = read.floor() as usize;
+                    let fraction = read - read_index as f64;
+                    let base = slot * capacity;
+                    let a = f64::from_bits(buffer[base + read_index].load(Ordering::Relaxed));
+                    let b = f64::from_bits(
+                        buffer[base + (read_index + 1) % capacity].load(Ordering::Relaxed),
+                    );
+                    let x = a + (b - a) * fraction;
+                    let state = node.state[slot].load(Ordering::Relaxed);
+                    let stored = f64::from_bits(state);
+                    let y = if stored.is_nan() {
+                        x
+                    } else {
+                        stored + brightness * (x - stored)
+                    };
+                    node.state[slot].store(y.to_bits(), Ordering::Relaxed);
+                    let feedback = (y * damping).clamp(-1.0, 1.0);
+                    buffer[base + write]
+                        .store((excitation + feedback).to_bits(), Ordering::Relaxed);
+                    x
+                },
+                VoiceOp::Damper => {
+                    let input = node
+                        .inputs
+                        .first()
+                        .map_or(0.0, |input| scratch_value(*input));
+                    let gate = node
+                        .inputs
+                        .get(1)
+                        .map_or(1.0, |input| scratch_value(*input))
+                        > 0.5;
+                    let damping = node
+                        .inputs
+                        .get(2)
+                        .map_or(0.01, |input| scratch_value(*input))
+                        .clamp(0.0001, 0.2);
+                    let slot = context.note_index as usize % node.state.len();
+                    let stored = f64::from_bits(node.state[slot].load(Ordering::Relaxed));
+                    let level = if stored.is_nan() {
+                        1.0
+                    } else if gate {
+                        (stored + 0.01).min(1.0)
+                    } else {
+                        (stored - damping).max(0.0)
+                    };
+                    node.state[slot].store(level.to_bits(), Ordering::Relaxed);
+                    input * level
                 },
                 VoiceOp::BufferSample {
                     ref samples,
@@ -2809,6 +2919,31 @@ mod tests {
         let early_energy: f32 = early.iter().map(|sample| sample.abs()).sum();
         let late_energy: f32 = late.iter().map(|sample| sample.abs()).sum();
         assert!(late_energy < early_energy);
+    }
+
+    #[test]
+    fn waveguide_delays_hammer_excitation() {
+        let nodes = vec![
+            VoiceNodePlan::new(VoiceOp::Constant(1.0), Vec::new()),
+            VoiceNodePlan::new(VoiceOp::Constant(100.0), Vec::new()),
+            VoiceNodePlan::new(VoiceOp::Constant(48_000.0), Vec::new()),
+            VoiceNodePlan::new(VoiceOp::Constant(0.99), Vec::new()),
+            VoiceNodePlan::new(VoiceOp::Constant(1.0), Vec::new()),
+            VoiceNodePlan::with_buffer(VoiceOp::Waveguide, vec![0, 1, 2, 3, 4], 4096),
+            VoiceNodePlan::new(VoiceOp::Output, vec![5]),
+        ];
+        let plan = VoicePlan::new(nodes, 6);
+        let context = |time| VoiceContext {
+            pitch: 100.0,
+            velocity: 1.0,
+            local_time: time,
+            gate: true,
+            seed: 1,
+            note_index: 0,
+            iteration: 0,
+        };
+        assert!(plan.sample(context(0.0)).abs() < 1e-9);
+        assert!((plan.sample(context(0.01)) - 1.0).abs() < 0.1);
     }
 
     #[test]

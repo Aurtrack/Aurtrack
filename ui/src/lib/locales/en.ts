@@ -124,6 +124,7 @@ export const en: Record<MessageKey, Message> = {
   "tracks.namePlaceholder": "TRACK NAME",
   "tracks.source.sine": "SINE DRONE",
   "tracks.source.piano": "Additive piano",
+  "tracks.source.physical": "Physical piano",
   "tracks.source.silence": "NOTE TRACK",
   "tracks.add": "ADD",
   "tracks.empty": "NO TRACKS",
@@ -135,6 +136,7 @@ export const en: Record<MessageKey, Message> = {
     `SINE DRONE ${params.frequency} HZ · ${params.devices} DEV`,
   "tracks.meta.silence": (params) => `NOTE TRACK · ${params.devices} DEV`,
   "tracks.meta.piano": (params) => `ADDITIVE PIANO · ${params.devices} DEV`,
+  "tracks.meta.physical": (params) => `PHYSICAL PIANO · ${params.devices} DEV`,
   "tracks.meta.sampler": (params) =>
     `SAMPLER ${params.buffer} · ${params.devices} DEV`,
 
