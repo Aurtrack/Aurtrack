@@ -100,13 +100,14 @@ Aurtrack 的节点系统里有一批“看起来是节点、实际是复合算�
 - Repeat Input 现在提供 `iteration` 输出；旧的独立 `p-index` 已从默认图移除。
 - Repeat 支持数值多输出、任意嵌套、自由变量和 Note 上下文端口；旧 `piano.voice` 图在打开时自动迁移。
 - 当前节点目录有 54 个 Voice 节点、22 个 Audio 节点；具体清单以 `node.types` 为准。
+- 多输出数值组改为 `GroupCall` 子计划加每输出 `GroupResult` 读取缓存，不再把所有输出映射到同一个槽。
 
 ## 剩余缺口
 
 - `buffer.sample` 需要 Buffer 端口/资产和采样插值，尚未实现。
 - `audio.instrument.sine` 还未组化；波表和采样尚未暴露。
 - 节点计划仍是固定 256 上限，状态是固定 128 槽；动态 scratch 未实现。
-- 带 Note 输入的组仍回退到内联展开；多输出组当前只取第一个输出。
+- 带 Note 输入的组仍回退到内联展开。
 - `group.duplicate` 只解决预设复制，不改变编译单元边界。
 
 ## 节点删除与组数据

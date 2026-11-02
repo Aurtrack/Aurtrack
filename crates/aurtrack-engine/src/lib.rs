@@ -88,7 +88,9 @@ impl VoicePlan {
         let repeat_stride = nodes
             .iter()
             .map(|node| match &node.op {
-                VoiceOp::Repeat { outputs, .. } => outputs.len(),
+                VoiceOp::Repeat { outputs, .. } | VoiceOp::GroupCall { outputs, .. } => {
+                    outputs.len()
+                },
                 _ => 0,
             })
             .max()
@@ -204,6 +206,11 @@ pub enum VoiceOp {
     },
     GroupCall {
         body: Box<VoicePlan>,
+        outputs: Vec<usize>,
+    },
+    GroupResult {
+        source: usize,
+        slot: usize,
     },
     OscPartials {
         partials: usize,
@@ -615,7 +622,10 @@ impl VoicePlan {
                     let max = node.inputs.get(2).map_or(1.0, |input| values[*input]);
                     value.clamp(min, max)
                 },
-                VoiceOp::GroupCall { ref body } => {
+                VoiceOp::GroupCall {
+                    ref body,
+                    ref outputs,
+                } => {
                     if node.inputs.len() > 64 {
                         0.0
                     } else {
@@ -623,14 +633,31 @@ impl VoicePlan {
                         for (slot, input) in args.iter_mut().zip(&node.inputs) {
                             *slot = values[*input];
                         }
-                        body.sample_values_traced(
-                            context,
-                            &args[..node.inputs.len()],
-                            trace.as_deref_mut(),
-                        )
-                        .and_then(|child| child.get(body.output).copied())
-                        .unwrap_or(0.0)
+                        let child = body
+                            .sample_values_traced(
+                                context,
+                                &args[..node.inputs.len()],
+                                trace.as_deref_mut(),
+                            )
+                            .unwrap_or([0.0; MAX_VOICE_NODES]);
+                        let base = index * self.repeat_stride;
+                        for (slot, output) in outputs.iter().enumerate() {
+                            let value = child.get(*output).copied().unwrap_or(0.0);
+                            if let Some(target) = self.repeat_cache.get(base + slot) {
+                                target.store(value.to_bits(), Ordering::Relaxed);
+                            }
+                        }
+                        outputs
+                            .first()
+                            .and_then(|output| child.get(*output).copied())
+                            .unwrap_or(0.0)
                     }
+                },
+                VoiceOp::GroupResult { source, slot } => {
+                    let base = source * self.repeat_stride + slot;
+                    self.repeat_cache
+                        .get(base)
+                        .map_or(0.0, |value| f64::from_bits(value.load(Ordering::Relaxed)))
                 },
                 VoiceOp::Repeat {
                     ref zone,
@@ -2216,6 +2243,7 @@ mod tests {
                 VoiceNodePlan::new(
                     VoiceOp::GroupCall {
                         body: Box::new(body),
+                        outputs: vec![3],
                     },
                     vec![0, 1],
                 ),

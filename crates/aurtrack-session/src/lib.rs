@@ -1292,9 +1292,13 @@ fn compile_voice_inner(
                     }
                 }
                 nodes.extend(child.nodes);
-                let child_output = offset + child.output;
                 for socket in &group.interface.outputs {
-                    indices.insert((id.clone(), socket.id.clone()), child_output);
+                    let source = child
+                        .outputs
+                        .get(&socket.id)
+                        .copied()
+                        .unwrap_or(child.output);
+                    indices.insert((id.clone(), socket.id.clone()), offset + source);
                 }
                 continue;
             }
@@ -1315,15 +1319,30 @@ fn compile_voice_inner(
                 &initial,
             )?;
             stack.pop();
+            let outputs: Vec<usize> = group
+                .interface
+                .outputs
+                .iter()
+                .map(|socket| body.outputs.get(&socket.id).copied().unwrap_or(body.output))
+                .collect();
             let index = nodes.len();
             nodes.push(VoiceNodePlan::new(
                 VoiceOp::GroupCall {
                     body: Box::new(body),
+                    outputs,
                 },
                 inputs.clone(),
             ));
-            for socket in &group.interface.outputs {
-                indices.insert((id.clone(), socket.id.clone()), index);
+            for (slot, socket) in group.interface.outputs.iter().enumerate() {
+                let result = nodes.len();
+                nodes.push(VoiceNodePlan::new(
+                    VoiceOp::GroupResult {
+                        source: index,
+                        slot,
+                    },
+                    Vec::new(),
+                ));
+                indices.insert((id.clone(), socket.id.clone()), result);
             }
             continue;
         }
@@ -6384,6 +6403,81 @@ struct ClipPasteArgs {
 #[allow(clippy::unwrap_used)]
 mod repeat_zone_tests {
     use super::*;
+
+    #[test]
+    fn multi_output_group_maps_each_socket() {
+        let input = NodeGroupSocket::new("x", "X", NodeGroupSocketType::Float).with_default(2.0);
+        let mut child_interface = NodeGroupInterface::empty();
+        child_interface.inputs = vec![input.clone()];
+        child_interface.outputs = vec![
+            NodeGroupSocket::new("a", "A", NodeGroupSocketType::Float),
+            NodeGroupSocket::new("b", "B", NodeGroupSocketType::Float),
+        ];
+        let mut child_graph = VoiceGraph::shell(&child_interface);
+        let one = NodeId::new("one").unwrap();
+        let mut one_node = VoiceNode::new(one.clone(), "value.float");
+        one_node.params.insert("value".to_string(), 1.0);
+        child_graph.nodes.insert(one.clone(), one_node);
+        child_graph.connections = vec![
+            VoiceConnection::new(
+                PortRef::new(NodeId::fixed("voice-in"), "x"),
+                PortRef::new(NodeId::fixed("out"), "a"),
+            ),
+            VoiceConnection::new(
+                PortRef::new(one, "out"),
+                PortRef::new(NodeId::fixed("out"), "b"),
+            ),
+        ];
+        let child = NodeGroup::new("multi", "Multi", child_interface, child_graph);
+        let mut groups = BTreeMap::new();
+        groups.insert("multi".to_string(), child);
+
+        let mut parent_interface = NodeGroupInterface::empty();
+        parent_interface.inputs = vec![input];
+        parent_interface.outputs = vec![NodeGroupSocket::new(
+            "audio",
+            "Audio",
+            NodeGroupSocketType::Float,
+        )];
+        let mut parent = VoiceGraph::shell(&parent_interface);
+        let instance = NodeId::new("instance").unwrap();
+        let add = NodeId::new("add").unwrap();
+        let mut instance_node = VoiceNode::new(instance.clone(), "voice.group");
+        instance_node.group = Some("multi".to_string());
+        parent.nodes.insert(instance.clone(), instance_node);
+        parent
+            .nodes
+            .insert(add.clone(), VoiceNode::new(add.clone(), "voice.add"));
+        parent.connections = vec![
+            VoiceConnection::new(
+                PortRef::new(NodeId::fixed("voice-in"), "x"),
+                PortRef::new(instance.clone(), "x"),
+            ),
+            VoiceConnection::new(
+                PortRef::new(instance.clone(), "a"),
+                PortRef::new(add.clone(), "in1"),
+            ),
+            VoiceConnection::new(
+                PortRef::new(instance, "b"),
+                PortRef::new(add.clone(), "in2"),
+            ),
+            VoiceConnection::new(
+                PortRef::new(add, "out"),
+                PortRef::new(NodeId::fixed("out"), "audio"),
+            ),
+        ];
+        let plan = compile_voice(&parent, &parent_interface, &groups).unwrap();
+        let context = aurtrack_engine::VoiceContext {
+            pitch: 261.63,
+            velocity: 0.8,
+            local_time: 0.0,
+            gate: true,
+            seed: 0,
+            note_index: 0,
+            iteration: 0,
+        };
+        assert!((plan.sample(context) - 3.0).abs() < 1e-9);
+    }
 
     #[test]
     fn repeat_zone_compiles_note_pair() {
