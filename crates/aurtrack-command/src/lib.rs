@@ -230,7 +230,8 @@ fn voice_preview_schema() -> Value {
             "node_id": { "type": "string" },
             "points": { "type": "integer", "minimum": 2, "maximum": 256, "default": 32 },
             "pitch": { "type": "number", "minimum": 20, "maximum": 20000, "default": 261.63 },
-            "velocity": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.8 }
+            "velocity": { "type": "number", "minimum": 0, "maximum": 1, "default": 0.8 },
+            "time": { "type": "number", "minimum": 0, "default": 0 }
         }),
         &["group_id", "node_id"],
     )

@@ -748,7 +748,11 @@
     repeatTraceLoading = true;
     repeatTraceError = "";
     try {
-      const result = await session.previewVoice(groupId, active);
+      const result = await session.previewVoice(
+        groupId,
+        active,
+        session.playhead,
+      );
       repeatTrace =
         result.repeat_traces?.find((trace) => trace.zone === active) ?? null;
     } catch (cause) {

@@ -2607,6 +2607,8 @@ impl Session {
             pitch: Option<f64>,
             #[serde(default)]
             velocity: Option<f64>,
+            #[serde(default)]
+            time: Option<f64>,
         }
         let args: PreviewArgs = parse_args(args)?;
         let project = self
@@ -2622,10 +2624,11 @@ impl Session {
         let points = args.points.unwrap_or(32).clamp(2, 256) as usize;
         let pitch = args.pitch.unwrap_or(261.63);
         let velocity = args.velocity.unwrap_or(0.8);
+        let base_time = args.time.unwrap_or(0.0).max(0.0);
         let mut values = Vec::with_capacity(points);
         for index in 0..points {
             #[allow(clippy::cast_precision_loss)]
-            let time = 0.5 * index as f64 / (points - 1) as f64;
+            let time = base_time + 0.5 * index as f64 / (points - 1) as f64;
             let context = aurtrack_engine::VoiceContext {
                 pitch,
                 velocity,
@@ -2642,7 +2645,7 @@ impl Session {
         let repeat_traces = plan.trace_repeats(aurtrack_engine::VoiceContext {
             pitch,
             velocity,
-            local_time: 0.0,
+            local_time: base_time,
             gate: true,
             seed: 0,
             note_index: 0,
