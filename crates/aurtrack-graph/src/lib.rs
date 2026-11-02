@@ -2389,12 +2389,6 @@ impl VoiceGraph {
             });
         }
         for (input, output) in inputs.iter().zip(&outputs) {
-            if input.ty == NodeGroupSocketType::Note || output.ty == NodeGroupSocketType::Note {
-                return Err(GraphError::InvalidGroupSocket {
-                    socket: input.id.clone(),
-                    reason: "Repeat Zone 暂不支持 Note 端口".to_string(),
-                });
-            }
             if input.ty != output.ty {
                 return Err(GraphError::InvalidGroupSocket {
                     socket: input.id.clone(),
@@ -3904,6 +3898,38 @@ mod tests {
                 .inputs
                 .iter()
                 .any(|socket| socket.id == "iteration")
+        );
+    }
+
+    #[test]
+    fn inline_zone_accepts_note_sockets() {
+        let mut graph = VoiceGraph::piano_default();
+        let note = NodeGroupSocket::new("note-carry", "Note", NodeGroupSocketType::Note);
+        for id in ["partials", "p-in"] {
+            if let Some(node) = graph.nodes.get_mut(&NodeId::fixed(id)) {
+                node.zone_inputs.push(note.clone());
+            }
+        }
+        for id in ["partials", "p-out"] {
+            if let Some(node) = graph.nodes.get_mut(&NodeId::fixed(id)) {
+                node.zone_outputs.push(note.clone());
+            }
+        }
+        graph.validate().unwrap();
+        let (_, interface) = graph
+            .zone_body(&graph.nodes[&NodeId::fixed("partials")])
+            .unwrap();
+        assert!(
+            interface
+                .inputs
+                .iter()
+                .any(|socket| socket.ty == NodeGroupSocketType::Note)
+        );
+        assert!(
+            interface
+                .outputs
+                .iter()
+                .any(|socket| socket.ty == NodeGroupSocketType::Note)
         );
     }
 

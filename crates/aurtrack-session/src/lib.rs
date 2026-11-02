@@ -1017,9 +1017,17 @@ fn compile_voice_inner(
             {
                 return Err(GraphError::ZoneTerminals);
             }
+            let value_inputs: Vec<&NodeGroupSocket> = inputs
+                .iter()
+                .filter(|socket| socket.ty != NodeGroupSocketType::Note)
+                .collect();
+            let value_outputs: Vec<&NodeGroupSocket> = outputs
+                .iter()
+                .filter(|socket| socket.ty != NodeGroupSocketType::Note)
+                .collect();
             let mut bindings = BTreeMap::new();
             let mut body_inputs = Vec::new();
-            for (index, socket) in inputs.iter().enumerate() {
+            for (index, socket) in value_inputs.iter().enumerate() {
                 bindings.insert(socket.id.clone(), index);
                 body_inputs.push(VoiceNodePlan::new(VoiceOp::Input(index), Vec::new()));
             }
@@ -1032,6 +1040,20 @@ fn compile_voice_inner(
                     || connection.to.node() == &input_node.id
                     || connection.to.node() == &output_node.id
                 {
+                    continue;
+                }
+                let target_is_note = body_graph
+                    .nodes
+                    .get(connection.to.node())
+                    .and_then(|target| {
+                        aurtrack_graph::node_inputs(target, &body_interface, groups).ok()
+                    })
+                    .is_some_and(|ports| {
+                        ports.iter().any(|port| {
+                            port.id == connection.to.port() && port.ty == NodeGroupSocketType::Note
+                        })
+                    });
+                if target_is_note {
                     continue;
                 }
                 let source = indices
@@ -1048,7 +1070,7 @@ fn compile_voice_inner(
                 if external_inputs.contains_key(&key) {
                     continue;
                 }
-                let slot = inputs.len() + free_values.len();
+                let slot = value_inputs.len() + free_values.len();
                 external_inputs.insert(key, slot);
                 body_inputs.push(VoiceNodePlan::new(VoiceOp::Input(slot), Vec::new()));
                 free_values.push(source);
@@ -1097,7 +1119,7 @@ fn compile_voice_inner(
                 index
             });
             external.push(count_index);
-            for socket in &inputs {
+            for socket in &value_inputs {
                 let source = voice
                     .connections
                     .iter()
@@ -1125,8 +1147,8 @@ fn compile_voice_inner(
                 external.push(index);
             }
             external.extend(free_values);
-            let mut slots = Vec::with_capacity(outputs.len());
-            for socket in &outputs {
+            let mut slots = Vec::with_capacity(value_outputs.len());
+            for socket in &value_outputs {
                 slots.push(
                     *body
                         .outputs
@@ -1139,11 +1161,11 @@ fn compile_voice_inner(
                 VoiceOp::Repeat {
                     body: Box::new(body),
                     outputs: slots,
-                    carried: inputs.len(),
+                    carried: value_inputs.len(),
                 },
                 external,
             ));
-            for (slot, socket) in outputs.iter().enumerate() {
+            for (slot, socket) in value_outputs.iter().enumerate() {
                 let index = nodes.len();
                 nodes.push(VoiceNodePlan::new(
                     VoiceOp::RepeatResult {
@@ -1153,6 +1175,11 @@ fn compile_voice_inner(
                     Vec::new(),
                 ));
                 indices.insert((output_node.id.clone(), socket.id.clone()), index);
+            }
+            for socket in &outputs {
+                if socket.ty == NodeGroupSocketType::Note {
+                    indices.insert((output_node.id.clone(), socket.id.clone()), NOTE_BINDING);
+                }
             }
             continue;
         }
@@ -6336,6 +6363,28 @@ struct ClipPasteArgs {
 #[allow(clippy::unwrap_used)]
 mod repeat_zone_tests {
     use super::*;
+
+    #[test]
+    fn repeat_zone_compiles_note_pair() {
+        let mut graph = VoiceGraph::piano_default();
+        let note = NodeGroupSocket::new("note-carry", "Note", NodeGroupSocketType::Note);
+        for id in ["partials", "p-in"] {
+            if let Some(node) = graph.nodes.get_mut(&NodeId::new(id).unwrap()) {
+                node.zone_inputs.push(note.clone());
+            }
+        }
+        for id in ["partials", "p-out"] {
+            if let Some(node) = graph.nodes.get_mut(&NodeId::new(id).unwrap()) {
+                node.zone_outputs.push(note.clone());
+            }
+        }
+        let plan = compile_voice(&graph, &NodeGroupInterface::piano(), &BTreeMap::new()).unwrap();
+        assert!(
+            plan.nodes
+                .iter()
+                .any(|node| matches!(node.op, aurtrack_engine::VoiceOp::Repeat { .. }))
+        );
+    }
 
     #[test]
     fn repeat_zone_compiles_multiple_pairs() {

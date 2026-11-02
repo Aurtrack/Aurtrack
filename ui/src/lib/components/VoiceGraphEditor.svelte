@@ -3622,6 +3622,7 @@
                   class:port-int={port.ty === "int"}
                   class:port-float={port.ty === "float"}
                   class:port-gate={port.ty === "gate"}
+                  class:port-note={port.ty === "note"}
                   style:top={`${NODE_ROW / 2 - 4}px`}
                   title={`${port.id} (${port.ty})`}
                   aria-label={port.id}
@@ -3639,6 +3640,7 @@
                   class:port-int={port.ty === "int"}
                   class:port-float={port.ty === "float"}
                   class:port-gate={port.ty === "gate"}
+                  class:port-note={port.ty === "note"}
                   style:top={`${NODE_ROW / 2 - 4}px`}
                   title={`${port.id} (${port.ty})`}
                   aria-label={port.id}
@@ -3689,6 +3691,7 @@
                   class:port-int={port.ty === "int"}
                   class:port-float={port.ty === "float"}
                   class:port-gate={port.ty === "gate"}
+                  class:port-note={port.ty === "note"}
                   style:top={`${NODE_ROW / 2 - 4}px`}
                   title={`${port.id} (${port.ty})`}
                   aria-label={port.id}
@@ -3706,6 +3709,7 @@
                   class:port-int={port.ty === "int"}
                   class:port-float={port.ty === "float"}
                   class:port-gate={port.ty === "gate"}
+                  class:port-note={port.ty === "note"}
                   style:top={`${NODE_ROW / 2 - 4}px`}
                   title={`${port.id} (${port.ty})`}
                   aria-label={port.id}
@@ -4145,6 +4149,7 @@
                       <option value="float">float</option>
                       <option value="int">int</option>
                       <option value="gate">gate</option>
+                      <option value="note">note</option>
                     </select>
                     <button
                       class="ghost small"
