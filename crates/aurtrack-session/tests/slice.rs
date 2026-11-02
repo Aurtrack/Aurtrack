@@ -531,7 +531,7 @@ fn project_save_and_open_round_trip() {
         0.5
     );
     assert_eq!(
-        state["project"]["tracks"][0]["graph"]["nodes"]["instrument"]["params"]["frequency"],
+        state["project"]["tracks"][0]["graph"]["nodes"]["instrument"]["port_values"]["frequency"],
         110.0
     );
     assert_eq!(

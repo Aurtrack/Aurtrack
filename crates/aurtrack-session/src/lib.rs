@@ -282,7 +282,10 @@ fn compile_audio_controls(
             .iter()
             .find(|connection| connection.to.node() == &node.id && connection.to.port() == port.id)
         else {
-            let value = node.param(&port.id).unwrap_or(port.default);
+            let value = node
+                .port_value(&port.id)
+                .or_else(|| node.param(&port.id))
+                .unwrap_or(port.default);
             controls.push(constant_index(nodes, value));
             continue;
         };
@@ -384,7 +387,10 @@ fn compile_audio_graph(
                 for port in ports {
                     let index =
                         incoming_index(graph, &indices, &id, &port.id).unwrap_or_else(|| {
-                            constant_index(&mut nodes, node.param(&port.id).unwrap_or(port.default))
+                            constant_index(
+                                &mut nodes,
+                                node.port_value(&port.id).unwrap_or(port.default),
+                            )
                         });
                     bindings.insert(port.id, index);
                 }
@@ -716,7 +722,7 @@ impl Track {
                 let group = instrument.group.as_deref().unwrap_or_default();
                 if group == "sine.voice" {
                     Source::Sine {
-                        frequency: instrument.param("frequency").unwrap_or(440.0),
+                        frequency: instrument.port_value("frequency").unwrap_or(440.0),
                     }
                 } else if let Some(buffer_id) = group.strip_prefix("sampler.") {
                     Source::Sampler {
@@ -788,7 +794,8 @@ impl Track {
                     if has_note_source(instrument.id()) {
                         group_id.clone_from(&instrument.group);
                         if instrument.group.as_deref() == Some("sine.voice") {
-                            source_frequency = Some(instrument.param("frequency").unwrap_or(440.0));
+                            source_frequency =
+                                Some(instrument.port_value("frequency").unwrap_or(440.0));
                         }
                     }
                 },
@@ -1746,7 +1753,8 @@ fn migrate_legacy_repeat_groups(project: &mut Project) -> usize {
         })
 }
 
-/// 旧版 `audio.group` 默认带 `frequency`；只有组接口声明了该输入才保留。
+/// 旧版组实例把接口值混在 `params`；迁移到显式 `port_values`，
+/// 未声明接口的旧参数直接丢弃。
 fn migrate_group_instance_params(project: &mut Project) -> usize {
     let mut migrated = 0;
     let groups = &project.node_groups;
@@ -1757,19 +1765,27 @@ fn migrate_group_instance_params(project: &mut Project) -> usize {
             .values_mut()
             .filter(|node| node.type_id == "audio.group")
         {
-            let declares = node
+            let declared: BTreeSet<String> = node
                 .group
                 .as_ref()
                 .and_then(|id| groups.get(id))
-                .is_some_and(|group| {
+                .map(|group| {
                     group
                         .interface
                         .inputs
                         .iter()
-                        .any(|socket| socket.id == "frequency")
-                });
-            if !declares && node.params.remove("frequency").is_some() {
-                migrated += 1;
+                        .map(|socket| socket.id.clone())
+                        .collect()
+                })
+                .unwrap_or_default();
+            let names: Vec<String> = node.params.keys().cloned().collect();
+            for name in names {
+                if let Some(value) = node.params.remove(&name) {
+                    if declared.contains(&name) {
+                        node.port_values.insert(name, value);
+                    }
+                    migrated += 1;
+                }
             }
         }
     }
@@ -2064,7 +2080,7 @@ impl Session {
                 .nodes
                 .get_mut(&NodeId::new("instrument").map_err(graph_error)?)
             {
-                node.params.insert("frequency".to_string(), frequency);
+                node.port_values.insert("frequency".to_string(), frequency);
             }
         }
         let token = self.snapshot("track.create");
@@ -2314,7 +2330,7 @@ impl Session {
                 .find(|track| track.id == track_id)
                 .and_then(|track| track.graph.nodes.get_mut(&node_id))
                 .ok_or_else(|| CommandError::not_found(format!("找不到参数：{path}")))?;
-            node.params.insert(name.to_string(), args.value);
+            node.port_values.insert(name.to_string(), args.value);
             return Ok(
                 CommandResponse::ok(json!({ "path": path, "value": args.value })).with_undo(token),
             );
@@ -5815,6 +5831,7 @@ fn graph_view(graph: &aurtrack_graph::AudioGraph) -> Value {
                 "type_id": &node.type_id,
                 "kind": device_kind(&node.type_id),
                 "params": &node.params,
+                "port_values": &node.port_values,
             });
             if let Some(position) = node.position {
                 view["position"] = json!(position);
@@ -7058,6 +7075,36 @@ mod migration_tests {
                 && connection.to.port() == "index"
         }));
         assert!(!migrate_piano_voice_graph(&mut graph));
+    }
+
+    #[test]
+    fn group_param_set_writes_explicit_port_value() {
+        let mut session = Session::default();
+        session
+            .execute(&CommandRequest {
+                cmd: "project.create".to_string(),
+                args: json!({ "name": "port-values" }),
+            })
+            .unwrap();
+        session
+            .execute(&CommandRequest {
+                cmd: "track.create".to_string(),
+                args: json!({ "name": "sine", "source": "sine" }),
+            })
+            .unwrap();
+        session
+            .execute(&CommandRequest {
+                cmd: "param.set".to_string(),
+                args: json!({
+                    "path": "/tracks/track-1/nodes/instrument/params/frequency",
+                    "value": 220.0
+                }),
+            })
+            .unwrap();
+        let node =
+            &session.project.as_ref().unwrap().tracks[0].graph.nodes[&NodeId::fixed("instrument")];
+        assert!(!node.params.contains_key("frequency"));
+        assert_eq!(node.port_value("frequency"), Some(220.0));
     }
 
     #[test]

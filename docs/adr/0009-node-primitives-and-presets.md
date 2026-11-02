@@ -18,6 +18,13 @@ Aurtrack 的节点系统里有一批“看起来是节点、实际是复合算�
 - **宏 / 预设组**：由原语组成的 `NodeGroup`，可以进入、展开、复制、修改。
 - **实例**：轨道或 Voice 图里引用一个组，保留自己的参数覆盖。
 
+组实例的未连接输入值必须放在显式的 `AudioNode.port_values`，键只能是 `NodeGroupInterface.inputs` 声明的端口：
+
+- `AudioNode.params` 只承载节点类型自己的 `ParamSpec`；
+- `audio.group` 不再声明 `frequency` 之类组专用参数；
+- 旧工程把 `params` 中与接口同名的值迁移到 `port_values`，未声明的丢弃；
+- `param.set` 仍按接口端口校验，但写入 `port_values`，不会退回通用参数。
+
 预设组不是黑箱。必须满足：
 
 - 能打开看到内部节点。

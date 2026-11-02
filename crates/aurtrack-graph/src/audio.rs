@@ -210,12 +210,7 @@ pub const AUDIO_NODE_TYPES: &[AudioNodeType] = &[
         category: "Instrument",
         inputs: &[],
         outputs: &AUDIO_OUT,
-        params: &[ParamSpec {
-            name: "frequency",
-            default: 440.0,
-            minimum: 20.0,
-            maximum: 20_000.0,
-        }],
+        params: &[],
     },
     AudioNodeType {
         id: "audio.instrument.sine",
@@ -557,6 +552,8 @@ pub struct AudioNode {
     pub type_id: String,
     #[serde(default)]
     pub params: BTreeMap<String, f64>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub port_values: BTreeMap<String, f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub position: Option<[f64; 2]>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -573,24 +570,20 @@ pub struct AudioNode {
 
 impl AudioNode {
     pub fn new(id: NodeId, type_id: &str) -> Self {
-        // 组参数由实例接口决定，不能在建节点时无条件塞入 frequency。
-        let params = if type_id == "audio.group" {
-            BTreeMap::new()
-        } else {
-            audio_node_type(type_id)
-                .map(|node_type| {
-                    node_type
-                        .params
-                        .iter()
-                        .map(|param| (param.name.to_string(), param.default))
-                        .collect()
-                })
-                .unwrap_or_default()
-        };
+        let params = audio_node_type(type_id)
+            .map(|node_type| {
+                node_type
+                    .params
+                    .iter()
+                    .map(|param| (param.name.to_string(), param.default))
+                    .collect()
+            })
+            .unwrap_or_default();
         Self {
             id,
             type_id: type_id.to_string(),
             params,
+            port_values: BTreeMap::new(),
             position: None,
             group: None,
             frame: None,
@@ -610,6 +603,11 @@ impl AudioNode {
 
     pub fn params(&self) -> &BTreeMap<String, f64> {
         &self.params
+    }
+
+    /// 组实例未连接输入的显式值；键必须是组接口声明的输入。
+    pub fn port_value(&self, name: &str) -> Option<f64> {
+        self.port_values.get(name).copied()
     }
 
     pub fn position(&self) -> Option<[f64; 2]> {
@@ -1267,8 +1265,26 @@ impl AudioGraph {
                 .ok_or_else(|| GraphError::UnknownAudioNodeType(node.type_id.clone()))?;
             if node.type_id == "audio.group" {
                 let group = node.group.as_deref().ok_or(GraphError::EmptyGroupId)?;
-                if !voice_groups.contains_key(group) {
-                    return Err(GraphError::GroupMissing(group.to_string()));
+                let group = voice_groups
+                    .get(group)
+                    .ok_or_else(|| GraphError::GroupMissing(group.to_string()))?;
+                for (name, value) in &node.port_values {
+                    let socket = group
+                        .interface
+                        .inputs
+                        .iter()
+                        .find(|socket| socket.id == *name)
+                        .ok_or_else(|| GraphError::AudioUnknownPort(name.clone()))?;
+                    let minimum = socket.minimum.unwrap_or(f64::NEG_INFINITY);
+                    let maximum = socket.maximum.unwrap_or(f64::INFINITY);
+                    if !value.is_finite() || *value < minimum || *value > maximum {
+                        return Err(GraphError::InvalidParam {
+                            name: name.clone(),
+                            value: *value,
+                            minimum,
+                            maximum,
+                        });
+                    }
                 }
             }
             if node.type_id == "audio.group.instance" {

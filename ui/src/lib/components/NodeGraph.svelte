@@ -612,7 +612,7 @@
   }
 
   function paramOf(node: GraphNode, name: string, fallback: number): number {
-    return node.params[name] ?? fallback;
+    return node.port_values?.[name] ?? node.params[name] ?? fallback;
   }
 
   type InputPort = { port: string; y: number; ty: string };

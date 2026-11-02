@@ -52,6 +52,7 @@ export type GraphNode = {
   kind: string;
   type_id?: string;
   params: Record<string, number>;
+  port_values?: Record<string, number>;
   position?: [number, number];
   plugin?: { path: string; id: string; state?: string };
   group?: string;
