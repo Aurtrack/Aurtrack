@@ -81,6 +81,7 @@ pub struct VoicePlan {
     pub node_outputs: BTreeMap<String, usize>,
     repeat_cache: Arc<[AtomicU64]>,
     repeat_stride: usize,
+    scratch: Arc<[AtomicU64]>,
 }
 
 impl VoicePlan {
@@ -97,6 +98,7 @@ impl VoicePlan {
             .unwrap_or(1)
             .max(1);
         let repeat_slots = nodes.len().max(1).saturating_mul(repeat_stride);
+        let scratch_slots = nodes.len().max(1).saturating_mul(VOICE_STATE_SLOTS);
         Self {
             nodes,
             output,
@@ -107,7 +109,18 @@ impl VoicePlan {
                 .collect::<Vec<_>>()
                 .into(),
             repeat_stride,
+            scratch: (0..scratch_slots)
+                .map(|_| AtomicU64::new(0))
+                .collect::<Vec<_>>()
+                .into(),
         }
+    }
+
+    fn scratch_value(&self, note_index: u64, index: usize) -> f64 {
+        let base = (note_index as usize % VOICE_STATE_SLOTS) * self.nodes.len().max(1);
+        self.scratch
+            .get(base + index)
+            .map_or(0.0, |value| f64::from_bits(value.load(Ordering::Relaxed)))
     }
 
     pub fn set_outputs(&mut self, outputs: BTreeMap<String, usize>) {
@@ -266,11 +279,7 @@ impl VoicePlan {
         self.sample_internal(context, inputs, None).unwrap_or(0.0)
     }
 
-    fn sample_values(
-        &self,
-        context: VoiceContext,
-        inputs: &[f64],
-    ) -> Option<[f64; MAX_VOICE_NODES]> {
+    fn sample_values(&self, context: VoiceContext, inputs: &[f64]) -> Option<()> {
         self.sample_values_traced(context, inputs, None)
     }
 
@@ -279,13 +288,19 @@ impl VoicePlan {
         context: VoiceContext,
         inputs: &[f64],
         mut trace: Option<&mut TraceSink>,
-    ) -> Option<[f64; MAX_VOICE_NODES]> {
-        if self.nodes.len() > MAX_VOICE_NODES || self.output >= self.nodes.len() {
+    ) -> Option<()> {
+        let node_count = self.nodes.len();
+        if node_count == 0 || self.output >= node_count {
             return None;
         }
-        let mut values = [0.0_f64; MAX_VOICE_NODES];
+        let base = (context.note_index as usize % VOICE_STATE_SLOTS) * node_count;
+        let scratch_value = |index: usize| {
+            self.scratch
+                .get(base + index)
+                .map_or(0.0, |value| f64::from_bits(value.load(Ordering::Relaxed)))
+        };
         for (index, node) in self.nodes.iter().enumerate() {
-            values[index] = match node.op {
+            let value = match node.op {
                 VoiceOp::Pitch => context.pitch,
                 VoiceOp::Velocity => context.velocity,
                 VoiceOp::Gate => f64::from(u8::from(context.gate)),
@@ -294,7 +309,10 @@ impl VoicePlan {
                 VoiceOp::Iteration => context.iteration as f64,
                 VoiceOp::Input(index) => inputs.get(index).copied().unwrap_or(0.0),
                 VoiceOp::WhiteNoise => {
-                    let value = node.inputs.first().map_or(0.0, |input| values[*input]);
+                    let value = node
+                        .inputs
+                        .first()
+                        .map_or(0.0, |input| scratch_value(*input));
                     white_noise(value)
                 },
                 VoiceOp::Constant(value) => value,
@@ -302,10 +320,16 @@ impl VoicePlan {
                     let frequency = node
                         .inputs
                         .first()
-                        .map_or(440.0, |input| values[*input])
+                        .map_or(440.0, |input| scratch_value(*input))
                         .clamp(0.0, 20_000.0);
-                    let phase = node.inputs.get(1).map_or(0.0, |input| values[*input]);
-                    let time = node.inputs.get(2).map_or(0.0, |input| values[*input]);
+                    let phase = node
+                        .inputs
+                        .get(1)
+                        .map_or(0.0, |input| scratch_value(*input));
+                    let time = node
+                        .inputs
+                        .get(2)
+                        .map_or(0.0, |input| scratch_value(*input));
                     if !frequency.is_finite() || !phase.is_finite() || !time.is_finite() {
                         0.0
                     } else {
@@ -321,24 +345,27 @@ impl VoicePlan {
                     let pitch = node
                         .inputs
                         .first()
-                        .map_or(context.pitch, |input| values[*input]);
+                        .map_or(context.pitch, |input| scratch_value(*input));
                     let velocity = node
                         .inputs
                         .get(1)
-                        .map_or(context.velocity, |input| values[*input]);
+                        .map_or(context.velocity, |input| scratch_value(*input));
                     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                     let partials = node.inputs.get(2).map_or(partials, |input| {
-                        (values[*input].round() as usize).clamp(1, 16)
+                        (scratch_value(*input).round() as usize).clamp(1, 16)
                     });
                     let inharmonicity = node
                         .inputs
                         .get(3)
-                        .map_or(inharmonicity, |input| values[*input]);
+                        .map_or(inharmonicity, |input| scratch_value(*input));
                     let brightness = node
                         .inputs
                         .get(4)
-                        .map_or(brightness, |input| values[*input]);
-                    let decay = node.inputs.get(5).map_or(decay, |input| values[*input]);
+                        .map_or(brightness, |input| scratch_value(*input));
+                    let decay = node
+                        .inputs
+                        .get(5)
+                        .map_or(decay, |input| scratch_value(*input));
                     osc_partials(
                         pitch,
                         velocity,
@@ -353,19 +380,31 @@ impl VoicePlan {
                     let pitch = node
                         .inputs
                         .first()
-                        .map_or(context.pitch, |input| values[*input]);
+                        .map_or(context.pitch, |input| scratch_value(*input));
                     let velocity = node
                         .inputs
                         .get(1)
-                        .map_or(context.velocity, |input| values[*input]);
+                        .map_or(context.velocity, |input| scratch_value(*input));
                     let time = node
                         .inputs
                         .get(2)
-                        .map_or(context.local_time, |input| values[*input]);
-                    let index = node.inputs.get(3).map_or(0.0, |input| values[*input]);
-                    let inharmonicity = node.inputs.get(4).map_or(0.0004, |input| values[*input]);
-                    let brightness = node.inputs.get(5).map_or(0.5, |input| values[*input]);
-                    let decay = node.inputs.get(6).map_or(1.2, |input| values[*input]);
+                        .map_or(context.local_time, |input| scratch_value(*input));
+                    let index = node
+                        .inputs
+                        .get(3)
+                        .map_or(0.0, |input| scratch_value(*input));
+                    let inharmonicity = node
+                        .inputs
+                        .get(4)
+                        .map_or(0.0004, |input| scratch_value(*input));
+                    let brightness = node
+                        .inputs
+                        .get(5)
+                        .map_or(0.5, |input| scratch_value(*input));
+                    let decay = node
+                        .inputs
+                        .get(6)
+                        .map_or(1.2, |input| scratch_value(*input));
                     partial_sample(
                         pitch,
                         velocity,
@@ -382,9 +421,18 @@ impl VoicePlan {
                     root,
                     looped,
                 } => {
-                    let gate = node.inputs.get(2).map_or(0.0, |input| values[*input]);
-                    let time = node.inputs.first().map_or(0.0, |input| values[*input]);
-                    let frequency = node.inputs.get(1).map_or(root, |input| values[*input]);
+                    let gate = node
+                        .inputs
+                        .get(2)
+                        .map_or(0.0, |input| scratch_value(*input));
+                    let time = node
+                        .inputs
+                        .first()
+                        .map_or(0.0, |input| scratch_value(*input));
+                    let frequency = node
+                        .inputs
+                        .get(1)
+                        .map_or(root, |input| scratch_value(*input));
                     if gate <= 0.5 || samples.is_empty() || !time.is_finite() {
                         0.0
                     } else {
@@ -412,15 +460,31 @@ impl VoicePlan {
                     }
                 },
                 VoiceOp::Adsr => {
-                    let gate = node.inputs.first().map_or(0.0, |input| values[*input]) > 0.5;
+                    let gate = node
+                        .inputs
+                        .first()
+                        .map_or(0.0, |input| scratch_value(*input))
+                        > 0.5;
                     let time = node
                         .inputs
                         .get(1)
-                        .map_or(context.local_time, |input| values[*input]);
-                    let attack = node.inputs.get(2).map_or(0.01, |input| values[*input]);
-                    let decay = node.inputs.get(3).map_or(0.1, |input| values[*input]);
-                    let sustain = node.inputs.get(4).map_or(0.7, |input| values[*input]);
-                    let release = node.inputs.get(5).map_or(0.2, |input| values[*input]);
+                        .map_or(context.local_time, |input| scratch_value(*input));
+                    let attack = node
+                        .inputs
+                        .get(2)
+                        .map_or(0.01, |input| scratch_value(*input));
+                    let decay = node
+                        .inputs
+                        .get(3)
+                        .map_or(0.1, |input| scratch_value(*input));
+                    let sustain = node
+                        .inputs
+                        .get(4)
+                        .map_or(0.7, |input| scratch_value(*input));
+                    let release = node
+                        .inputs
+                        .get(5)
+                        .map_or(0.2, |input| scratch_value(*input));
                     let slot = context.note_index as usize % node.state.len();
                     if gate {
                         node.state[slot].store(f64::NAN.to_bits(), Ordering::Relaxed);
@@ -441,18 +505,30 @@ impl VoicePlan {
                 },
                 VoiceOp::Delay => {
                     let Some(buffer) = &node.buffer else {
-                        values[index] = 0.0;
+                        self.scratch[base + index].store(0.0_f64.to_bits(), Ordering::Relaxed);
                         continue;
                     };
                     let per_note = buffer.len() / node.state.len();
                     if per_note == 0 {
-                        values[index] = 0.0;
+                        self.scratch[base + index].store(0.0_f64.to_bits(), Ordering::Relaxed);
                         continue;
                     }
-                    let input = node.inputs.first().map_or(0.0, |input| values[*input]);
-                    let time = node.inputs.get(1).map_or(0.01, |input| values[*input]);
-                    let feedback = node.inputs.get(2).map_or(0.0, |input| values[*input]);
-                    let rate = node.inputs.get(3).map_or(48_000.0, |input| values[*input]);
+                    let input = node
+                        .inputs
+                        .first()
+                        .map_or(0.0, |input| scratch_value(*input));
+                    let time = node
+                        .inputs
+                        .get(1)
+                        .map_or(0.01, |input| scratch_value(*input));
+                    let feedback = node
+                        .inputs
+                        .get(2)
+                        .map_or(0.0, |input| scratch_value(*input));
+                    let rate = node
+                        .inputs
+                        .get(3)
+                        .map_or(48_000.0, |input| scratch_value(*input));
                     let slot = context.note_index as usize % node.state.len();
                     let write = (node.state[slot].load(Ordering::Relaxed) as usize) % per_note;
                     let delay_samples =
@@ -466,10 +542,22 @@ impl VoicePlan {
                     delayed
                 },
                 VoiceOp::Biquad { highpass } => {
-                    let input = node.inputs.first().map_or(0.0, |input| values[*input]);
-                    let cutoff = node.inputs.get(1).map_or(1200.0, |input| values[*input]);
-                    let q = node.inputs.get(2).map_or(0.707, |input| values[*input]);
-                    let rate = node.inputs.get(3).map_or(48_000.0, |input| values[*input]);
+                    let input = node
+                        .inputs
+                        .first()
+                        .map_or(0.0, |input| scratch_value(*input));
+                    let cutoff = node
+                        .inputs
+                        .get(1)
+                        .map_or(1200.0, |input| scratch_value(*input));
+                    let q = node
+                        .inputs
+                        .get(2)
+                        .map_or(0.707, |input| scratch_value(*input));
+                    let rate = node
+                        .inputs
+                        .get(3)
+                        .map_or(48_000.0, |input| scratch_value(*input));
                     if !input.is_finite()
                         || !cutoff.is_finite()
                         || !q.is_finite()
@@ -512,25 +600,37 @@ impl VoicePlan {
                     let time = node
                         .inputs
                         .first()
-                        .map_or(context.local_time, |input| values[*input]);
-                    let attack = node.inputs.get(1).map_or(0.004, |input| values[*input]);
+                        .map_or(context.local_time, |input| scratch_value(*input));
+                    let attack = node
+                        .inputs
+                        .get(1)
+                        .map_or(0.004, |input| scratch_value(*input));
                     (time / attack.max(0.0001)).min(1.0)
                 },
                 VoiceOp::Decay => {
                     let time = node
                         .inputs
                         .first()
-                        .map_or(context.local_time, |input| values[*input]);
-                    let decay = node.inputs.get(1).map_or(1.2, |input| values[*input]);
+                        .map_or(context.local_time, |input| scratch_value(*input));
+                    let decay = node
+                        .inputs
+                        .get(1)
+                        .map_or(1.2, |input| scratch_value(*input));
                     (-time / decay.max(0.01)).exp()
                 },
                 VoiceOp::Envelope { attack, decay } => {
                     let time = node
                         .inputs
                         .first()
-                        .map_or(context.local_time, |input| values[*input]);
-                    let attack = node.inputs.get(1).map_or(attack, |input| values[*input]);
-                    let decay = node.inputs.get(2).map_or(decay, |input| values[*input]);
+                        .map_or(context.local_time, |input| scratch_value(*input));
+                    let attack = node
+                        .inputs
+                        .get(1)
+                        .map_or(attack, |input| scratch_value(*input));
+                    let decay = node
+                        .inputs
+                        .get(2)
+                        .map_or(decay, |input| scratch_value(*input));
                     let attack_gain = (time / attack.max(0.0001)).min(1.0);
                     attack_gain * (-time / decay.max(0.01)).exp()
                 },
@@ -538,118 +638,212 @@ impl VoicePlan {
                     let time = node
                         .inputs
                         .first()
-                        .map_or(context.local_time, |input| values[*input]);
+                        .map_or(context.local_time, |input| scratch_value(*input));
                     let seed = node
                         .inputs
                         .get(1)
-                        .map_or(context.seed, |input| values[*input].to_bits());
+                        .map_or(context.seed, |input| scratch_value(*input).to_bits());
                     noise_sample(seed, time)
                 },
                 VoiceOp::Vca => {
-                    let input = node.inputs.first().map_or(0.0, |input| values[*input]);
-                    let gain = node.inputs.get(1).map_or(1.0, |input| values[*input]);
+                    let input = node
+                        .inputs
+                        .first()
+                        .map_or(0.0, |input| scratch_value(*input));
+                    let gain = node
+                        .inputs
+                        .get(1)
+                        .map_or(1.0, |input| scratch_value(*input));
                     input * gain
                 },
                 VoiceOp::Mix => {
-                    let factor = node.inputs.first().map_or(0.5, |input| values[*input]);
-                    let a = node.inputs.get(1).map_or(0.0, |input| values[*input]);
-                    let b = node.inputs.get(2).map_or(0.0, |input| values[*input]);
+                    let factor = node
+                        .inputs
+                        .first()
+                        .map_or(0.5, |input| scratch_value(*input));
+                    let a = node
+                        .inputs
+                        .get(1)
+                        .map_or(0.0, |input| scratch_value(*input));
+                    let b = node
+                        .inputs
+                        .get(2)
+                        .map_or(0.0, |input| scratch_value(*input));
                     a * (1.0 - factor) + b * factor
                 },
                 VoiceOp::Switch => {
-                    let switch = node.inputs.first().map_or(0.0, |input| values[*input]);
+                    let switch = node
+                        .inputs
+                        .first()
+                        .map_or(0.0, |input| scratch_value(*input));
                     let index = if switch > 0.5 { 2 } else { 1 };
-                    node.inputs.get(index).map_or(0.0, |input| values[*input])
+                    node.inputs
+                        .get(index)
+                        .map_or(0.0, |input| scratch_value(*input))
                 },
                 VoiceOp::IndexSwitch { slots } => {
-                    let index = node.inputs.first().map_or(0.0, |input| values[*input]);
+                    let index = node
+                        .inputs
+                        .first()
+                        .map_or(0.0, |input| scratch_value(*input));
                     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                     let slot = (index.round().max(0.0) as usize).min(slots.saturating_sub(1)) + 1;
-                    node.inputs.get(slot).map_or(0.0, |input| values[*input])
+                    node.inputs
+                        .get(slot)
+                        .map_or(0.0, |input| scratch_value(*input))
                 },
-                VoiceOp::Broadcast => node.inputs.first().map_or(0.0, |input| values[*input]),
+                VoiceOp::Broadcast => node
+                    .inputs
+                    .first()
+                    .map_or(0.0, |input| scratch_value(*input)),
                 VoiceOp::SampleHold => {
-                    let next = node.inputs.first().map_or(0.0, |input| values[*input]);
+                    let next = node
+                        .inputs
+                        .first()
+                        .map_or(0.0, |input| scratch_value(*input));
                     let voice = context.note_index as usize % node.state.len();
                     let previous = node.state[voice].swap(next.to_bits(), Ordering::Relaxed);
                     f64::from_bits(previous)
                 },
                 VoiceOp::GateNode => {
-                    let signal = node.inputs.first().map_or(0.0, |input| values[*input]);
-                    let gate = node.inputs.get(1).map_or(0.0, |input| values[*input]);
+                    let signal = node
+                        .inputs
+                        .first()
+                        .map_or(0.0, |input| scratch_value(*input));
+                    let gate = node
+                        .inputs
+                        .get(1)
+                        .map_or(0.0, |input| scratch_value(*input));
                     signal * gate
                 },
-                VoiceOp::Add => node.inputs.iter().map(|input| values[*input]).sum(),
+                VoiceOp::Add => node.inputs.iter().map(|input| scratch_value(*input)).sum(),
                 VoiceOp::Multiply => node
                     .inputs
                     .iter()
-                    .map(|input| values[*input])
+                    .map(|input| scratch_value(*input))
                     .product::<f64>(),
                 VoiceOp::Subtract => {
-                    let a = node.inputs.first().map_or(0.0, |input| values[*input]);
-                    let b = node.inputs.get(1).map_or(0.0, |input| values[*input]);
+                    let a = node
+                        .inputs
+                        .first()
+                        .map_or(0.0, |input| scratch_value(*input));
+                    let b = node
+                        .inputs
+                        .get(1)
+                        .map_or(0.0, |input| scratch_value(*input));
                     a - b
                 },
                 VoiceOp::Divide => {
-                    let a = node.inputs.first().map_or(0.0, |input| values[*input]);
-                    let b = node.inputs.get(1).map_or(0.0, |input| values[*input]);
+                    let a = node
+                        .inputs
+                        .first()
+                        .map_or(0.0, |input| scratch_value(*input));
+                    let b = node
+                        .inputs
+                        .get(1)
+                        .map_or(0.0, |input| scratch_value(*input));
                     if b.abs() < 1e-12 { 0.0 } else { a / b }
                 },
                 VoiceOp::Power => {
-                    let a = node.inputs.first().map_or(0.0, |input| values[*input]);
-                    let b = node.inputs.get(1).map_or(0.0, |input| values[*input]);
+                    let a = node
+                        .inputs
+                        .first()
+                        .map_or(0.0, |input| scratch_value(*input));
+                    let b = node
+                        .inputs
+                        .get(1)
+                        .map_or(0.0, |input| scratch_value(*input));
                     let value = a.powf(b);
                     if value.is_finite() { value } else { 0.0 }
                 },
                 VoiceOp::Modulo => {
-                    let a = node.inputs.first().map_or(0.0, |input| values[*input]);
-                    let b = node.inputs.get(1).map_or(0.0, |input| values[*input]);
+                    let a = node
+                        .inputs
+                        .first()
+                        .map_or(0.0, |input| scratch_value(*input));
+                    let b = node
+                        .inputs
+                        .get(1)
+                        .map_or(0.0, |input| scratch_value(*input));
                     if b.abs() < 1e-12 { 0.0 } else { a % b }
                 },
                 VoiceOp::Floor => node
                     .inputs
                     .first()
-                    .map_or(0.0, |input| values[*input])
+                    .map_or(0.0, |input| scratch_value(*input))
                     .floor(),
                 VoiceOp::Ceil => node
                     .inputs
                     .first()
-                    .map_or(0.0, |input| values[*input])
+                    .map_or(0.0, |input| scratch_value(*input))
                     .ceil(),
                 VoiceOp::Round => node
                     .inputs
                     .first()
-                    .map_or(0.0, |input| values[*input])
+                    .map_or(0.0, |input| scratch_value(*input))
                     .round(),
                 VoiceOp::Exp => {
                     let value = node
                         .inputs
                         .first()
-                        .map_or(0.0, |input| values[*input])
+                        .map_or(0.0, |input| scratch_value(*input))
                         .exp();
                     if value.is_finite() { value } else { 0.0 }
                 },
                 VoiceOp::Sqrt => {
-                    let value = node.inputs.first().map_or(0.0, |input| values[*input]);
+                    let value = node
+                        .inputs
+                        .first()
+                        .map_or(0.0, |input| scratch_value(*input));
                     if value < 0.0 { 0.0 } else { value.sqrt() }
                 },
-                VoiceOp::IntToFloat => node.inputs.first().map_or(0.0, |input| values[*input]),
+                VoiceOp::IntToFloat => node
+                    .inputs
+                    .first()
+                    .map_or(0.0, |input| scratch_value(*input)),
                 VoiceOp::GreaterThan => {
-                    let a = node.inputs.first().map_or(0.0, |input| values[*input]);
-                    let b = node.inputs.get(1).map_or(0.0, |input| values[*input]);
+                    let a = node
+                        .inputs
+                        .first()
+                        .map_or(0.0, |input| scratch_value(*input));
+                    let b = node
+                        .inputs
+                        .get(1)
+                        .map_or(0.0, |input| scratch_value(*input));
                     f64::from(u8::from(a > b))
                 },
                 VoiceOp::LessThan => {
-                    let a = node.inputs.first().map_or(0.0, |input| values[*input]);
-                    let b = node.inputs.get(1).map_or(0.0, |input| values[*input]);
+                    let a = node
+                        .inputs
+                        .first()
+                        .map_or(0.0, |input| scratch_value(*input));
+                    let b = node
+                        .inputs
+                        .get(1)
+                        .map_or(0.0, |input| scratch_value(*input));
                     f64::from(u8::from(a < b))
                 },
                 VoiceOp::MapRange => {
-                    let value = node.inputs.first().map_or(0.0, |input| values[*input]);
-                    let from_min = node.inputs.get(1).map_or(0.0, |input| values[*input]);
-                    let from_max = node.inputs.get(2).map_or(1.0, |input| values[*input]);
-                    let to_min = node.inputs.get(3).map_or(0.0, |input| values[*input]);
-                    let to_max = node.inputs.get(4).map_or(1.0, |input| values[*input]);
+                    let value = node
+                        .inputs
+                        .first()
+                        .map_or(0.0, |input| scratch_value(*input));
+                    let from_min = node
+                        .inputs
+                        .get(1)
+                        .map_or(0.0, |input| scratch_value(*input));
+                    let from_max = node
+                        .inputs
+                        .get(2)
+                        .map_or(1.0, |input| scratch_value(*input));
+                    let to_min = node
+                        .inputs
+                        .get(3)
+                        .map_or(0.0, |input| scratch_value(*input));
+                    let to_max = node
+                        .inputs
+                        .get(4)
+                        .map_or(1.0, |input| scratch_value(*input));
                     let span = from_max - from_min;
                     if span.abs() < 1e-12 {
                         to_min
@@ -658,9 +852,18 @@ impl VoicePlan {
                     }
                 },
                 VoiceOp::Clamp => {
-                    let value = node.inputs.first().map_or(0.0, |input| values[*input]);
-                    let min = node.inputs.get(1).map_or(0.0, |input| values[*input]);
-                    let max = node.inputs.get(2).map_or(1.0, |input| values[*input]);
+                    let value = node
+                        .inputs
+                        .first()
+                        .map_or(0.0, |input| scratch_value(*input));
+                    let min = node
+                        .inputs
+                        .get(1)
+                        .map_or(0.0, |input| scratch_value(*input));
+                    let max = node
+                        .inputs
+                        .get(2)
+                        .map_or(1.0, |input| scratch_value(*input));
                     value.clamp(min, max)
                 },
                 VoiceOp::GroupCall {
@@ -672,26 +875,29 @@ impl VoicePlan {
                     } else {
                         let mut args = [0.0_f64; 64];
                         for (slot, input) in args.iter_mut().zip(&node.inputs) {
-                            *slot = values[*input];
+                            *slot = scratch_value(*input);
                         }
-                        let child = body
+                        if body
                             .sample_values_traced(
                                 context,
                                 &args[..node.inputs.len()],
                                 trace.as_deref_mut(),
                             )
-                            .unwrap_or([0.0; MAX_VOICE_NODES]);
-                        let base = index * self.repeat_stride;
-                        for (slot, output) in outputs.iter().enumerate() {
-                            let value = child.get(*output).copied().unwrap_or(0.0);
-                            if let Some(target) = self.repeat_cache.get(base + slot) {
-                                target.store(value.to_bits(), Ordering::Relaxed);
+                            .is_none()
+                        {
+                            0.0
+                        } else {
+                            let base = index * self.repeat_stride;
+                            for (slot, output) in outputs.iter().enumerate() {
+                                let value = body.scratch_value(context.note_index, *output);
+                                if let Some(target) = self.repeat_cache.get(base + slot) {
+                                    target.store(value.to_bits(), Ordering::Relaxed);
+                                }
                             }
+                            outputs.first().map_or(0.0, |output| {
+                                body.scratch_value(context.note_index, *output)
+                            })
                         }
-                        outputs
-                            .first()
-                            .and_then(|output| child.get(*output).copied())
-                            .unwrap_or(0.0)
                     }
                 },
                 VoiceOp::GroupResult { source, slot } => {
@@ -713,7 +919,7 @@ impl VoicePlan {
                         let count = node
                             .inputs
                             .first()
-                            .map_or(1.0, |input| values[*input])
+                            .map_or(1.0, |input| scratch_value(*input))
                             .round()
                             .clamp(0.0, 64.0) as usize;
                         let mut carried = [0.0_f64; MAX_REPEAT_OUTPUTS];
@@ -721,14 +927,14 @@ impl VoicePlan {
                             .iter_mut()
                             .zip(node.inputs.iter().skip(1))
                         {
-                            *slot = values[*input];
+                            *slot = scratch_value(*input);
                         }
                         let mut free = [0.0_f64; 64];
                         for (slot, input) in free
                             .iter_mut()
                             .zip(node.inputs.iter().skip(1 + carried_count))
                         {
-                            *slot = values[*input];
+                            *slot = scratch_value(*input);
                         }
                         let mut body_inputs = [0.0_f64; 64];
                         body_inputs[..carried_count].copy_from_slice(&carried[..carried_count]);
@@ -741,13 +947,14 @@ impl VoicePlan {
                         for iteration in 0..count {
                             let mut loop_context = context;
                             loop_context.iteration = iteration as u64;
-                            let body_values = body.sample_values_traced(
+                            body.sample_values_traced(
                                 loop_context,
                                 &body_inputs[..carried_count + free_count],
                                 trace.as_deref_mut(),
                             )?;
                             for (slot, output) in outputs.iter().enumerate() {
-                                sampled[slot] = body_values.get(*output).copied().unwrap_or(0.0);
+                                sampled[slot] =
+                                    body.scratch_value(loop_context.note_index, *output);
                             }
                             if carried_count > 0 {
                                 body_inputs[..carried_count]
@@ -778,10 +985,14 @@ impl VoicePlan {
                         .get(base)
                         .map_or(0.0, |value| f64::from_bits(value.load(Ordering::Relaxed)))
                 },
-                VoiceOp::Output => node.inputs.first().map_or(0.0, |input| values[*input]),
+                VoiceOp::Output => node
+                    .inputs
+                    .first()
+                    .map_or(0.0, |input| scratch_value(*input)),
             };
+            self.scratch[base + index].store(value.to_bits(), Ordering::Relaxed);
         }
-        Some(values)
+        Some(())
     }
 
     fn sample_internal(
@@ -790,10 +1001,9 @@ impl VoicePlan {
         inputs: &[f64],
         target: Option<usize>,
     ) -> Option<f64> {
-        let values = self.sample_values(context, inputs)?;
-        target
-            .and_then(|index| values.get(index).copied())
-            .or_else(|| values.get(self.output).copied())
+        self.sample_values(context, inputs)?;
+        let index = target.unwrap_or(self.output);
+        Some(self.scratch_value(context.note_index, index))
     }
 
     pub fn sample_sockets(
@@ -815,9 +1025,9 @@ impl VoicePlan {
         inputs: &[f64],
         output: &mut [f64],
     ) -> Option<()> {
-        let values = self.sample_values(context, inputs)?;
+        self.sample_values(context, inputs)?;
         for (slot, index) in output.iter_mut().zip(sockets) {
-            *slot = values.get(*index).copied().unwrap_or(0.0);
+            *slot = self.scratch_value(context.note_index, *index);
         }
         Some(())
     }
@@ -2599,6 +2809,25 @@ mod tests {
         let early_energy: f32 = early.iter().map(|sample| sample.abs()).sum();
         let late_energy: f32 = late.iter().map(|sample| sample.abs()).sum();
         assert!(late_energy < early_energy);
+    }
+
+    #[test]
+    fn voice_plan_scratch_grows_with_node_count() {
+        let mut nodes: Vec<VoiceNodePlan> = (0..300)
+            .map(|index| VoiceNodePlan::new(VoiceOp::Constant(index as f64), Vec::new()))
+            .collect();
+        nodes.push(VoiceNodePlan::new(VoiceOp::Output, vec![299]));
+        let plan = VoicePlan::new(nodes, 300);
+        let context = VoiceContext {
+            pitch: 440.0,
+            velocity: 1.0,
+            local_time: 0.0,
+            gate: true,
+            seed: 0,
+            note_index: 0,
+            iteration: 0,
+        };
+        assert!((plan.sample(context) - 299.0).abs() < 1e-9);
     }
 
     #[test]

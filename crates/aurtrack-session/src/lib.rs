@@ -31,9 +31,8 @@ use std::sync::Arc;
 use aurtrack_command::{CommandError, CommandRequest, CommandResponse, registry};
 use aurtrack_engine::{
     AdsrPlan, DelayPlan, FilterPlan, FilterSettings, GraphNodePlan, GraphOp, GraphPlan,
-    HighpassPlan, LfoPlan, MAX_GRAPH_NODES, MAX_VOICE_NODES, NotePlan, PluginPlan,
-    VOICE_DELAY_SAMPLES, VoiceNodePlan, VoiceOp, VoicePlan, adsr_envelope, midi_to_hz,
-    note_envelope,
+    HighpassPlan, LfoPlan, MAX_GRAPH_NODES, NotePlan, PluginPlan, VOICE_DELAY_SAMPLES,
+    VoiceNodePlan, VoiceOp, VoicePlan, adsr_envelope, midi_to_hz, note_envelope,
 };
 use aurtrack_graph::{
     AudioConnection, AudioGraph, AudioGroup, AudioNode, GraphError, NodeGroup, NodeGroupInterface,
@@ -1504,12 +1503,6 @@ fn compile_voice_inner(
                 }
             }
         }
-    }
-    if nodes.len() > MAX_VOICE_NODES {
-        return Err(GraphError::NodeLimit {
-            count: nodes.len(),
-            limit: MAX_VOICE_NODES,
-        });
     }
     let mut plan = VoicePlan::new(nodes, output);
     plan.set_outputs(outputs);
