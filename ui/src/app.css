@@ -3088,6 +3088,14 @@ button:disabled {
   padding: 6px;
 }
 
+.zone-trace-live {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  color: var(--muted);
+  font-size: 9px;
+}
+
 .zone-trace-row {
   display: flex;
   flex-wrap: wrap;

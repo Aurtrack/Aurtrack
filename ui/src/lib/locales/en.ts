@@ -471,6 +471,7 @@ export const en: Record<MessageKey, Message> = {
   "voice.addCarry": "Add Carried Value",
   "voice.iterationPreview": "Iteration Carry Preview",
   "voice.sampleIterations": "Sample Iterations",
+  "voice.followPlayhead": "Follow playhead",
   "voice.removeSocket": "Remove Field",
   "node.voice.partial": "Partial",
   "node.voice.switch": "Switch",

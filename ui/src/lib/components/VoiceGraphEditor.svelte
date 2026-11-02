@@ -742,6 +742,15 @@
   let repeatTrace = $state<{ zone: string; iterations: number[][] } | null>(null);
   let repeatTraceError = $state("");
   let repeatTraceLoading = $state(false);
+  let repeatTraceLive = $state(false);
+
+  $effect(() => {
+    if (!repeatTraceLive) return;
+    const timer = window.setInterval(() => {
+      if (!repeatTraceLoading && active) void loadRepeatTrace();
+    }, 300);
+    return () => window.clearInterval(timer);
+  });
 
   async function loadRepeatTrace(): Promise<void> {
     if (!active) return;
@@ -4200,6 +4209,15 @@
                   disabled={repeatTraceLoading}
                   onclick={() => void loadRepeatTrace()}
                 >{t("voice.sampleIterations")}</button>
+                <label class="zone-trace-live">
+                  <input
+                    type="checkbox"
+                    checked={repeatTraceLive}
+                    onchange={(event) =>
+                      (repeatTraceLive = event.currentTarget.checked)}
+                  />
+                  <span>{t("voice.followPlayhead")}</span>
+                </label>
                 {#if repeatTraceError}
                   <span class="node-preview-error">{repeatTraceError}</span>
                 {:else if repeatTrace}
