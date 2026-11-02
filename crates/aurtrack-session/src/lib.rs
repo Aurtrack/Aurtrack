@@ -1159,6 +1159,7 @@ fn compile_voice_inner(
             let repeat_index = nodes.len();
             nodes.push(VoiceNodePlan::new(
                 VoiceOp::Repeat {
+                    zone: id.to_string(),
                     body: Box::new(body),
                     outputs: slots,
                     carried: value_inputs.len(),
@@ -1221,6 +1222,7 @@ fn compile_voice_inner(
             let index = nodes.len();
             nodes.push(VoiceNodePlan::new(
                 VoiceOp::Repeat {
+                    zone: group_id.to_string(),
                     outputs: vec![body.outputs.values().next().copied().unwrap_or(body.output)],
                     body: Box::new(body),
                     carried: 1,
@@ -2637,11 +2639,27 @@ impl Session {
         }
         let minimum = values.iter().copied().fold(f64::INFINITY, f64::min);
         let maximum = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        let repeat_traces = plan.trace_repeats(aurtrack_engine::VoiceContext {
+            pitch,
+            velocity,
+            local_time: 0.0,
+            gate: true,
+            seed: 0,
+            note_index: 0,
+            iteration: 0,
+        });
         Ok(CommandResponse::ok(json!({
             "node_id": args.node_id,
             "values": values,
             "minimum": minimum,
             "maximum": maximum,
+            "repeat_traces": repeat_traces
+                .into_iter()
+                .map(|trace| json!({
+                    "zone": trace.zone,
+                    "iterations": trace.iterations,
+                }))
+                .collect::<Vec<_>>(),
         })))
     }
 

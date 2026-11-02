@@ -408,6 +408,29 @@ fn remove_track_supports_undo_and_redo() {
 }
 
 #[test]
+fn voice_preview_returns_repeat_iteration_values() {
+    let mut session = Session::default();
+    run(&mut session, "project.create", json!({ "name": "trace" }));
+    let preview = run(
+        &mut session,
+        "voice.preview",
+        json!({
+            "group_id": "piano.voice",
+            "node_id": "p-out",
+            "points": 2
+        }),
+    );
+    let trace = preview["repeat_traces"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|trace| trace["zone"] == "partials")
+        .unwrap();
+    assert_eq!(trace["iterations"].as_array().unwrap().len(), 10);
+    assert_eq!(trace["iterations"][0].as_array().unwrap().len(), 1);
+}
+
+#[test]
 fn piano_repeat_free_inputs_survive_save_open() {
     let path = project_temp_path("repeat-free");
     let mut session = Session::default();

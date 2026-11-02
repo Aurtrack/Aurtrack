@@ -59,6 +59,18 @@ pub struct VoiceContext {
     pub iteration: u64,
 }
 
+/// 一次 Repeat 诊断采样的迭代携带值。
+#[derive(Debug, Clone, Default)]
+pub struct RepeatTrace {
+    pub zone: String,
+    pub iterations: Vec<Vec<f64>>,
+}
+
+#[derive(Debug, Default)]
+struct TraceSink {
+    repeats: Vec<RepeatTrace>,
+}
+
 /// Voice 子图编译结果。
 #[non_exhaustive]
 #[derive(Debug, Clone)]
@@ -112,6 +124,13 @@ impl VoicePlan {
     pub fn sample_node(&self, node_id: &str, context: VoiceContext) -> Option<f64> {
         let target = *self.node_outputs.get(node_id)?;
         self.sample_internal(context, &[], Some(target))
+    }
+
+    /// 离线诊断：记录每个 Repeat 每次迭代结束时的携带值。
+    pub fn trace_repeats(&self, context: VoiceContext) -> Vec<RepeatTrace> {
+        let mut sink = TraceSink::default();
+        let _ = self.sample_values_traced(context, &[], Some(&mut sink));
+        sink.repeats
     }
 }
 
@@ -174,6 +193,7 @@ pub enum VoiceOp {
     },
     Delay,
     Repeat {
+        zone: String,
         body: Box<VoicePlan>,
         outputs: Vec<usize>,
         carried: usize,
@@ -237,6 +257,15 @@ impl VoicePlan {
         &self,
         context: VoiceContext,
         inputs: &[f64],
+    ) -> Option<[f64; MAX_VOICE_NODES]> {
+        self.sample_values_traced(context, inputs, None)
+    }
+
+    fn sample_values_traced(
+        &self,
+        context: VoiceContext,
+        inputs: &[f64],
+        mut trace: Option<&mut TraceSink>,
     ) -> Option<[f64; MAX_VOICE_NODES]> {
         if self.nodes.len() > MAX_VOICE_NODES || self.output >= self.nodes.len() {
             return None;
@@ -594,10 +623,17 @@ impl VoicePlan {
                         for (slot, input) in args.iter_mut().zip(&node.inputs) {
                             *slot = values[*input];
                         }
-                        body.sample_with_inputs(context, &args[..node.inputs.len()])
+                        body.sample_values_traced(
+                            context,
+                            &args[..node.inputs.len()],
+                            trace.as_deref_mut(),
+                        )
+                        .and_then(|child| child.get(body.output).copied())
+                        .unwrap_or(0.0)
                     }
                 },
                 VoiceOp::Repeat {
+                    ref zone,
                     ref body,
                     ref outputs,
                     carried: carried_count,
@@ -633,20 +669,32 @@ impl VoicePlan {
                         body_inputs[carried_count..carried_count + free_count]
                             .copy_from_slice(&free[..free_count]);
                         let mut sampled = carried;
+                        let mut iteration_values = Vec::new();
                         for iteration in 0..count {
                             let mut loop_context = context;
                             loop_context.iteration = iteration as u64;
-                            body.sample_sockets_into(
-                                outputs,
+                            let body_values = body.sample_values_traced(
                                 loop_context,
                                 &body_inputs[..carried_count + free_count],
-                                &mut sampled[..outputs.len()],
+                                trace.as_deref_mut(),
                             )?;
+                            for (slot, output) in outputs.iter().enumerate() {
+                                sampled[slot] = body_values.get(*output).copied().unwrap_or(0.0);
+                            }
                             if carried_count > 0 {
                                 body_inputs[..carried_count]
                                     .copy_from_slice(&sampled[..carried_count]);
                                 carried[..carried_count].copy_from_slice(&sampled[..carried_count]);
                             }
+                            if trace.is_some() {
+                                iteration_values.push(carried[..outputs.len()].to_vec());
+                            }
+                        }
+                        if let Some(sink) = trace.as_deref_mut() {
+                            sink.repeats.push(RepeatTrace {
+                                zone: zone.clone(),
+                                iterations: iteration_values,
+                            });
                         }
                         let base = index * self.repeat_stride;
                         for (slot, value) in carried[..outputs.len()].iter().enumerate() {
@@ -2279,6 +2327,7 @@ mod tests {
                 VoiceNodePlan::new(VoiceOp::Constant(2.0), vec![]),
                 VoiceNodePlan::new(
                     VoiceOp::Repeat {
+                        zone: "test".to_string(),
                         body: Box::new(body),
                         outputs: vec![3, 4],
                         carried: 2,
@@ -2302,6 +2351,12 @@ mod tests {
             iteration: 0,
         };
         assert!((plan.sample(context) - 9.0).abs() < 1e-9);
+        let traces = plan.trace_repeats(context);
+        assert_eq!(traces.len(), 1);
+        assert_eq!(traces[0].zone, "test");
+        assert_eq!(traces[0].iterations.len(), 3);
+        assert_eq!(traces[0].iterations[0], vec![2.0, 3.0]);
+        assert_eq!(traces[0].iterations[2], vec![4.0, 5.0]);
     }
 
     #[test]
@@ -2323,6 +2378,7 @@ mod tests {
                 VoiceNodePlan::new(VoiceOp::Constant(10.0), vec![]),
                 VoiceNodePlan::new(
                     VoiceOp::Repeat {
+                        zone: "test".to_string(),
                         body: Box::new(body),
                         outputs: vec![2],
                         carried: 1,
@@ -2364,6 +2420,7 @@ mod tests {
                 VoiceNodePlan::new(VoiceOp::Constant(0.0), vec![]),
                 VoiceNodePlan::new(
                     VoiceOp::Repeat {
+                        zone: "test".to_string(),
                         body: Box::new(body),
                         outputs: vec![2],
                         carried: 1,
