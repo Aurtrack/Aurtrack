@@ -44,7 +44,8 @@ export type TimeSignature = {
 export type Source =
   | { kind: "silence" }
   | { kind: "sine"; frequency: number }
-  | { kind: "piano" };
+  | { kind: "piano" }
+  | { kind: "sampler"; buffer_id: string };
 
 export type GraphNode = {
   id: string;
@@ -301,6 +302,10 @@ export async function pickProjectPath(
   mode: "save" | "open",
 ): Promise<string | null> {
   return getInvoke()<string | null>("pick_project_path", { mode });
+}
+
+export async function pickBufferPath(): Promise<string | null> {
+  return getInvoke()<string | null>("pick_buffer_path");
 }
 
 export async function recoveryPath(): Promise<string> {

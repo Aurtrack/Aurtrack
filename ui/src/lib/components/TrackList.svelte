@@ -51,6 +51,12 @@
     if (track.source.kind === "piano") {
       return t("tracks.meta.piano", { devices: track.devices.length });
     }
+    if (track.source.kind === "sampler") {
+      return t("tracks.meta.sampler", {
+        buffer: track.source.buffer_id,
+        devices: track.devices.length,
+      });
+    }
     return t("tracks.meta.silence", { devices: track.devices.length });
   }
 </script>

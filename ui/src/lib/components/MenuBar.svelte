@@ -136,6 +136,14 @@
             >
               {t("menu.saveAs")}
             </button>
+            <button
+              class="menu-item"
+              role="menuitem"
+              disabled={session.busy}
+              onclick={() => run(() => void session.importSampler())}
+            >
+              {t("menu.importSampler")}
+            </button>
             <div class="menu-separator"></div>
             <button
               class="menu-item"

@@ -186,6 +186,12 @@ pub enum VoiceOp {
     WhiteNoise,
     Constant(f64),
     Sine,
+    BufferSample {
+        samples: Arc<[f32]>,
+        sample_rate: f64,
+        root: f64,
+        looped: bool,
+    },
     Partial,
     Attack,
     Decay,
@@ -369,6 +375,41 @@ impl VoicePlan {
                         brightness,
                         decay,
                     )
+                },
+                VoiceOp::BufferSample {
+                    ref samples,
+                    sample_rate,
+                    root,
+                    looped,
+                } => {
+                    let gate = node.inputs.get(2).map_or(0.0, |input| values[*input]);
+                    let time = node.inputs.first().map_or(0.0, |input| values[*input]);
+                    let frequency = node.inputs.get(1).map_or(root, |input| values[*input]);
+                    if gate <= 0.5 || samples.is_empty() || !time.is_finite() {
+                        0.0
+                    } else {
+                        let rate = frequency.max(0.0) / root.max(1e-9);
+                        let mut position = time.max(0.0) * sample_rate * rate;
+                        if looped {
+                            position %= samples.len() as f64;
+                        }
+                        let index = position.floor();
+                        if !index.is_finite() || index < 0.0 {
+                            0.0
+                        } else {
+                            let index = index as usize;
+                            if index >= samples.len() {
+                                0.0
+                            } else if index + 1 < samples.len() {
+                                let fraction = position - index as f64;
+                                let a = f64::from(samples[index]);
+                                let b = f64::from(samples[index + 1]);
+                                a + (b - a) * fraction
+                            } else {
+                                f64::from(samples[index])
+                            }
+                        }
+                    }
                 },
                 VoiceOp::Adsr => {
                     let gate = node.inputs.first().map_or(0.0, |input| values[*input]) > 0.5;

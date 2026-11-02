@@ -20,6 +20,7 @@ export const zhCN = {
   "menu.open": "打开工程…",
   "menu.save": "保存",
   "menu.saveAs": "另存为…",
+  "menu.importSampler": "导入采样…",
   "menu.plugins": "插件与扩展…",
   "menu.recent": "最近工程",
   "menu.noRecent": "暂无最近工程",
@@ -129,6 +130,8 @@ export const zhCN = {
     `正弦持续音 ${params.frequency} Hz · ${params.devices} 设备`,
   "tracks.meta.silence": (params) => `音符轨 · ${params.devices} 设备`,
   "tracks.meta.piano": (params) => `加法钢琴 · ${params.devices} 设备`,
+  "tracks.meta.sampler": (params) =>
+    `采样器 ${params.buffer} · ${params.devices} 设备`,
 
   "inspector.title": "检查器",
   "inspector.chain": "信号链",
@@ -301,6 +304,8 @@ export const zhCN = {
   "status.ready": "会话就绪。添加轨道，或按播放。",
   "status.initFailed": (params) => `初始化失败：${params.message}`,
   "status.trackCreated": (params) => `已创建 ${params.id}`,
+  "status.samplerImported": (params) => `已导入采样 ${params.buffer}`,
+  "status.samplerImportFailed": (params) => `导入采样失败：${params.message}`,
   "status.trackCreateFailed": (params) => `建轨失败：${params.message}`,
   "status.trackRemoved": (params) => `已删除 ${params.id}`,
   "status.trackRemoveFailed": (params) => `删除轨道失败：${params.message}`,

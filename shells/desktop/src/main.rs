@@ -98,6 +98,15 @@ fn pick_project_path(mode: String) -> Option<String> {
     path.map(|path| path.to_string_lossy().into_owned())
 }
 
+#[tauri::command]
+fn pick_buffer_path() -> Option<String> {
+    rfd::FileDialog::new()
+        .add_filter("WAV 采样", &["wav"])
+        .set_title("导入采样")
+        .pick_file()
+        .map(|path| path.to_string_lossy().into_owned())
+}
+
 fn recovery_file(app: &tauri::AppHandle) -> Result<PathBuf, String> {
     let directory = app
         .path()
@@ -162,6 +171,7 @@ fn main() {
             open_file,
             audio_info,
             pick_project_path,
+            pick_buffer_path,
             recovery_path,
             recovery_exists,
             recovery_remove

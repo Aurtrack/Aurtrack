@@ -21,6 +21,7 @@ export const en: Record<MessageKey, Message> = {
   "menu.open": "Open project…",
   "menu.save": "Save",
   "menu.saveAs": "Save as…",
+  "menu.importSampler": "Import Sample…",
   "menu.plugins": "Plugins & Extensions…",
   "menu.recent": "Recent projects",
   "menu.noRecent": "No recent projects",
@@ -134,6 +135,8 @@ export const en: Record<MessageKey, Message> = {
     `SINE DRONE ${params.frequency} HZ · ${params.devices} DEV`,
   "tracks.meta.silence": (params) => `NOTE TRACK · ${params.devices} DEV`,
   "tracks.meta.piano": (params) => `ADDITIVE PIANO · ${params.devices} DEV`,
+  "tracks.meta.sampler": (params) =>
+    `SAMPLER ${params.buffer} · ${params.devices} DEV`,
 
   "inspector.title": "INSPECTOR",
   "inspector.chain": "SIGNAL CHAIN",
@@ -310,6 +313,9 @@ export const en: Record<MessageKey, Message> = {
   "status.ready": "Session ready. Add a track, or press PLAY.",
   "status.initFailed": (params) => `Init failed: ${params.message}`,
   "status.trackCreated": (params) => `Created ${params.id}`,
+  "status.samplerImported": (params) => `Imported sample ${params.buffer}`,
+  "status.samplerImportFailed": (params) =>
+    `Sample import failed: ${params.message}`,
   "status.trackCreateFailed": (params) =>
     `Create track failed: ${params.message}`,
   "status.trackRemoved": (params) => `Removed ${params.id}`,

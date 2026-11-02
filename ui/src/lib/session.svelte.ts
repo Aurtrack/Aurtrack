@@ -5,6 +5,7 @@ import {
   errorMessage,
   onCloseRequested,
   openFile,
+  pickBufferPath,
   pickProjectPath,
   projectState,
   recoveryExists,
@@ -106,6 +107,7 @@ const MUTATING_COMMANDS = new Set([
   "redo",
   "project.open",
   "project.migrate",
+  "buffer.import",
 ]);
 
 const RECENT_KEY = "aurtrack.recent.v1";
@@ -721,6 +723,37 @@ export class SessionStore {
       this.setStatus("status.projectUpdated");
     } catch (error) {
       this.fail("status.projectUpdateFailed", error);
+    } finally {
+      this.busy = false;
+    }
+  }
+
+  async importSampler(): Promise<void> {
+    if (this.busy) return;
+    let path: string | null;
+    try {
+      path = await pickBufferPath();
+    } catch (error) {
+      this.fail("status.samplerImportFailed", error);
+      return;
+    }
+    if (!path) return;
+    this.busy = true;
+    try {
+      const buffer = await this.run<{ buffer_id: string }>("buffer.import", {
+        path,
+      });
+      const name = path.split(/[\\/]/).pop()?.replace(/\.wav$/i, "") || "Sampler";
+      await this.run("track.create", {
+        name,
+        source: "sampler",
+        buffer_id: buffer.buffer_id,
+      });
+      await this.refreshProject();
+      await this.reloadIfPlaying();
+      this.setStatus("status.samplerImported", { buffer: buffer.buffer_id });
+    } catch (error) {
+      this.fail("status.samplerImportFailed", error);
     } finally {
       this.busy = false;
     }

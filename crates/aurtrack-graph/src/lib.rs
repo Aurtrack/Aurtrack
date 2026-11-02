@@ -344,6 +344,15 @@ impl NodeGroup {
         }
     }
 
+    pub fn sampler_default(buffer_id: &str, looped: bool) -> Self {
+        Self {
+            id: format!("sampler.{buffer_id}"),
+            name: format!("Sampler {buffer_id}"),
+            interface: NodeGroupInterface::sine_voice(),
+            graph: VoiceGraph::sampler_default(buffer_id, looped),
+        }
+    }
+
     pub fn partial_default() -> Self {
         Self {
             id: "piano.partial".to_string(),
@@ -1024,6 +1033,31 @@ const SINE_INPUTS: [VoiceSocketSpec; 3] = [
         .with_default(0.0)
         .with_range(-1000.0, 1000.0),
 ];
+const BUFFER_SAMPLE_INPUTS: [VoiceSocketSpec; 3] = [
+    VoiceSocketSpec::new("time", "Time", SocketType::Float)
+        .with_default(0.0)
+        .with_range(0.0, 1000.0)
+        .with_step(0.001),
+    VoiceSocketSpec::new("frequency", "Frequency", SocketType::Float)
+        .with_default(261.63)
+        .with_range(20.0, 20_000.0)
+        .with_step(0.01),
+    VoiceSocketSpec::new("gate", "Gate", SocketType::Gate).with_default(0.0),
+];
+const BUFFER_SAMPLE_PARAMS: [ParamSpec; 2] = [
+    ParamSpec {
+        name: "root",
+        default: 261.63,
+        minimum: 20.0,
+        maximum: 20_000.0,
+    },
+    ParamSpec {
+        name: "loop",
+        default: 0.0,
+        minimum: 0.0,
+        maximum: 1.0,
+    },
+];
 const INT_IN: [VoiceSocketSpec; 1] =
     [VoiceSocketSpec::new("value", "Value", SocketType::Int).with_default(0.0)];
 const DELAY_INPUTS: [VoiceSocketSpec; 4] = [
@@ -1322,6 +1356,14 @@ pub const VOICE_NODE_TYPES: &[VoiceNodeType] = &[
         inputs: &SINE_INPUTS,
         outputs: &AUDIO_OUT,
         params: &[],
+    },
+    VoiceNodeType {
+        id: "buffer.sample",
+        name: "Buffer Sample",
+        category: "Sampler",
+        inputs: &BUFFER_SAMPLE_INPUTS,
+        outputs: &AUDIO_OUT,
+        params: &BUFFER_SAMPLE_PARAMS,
     },
     VoiceNodeType {
         id: "voice.noise",
@@ -2364,6 +2406,69 @@ impl VoiceGraph {
         graph
     }
 
+    /// 采样器 / 波表音色：Buffer Sample 加 ADSR 和 VCA。
+    pub fn sampler_default(buffer_id: &str, looped: bool) -> Self {
+        let interface = NodeGroupInterface::sine_voice();
+        let mut graph = Self::shell(&interface);
+        for (id, ty, position) in [
+            ("note-separate", "note.separate", [40.0, 220.0]),
+            ("time", "voice.time", [40.0, 340.0]),
+            ("sample", "buffer.sample", [320.0, 220.0]),
+            ("env", "env.adsr", [320.0, 360.0]),
+            ("vca", "voice.vca", [620.0, 220.0]),
+        ] {
+            let id = NodeId::fixed(id);
+            let mut node = VoiceNode::new(id.clone(), ty);
+            node.position = Some(position);
+            graph.nodes.insert(id, node);
+        }
+        if let Some(sample) = graph.nodes.get_mut(&NodeId::fixed("sample")) {
+            sample.buffer = Some(buffer_id.to_string());
+            sample
+                .params
+                .insert("loop".to_string(), f64::from(u8::from(looped)));
+        }
+        graph.connections = vec![
+            VoiceConnection::new(
+                PortRef::new(NodeId::fixed("voice-in"), "note"),
+                PortRef::new(NodeId::fixed("note-separate"), "note"),
+            ),
+            VoiceConnection::new(
+                PortRef::new(NodeId::fixed("note-separate"), "pitch"),
+                PortRef::new(NodeId::fixed("sample"), "frequency"),
+            ),
+            VoiceConnection::new(
+                PortRef::new(NodeId::fixed("note-separate"), "gate"),
+                PortRef::new(NodeId::fixed("sample"), "gate"),
+            ),
+            VoiceConnection::new(
+                PortRef::new(NodeId::fixed("time"), "out"),
+                PortRef::new(NodeId::fixed("sample"), "time"),
+            ),
+            VoiceConnection::new(
+                PortRef::new(NodeId::fixed("note-separate"), "gate"),
+                PortRef::new(NodeId::fixed("env"), "gate"),
+            ),
+            VoiceConnection::new(
+                PortRef::new(NodeId::fixed("time"), "out"),
+                PortRef::new(NodeId::fixed("env"), "time"),
+            ),
+            VoiceConnection::new(
+                PortRef::new(NodeId::fixed("sample"), "out"),
+                PortRef::new(NodeId::fixed("vca"), "in"),
+            ),
+            VoiceConnection::new(
+                PortRef::new(NodeId::fixed("env"), "out"),
+                PortRef::new(NodeId::fixed("vca"), "gain"),
+            ),
+            VoiceConnection::new(
+                PortRef::new(NodeId::fixed("vca"), "out"),
+                PortRef::new(NodeId::fixed("out"), "audio"),
+            ),
+        ];
+        graph
+    }
+
     /// 默认钢琴的开放版本：Partial 由可打开的 `piano.partial` 组实现。
     pub fn piano_open() -> Self {
         let mut graph = Self::piano_default();
@@ -2630,6 +2735,8 @@ pub struct VoiceNode {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub color: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub buffer: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub width: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub height: Option<f64>,
@@ -2668,6 +2775,7 @@ impl VoiceNode {
             collapsed: false,
             label: None,
             color: None,
+            buffer: None,
             width: None,
             height: None,
             zone_inputs: Vec::new(),
@@ -3789,6 +3897,8 @@ pub enum GraphError {
     VoiceTerminals,
     #[error("Voice 子图引用了不存在的节点")]
     VoiceUnknownNode,
+    #[error("采样 buffer 不存在：{0}")]
+    BufferMissing(String),
     #[error("Voice 子图端口不存在：{0}")]
     VoiceUnknownPort(String),
     #[error("未知的 Voice 节点类型：{0}")]

@@ -26,6 +26,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::path::Path;
+use std::sync::Arc;
 
 use aurtrack_command::{CommandError, CommandRequest, CommandResponse, registry};
 use aurtrack_engine::{
@@ -83,6 +84,18 @@ pub struct Project {
     pub audio_groups: BTreeMap<String, aurtrack_graph::AudioGroup>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub master_plugin: Option<MasterPlugin>,
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub buffers: BTreeMap<String, AudioBuffer>,
+}
+
+/// 工程内采样数据；导入时解码一次，播放计划只持有 `Arc`。
+#[non_exhaustive]
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AudioBuffer {
+    pub id: String,
+    pub name: String,
+    pub sample_rate: f64,
+    pub samples: Vec<f32>,
 }
 
 /// 工程里记录的实时主输出插件；state 是 base64 blob。
@@ -701,9 +714,14 @@ impl Track {
                 frequency: instrument.param("frequency").unwrap_or(440.0),
             },
             "audio.group" => {
-                if instrument.group.as_deref() == Some("sine.voice") {
+                let group = instrument.group.as_deref().unwrap_or_default();
+                if group == "sine.voice" {
                     Source::Sine {
                         frequency: instrument.param("frequency").unwrap_or(440.0),
+                    }
+                } else if let Some(buffer_id) = group.strip_prefix("sampler.") {
+                    Source::Sampler {
+                        buffer_id: buffer_id.to_string(),
                     }
                 } else {
                     Source::Piano
@@ -730,6 +748,15 @@ impl Track {
         &self,
         groups: &BTreeMap<String, NodeGroup>,
         audio_groups: &BTreeMap<String, AudioGroup>,
+    ) -> Result<(Option<f64>, Option<aurtrack_graph::AdsrSettings>, GraphPlan), GraphError> {
+        self.playback_graph_with_buffers(groups, audio_groups, &BTreeMap::new())
+    }
+
+    pub fn playback_graph_with_buffers(
+        &self,
+        groups: &BTreeMap<String, NodeGroup>,
+        audio_groups: &BTreeMap<String, AudioGroup>,
+        buffers: &BTreeMap<String, AudioBuffer>,
     ) -> Result<(Option<f64>, Option<aurtrack_graph::AdsrSettings>, GraphPlan), GraphError> {
         self.graph
             .validate_with_audio_groups(groups, audio_groups)?;
@@ -814,7 +841,12 @@ impl Track {
                 .ok_or_else(|| GraphError::GroupMissing(group_id.clone()))?;
             group.validate_with_groups(groups)?;
             let mut piano = aurtrack_engine::PianoPlan::new(10, 1.2, 0.5, 0.2);
-            piano.voice = Some(compile_voice(&group.graph, &group.interface, groups)?);
+            piano.voice = Some(compile_voice(
+                &group.graph,
+                &group.interface,
+                groups,
+                buffers,
+            )?);
             Some(piano)
         } else {
             None
@@ -839,14 +871,26 @@ fn compile_voice(
     voice: &VoiceGraph,
     interface: &NodeGroupInterface,
     groups: &BTreeMap<String, NodeGroup>,
+    buffers: &BTreeMap<String, AudioBuffer>,
 ) -> Result<VoicePlan, GraphError> {
-    compile_voice_inner(voice, interface, groups, &mut Vec::new(), None, None, &[])
+    compile_voice_inner(
+        voice,
+        interface,
+        groups,
+        buffers,
+        &mut Vec::new(),
+        None,
+        None,
+        &[],
+    )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn compile_voice_inner(
     voice: &VoiceGraph,
     interface: &NodeGroupInterface,
     groups: &BTreeMap<String, NodeGroup>,
+    buffers: &BTreeMap<String, AudioBuffer>,
     stack: &mut Vec<String>,
     input_bindings: Option<&BTreeMap<String, usize>>,
     external_inputs: Option<&BTreeMap<(NodeId, String), usize>>,
@@ -1092,6 +1136,7 @@ fn compile_voice_inner(
                 &body_graph,
                 &body_interface,
                 groups,
+                buffers,
                 stack,
                 Some(&bindings),
                 Some(&external_inputs),
@@ -1222,6 +1267,7 @@ fn compile_voice_inner(
                 &group.graph,
                 &group.interface,
                 groups,
+                buffers,
                 stack,
                 Some(&bindings),
                 None,
@@ -1290,6 +1336,7 @@ fn compile_voice_inner(
                     &group.graph,
                     &group.interface,
                     groups,
+                    buffers,
                     stack,
                     Some(&bindings),
                     None,
@@ -1324,6 +1371,7 @@ fn compile_voice_inner(
                 &group.graph,
                 &group.interface,
                 groups,
+                buffers,
                 stack,
                 Some(&bindings),
                 None,
@@ -1370,6 +1418,30 @@ fn compile_voice_inner(
             continue;
         }
         let param = |name: &str, default: f64| node.params.get(name).copied().unwrap_or(default);
+        if node.type_id == "buffer.sample" {
+            let buffer_id = node
+                .buffer
+                .as_deref()
+                .ok_or_else(|| GraphError::BufferMissing("<未指定>".to_string()))?;
+            let buffer = buffers
+                .get(buffer_id)
+                .ok_or_else(|| GraphError::BufferMissing(buffer_id.to_string()))?;
+            let samples: Arc<[f32]> = Arc::from(buffer.samples.as_slice());
+            let index = nodes.len();
+            nodes.push(VoiceNodePlan::new(
+                VoiceOp::BufferSample {
+                    samples,
+                    sample_rate: buffer.sample_rate,
+                    root: param("root", 261.63),
+                    looped: param("loop", 0.0) > 0.5,
+                },
+                inputs,
+            ));
+            for port in aurtrack_graph::node_outputs(node, interface, groups)? {
+                indices.insert((id.clone(), port.id), index);
+            }
+            continue;
+        }
         let op = match node.type_id.as_str() {
             "osc.sine" => VoiceOp::Sine,
             "voice.partial" => VoiceOp::Partial,
@@ -1472,6 +1544,7 @@ pub enum Source {
     Silence,
     Sine { frequency: f64 },
     Piano,
+    Sampler { buffer_id: String },
 }
 
 /// 轨道上的设备。
@@ -1712,6 +1785,7 @@ impl Session {
             "project.update" => self.cmd_project_update(&request.args),
             "project.state" => Ok(self.cmd_project_state()),
             "project.migrate" => self.cmd_project_migrate(),
+            "buffer.import" => self.cmd_buffer_import(&request.args),
             "project.save" => self.cmd_project_save(&request.args),
             "project.open" => self.cmd_project_open(&request.args),
             "project.master_plugin" => self.cmd_master_plugin(&request.args),
@@ -1822,6 +1896,7 @@ impl Session {
             ]),
             audio_groups: BTreeMap::new(),
             master_plugin: None,
+            buffers: BTreeMap::new(),
         };
         project.loop_end_tick = project.length_ticks();
         let token = self.snapshot("project.create");
@@ -1910,9 +1985,10 @@ impl Session {
             .as_ref()
             .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?
             .sample_rate;
+        let mut sampler: Option<(String, bool)> = None;
         let (instrument, frequency, group_id) = match args.source.as_deref().unwrap_or("silence") {
             "silence" => ("audio.instrument.silence", None, None),
-            "piano" => ("audio.group", None, Some("piano.voice")),
+            "piano" => ("audio.group", None, Some("piano.voice".to_string())),
             "sine" => {
                 let frequency = args.frequency.unwrap_or(440.0);
                 if !frequency.is_finite() || !(20.0..=20_000.0).contains(&frequency) {
@@ -1923,7 +1999,31 @@ impl Session {
                 if frequency >= f64::from(sample_rate) / 2.0 {
                     return Err(CommandError::invalid_args("frequency 必须小于采样率的一半"));
                 }
-                ("audio.group", Some(frequency), Some("sine.voice"))
+                (
+                    "audio.group",
+                    Some(frequency),
+                    Some("sine.voice".to_string()),
+                )
+            },
+            "sampler" | "wavetable" => {
+                let buffer_id = args.buffer_id.clone().ok_or_else(|| {
+                    CommandError::invalid_args("sampler/wavetable 需要 buffer_id")
+                })?;
+                if !self
+                    .project
+                    .as_ref()
+                    .is_some_and(|project| project.buffers.contains_key(&buffer_id))
+                {
+                    return Err(CommandError::not_found(format!(
+                        "找不到采样 buffer：{buffer_id}"
+                    )));
+                }
+                let looped = args
+                    .looped
+                    .unwrap_or(args.source.as_deref() == Some("wavetable"));
+                let group_id = format!("sampler.{buffer_id}");
+                sampler = Some((buffer_id, looped));
+                ("audio.group", None, Some(group_id))
             },
             other => {
                 return Err(CommandError::invalid_args(format!(
@@ -1931,7 +2031,7 @@ impl Session {
                 )));
             },
         };
-        let mut graph = if let Some(group_id) = group_id {
+        let mut graph = if let Some(group_id) = &group_id {
             aurtrack_graph::AudioGraph::empty_track(group_id)
         } else {
             aurtrack_graph::AudioGraph::track(instrument)
@@ -1953,11 +2053,18 @@ impl Session {
             .project
             .as_mut()
             .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
-        if group_id == Some("sine.voice") {
+        if group_id.as_deref() == Some("sine.voice") {
             project
                 .node_groups
                 .entry("sine.voice".to_string())
                 .or_insert_with(NodeGroup::sine_default);
+        }
+        if let Some((buffer_id, looped)) = sampler {
+            let group_id = format!("sampler.{buffer_id}");
+            project
+                .node_groups
+                .entry(group_id)
+                .or_insert_with(|| NodeGroup::sampler_default(&buffer_id, looped));
         }
         project.tracks.push(Track {
             id: track_id.clone(),
@@ -2285,6 +2392,50 @@ impl Session {
     fn cmd_project_state(&self) -> CommandResponse {
         let project = self.project.as_ref().map(project_view);
         CommandResponse::ok(json!({ "project": project }))
+    }
+
+    fn cmd_buffer_import(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        #[derive(Deserialize)]
+        #[serde(deny_unknown_fields)]
+        struct ImportArgs {
+            path: String,
+            #[serde(default)]
+            id: Option<String>,
+            #[serde(default)]
+            name: Option<String>,
+        }
+        let args: ImportArgs = parse_args(args)?;
+        if args.path.trim().is_empty() {
+            return Err(CommandError::invalid_args("path 不能为空"));
+        }
+        let (sample_rate, samples) = read_wav(Path::new(args.path.trim()))?;
+        let token = self.snapshot("buffer.import");
+        let project = self
+            .project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let id = args
+            .id
+            .unwrap_or_else(|| format!("buffer-{}", project.buffers.len() + 1));
+        NodeId::new(id.clone()).map_err(graph_error)?;
+        let name = args.name.unwrap_or_else(|| id.clone());
+        project.buffers.insert(
+            id.clone(),
+            AudioBuffer {
+                id: id.clone(),
+                name: name.clone(),
+                sample_rate,
+                samples,
+            },
+        );
+        let frames = project.buffers[&id].samples.len();
+        Ok(CommandResponse::ok(json!({
+            "buffer_id": id,
+            "name": name,
+            "sample_rate": sample_rate,
+            "frames": frames,
+        }))
+        .with_undo(token))
     }
 
     fn cmd_project_migrate(&mut self) -> Result<CommandResponse, CommandError> {
@@ -2654,8 +2805,13 @@ impl Session {
             .node_groups
             .get(&args.group_id)
             .ok_or_else(|| CommandError::not_found(format!("找不到节点组：{}", args.group_id)))?;
-        let plan = compile_voice(&group.graph, &group.interface, &project.node_groups)
-            .map_err(graph_error)?;
+        let plan = compile_voice(
+            &group.graph,
+            &group.interface,
+            &project.node_groups,
+            &project.buffers,
+        )
+        .map_err(graph_error)?;
         let points = args.points.unwrap_or(32).clamp(2, 256) as usize;
         let pitch = args.pitch.unwrap_or(261.63);
         let velocity = args.velocity.unwrap_or(0.8);
@@ -6022,7 +6178,11 @@ fn render_project(
     let mut mix = vec![0.0_f32; frames];
     for track in &project.tracks {
         let (source_frequency, adsr_settings, graph) = track
-            .playback_graph(&project.node_groups, &project.audio_groups)
+            .playback_graph_with_buffers(
+                &project.node_groups,
+                &project.audio_groups,
+                &project.buffers,
+            )
             .map_err(graph_error)?;
         let adsr = adsr_settings.map(|settings| AdsrPlan {
             attack: settings.attack,
@@ -6134,6 +6294,104 @@ fn render_project(
     }))
 }
 
+fn read_wav(path: &Path) -> Result<(f64, Vec<f32>), CommandError> {
+    let bytes = std::fs::read(path)
+        .map_err(|error| CommandError::new("io_error", format!("读采样文件失败：{error}")))?;
+    if bytes.len() < 12 || &bytes[..4] != b"RIFF" || &bytes[8..12] != b"WAVE" {
+        return Err(CommandError::invalid_args("不是合法的 WAV 文件"));
+    }
+    let mut position = 12;
+    let mut format = 1_u16;
+    let mut channels = 1_usize;
+    let mut sample_rate = 48_000_u32;
+    let mut bits = 16_u16;
+    while position + 8 <= bytes.len() {
+        let id = &bytes[position..position + 4];
+        let size = u32::from_le_bytes([
+            bytes[position + 4],
+            bytes[position + 5],
+            bytes[position + 6],
+            bytes[position + 7],
+        ]) as usize;
+        position += 8;
+        if position + size > bytes.len() {
+            break;
+        }
+        if id == b"fmt " && size >= 16 {
+            format = u16::from_le_bytes([bytes[position], bytes[position + 1]]);
+            channels = usize::from(u16::from_le_bytes([
+                bytes[position + 2],
+                bytes[position + 3],
+            ]))
+            .max(1);
+            sample_rate = u32::from_le_bytes([
+                bytes[position + 4],
+                bytes[position + 5],
+                bytes[position + 6],
+                bytes[position + 7],
+            ]);
+            bits = u16::from_le_bytes([bytes[position + 14], bytes[position + 15]]);
+        } else if id == b"data" {
+            if channels == 0 || !matches!(bits, 16 | 24 | 32) {
+                return Err(CommandError::invalid_args("只支持 16/24/32 位 PCM WAV"));
+            }
+            let bytes_per_sample = usize::from(bits / 8);
+            let frame_bytes = bytes_per_sample * channels;
+            if frame_bytes == 0 {
+                return Err(CommandError::invalid_args("WAV 帧大小非法"));
+            }
+            let frames = size / frame_bytes;
+            let mut samples = Vec::with_capacity(frames);
+            for frame in 0..frames {
+                let mut sum = 0.0_f32;
+                for channel in 0..channels {
+                    let start = position + frame * frame_bytes + channel * bytes_per_sample;
+                    let value = match (format, bits) {
+                        (3, 32) => f32::from_le_bytes([
+                            bytes[start],
+                            bytes[start + 1],
+                            bytes[start + 2],
+                            bytes[start + 3],
+                        ]),
+                        (_, 16) => {
+                            let value = i16::from_le_bytes([bytes[start], bytes[start + 1]]);
+                            f32::from(value) / 32_768.0
+                        },
+                        (_, 24) => {
+                            let value = i32::from_le_bytes([
+                                bytes[start],
+                                bytes[start + 1],
+                                bytes[start + 2],
+                                if bytes[start + 2] & 0x80 == 0 {
+                                    0
+                                } else {
+                                    0xff
+                                },
+                            ]);
+                            value as f32 / 8_388_608.0
+                        },
+                        (_, 32) => {
+                            let value = i32::from_le_bytes([
+                                bytes[start],
+                                bytes[start + 1],
+                                bytes[start + 2],
+                                bytes[start + 3],
+                            ]);
+                            value as f32 / 2_147_483_648.0
+                        },
+                        _ => 0.0,
+                    };
+                    sum += value;
+                }
+                samples.push(sum / channels as f32);
+            }
+            return Ok((f64::from(sample_rate), samples));
+        }
+        position += size + (size & 1);
+    }
+    Err(CommandError::invalid_args("WAV 缺少 data 块"))
+}
+
 fn write_wav(path: &Path, sample_rate: u32, samples: &[i16]) -> io::Result<()> {
     let data_len = samples.len() * 2;
     let data_len_u32 = u32::try_from(data_len).map_err(|_| io::Error::other("WAV 数据过大"))?;
@@ -6197,6 +6455,10 @@ struct TrackCreateArgs {
     source: Option<String>,
     #[serde(default)]
     frequency: Option<f64>,
+    #[serde(default)]
+    buffer_id: Option<String>,
+    #[serde(default)]
+    looped: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -6439,7 +6701,13 @@ mod repeat_zone_tests {
     #[test]
     fn sine_group_renders_a_note() {
         let group = NodeGroup::sine_default();
-        let plan = compile_voice(&group.graph, &group.interface, &BTreeMap::new()).unwrap();
+        let plan = compile_voice(
+            &group.graph,
+            &group.interface,
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
         let context = aurtrack_engine::VoiceContext {
             pitch: 440.0,
             velocity: 0.8,
@@ -6514,7 +6782,7 @@ mod repeat_zone_tests {
                 PortRef::new(NodeId::fixed("out"), "audio"),
             ),
         ];
-        let plan = compile_voice(&parent, &parent_interface, &groups).unwrap();
+        let plan = compile_voice(&parent, &parent_interface, &groups, &BTreeMap::new()).unwrap();
         let context = aurtrack_engine::VoiceContext {
             pitch: 261.63,
             velocity: 0.8,
@@ -6541,7 +6809,13 @@ mod repeat_zone_tests {
                 node.zone_outputs.push(note.clone());
             }
         }
-        let plan = compile_voice(&graph, &NodeGroupInterface::piano(), &BTreeMap::new()).unwrap();
+        let plan = compile_voice(
+            &graph,
+            &NodeGroupInterface::piano(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
         assert!(
             plan.nodes
                 .iter()
@@ -6576,7 +6850,13 @@ mod repeat_zone_tests {
             PortRef::new(NodeId::new("p-out").unwrap(), "aux"),
         ));
 
-        let plan = compile_voice(&graph, &NodeGroupInterface::piano(), &BTreeMap::new()).unwrap();
+        let plan = compile_voice(
+            &graph,
+            &NodeGroupInterface::piano(),
+            &BTreeMap::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
         assert!(
             plan.nodes
                 .iter()
@@ -6587,6 +6867,79 @@ mod repeat_zone_tests {
                 .iter()
                 .any(|node| matches!(node.op, aurtrack_engine::VoiceOp::RepeatResult { .. }))
         );
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod buffer_tests {
+    use super::*;
+
+    #[test]
+    fn imports_wav_and_renders_sampler_track() {
+        let wav = std::env::temp_dir()
+            .join(format!("aurtrack-buffer-{}.wav", std::process::id()))
+            .to_string_lossy()
+            .into_owned();
+        let samples: Vec<i16> = (0..24_000)
+            .map(|index| {
+                let phase = std::f64::consts::TAU * 220.0 * index as f64 / 48_000.0;
+                (phase.sin() * 16_000.0) as i16
+            })
+            .collect();
+        write_wav(Path::new(&wav), 48_000, &samples).unwrap();
+        let mut session = Session::default();
+        session
+            .execute(&CommandRequest {
+                cmd: "project.create".to_string(),
+                args: json!({ "name": "sampler" }),
+            })
+            .unwrap();
+        let imported = session
+            .execute(&CommandRequest {
+                cmd: "buffer.import".to_string(),
+                args: json!({ "path": wav }),
+            })
+            .unwrap();
+        let buffer_id = imported.data["buffer_id"].as_str().unwrap().to_string();
+        session
+            .execute(&CommandRequest {
+                cmd: "track.create".to_string(),
+                args: json!({
+                    "name": "sampler",
+                    "source": "sampler",
+                    "buffer_id": buffer_id
+                }),
+            })
+            .unwrap();
+        session
+            .execute(&CommandRequest {
+                cmd: "clip.create".to_string(),
+                args: json!({ "track_id": "track-1", "start": 0.0, "duration": 1.0 }),
+            })
+            .unwrap();
+        session
+            .execute(&CommandRequest {
+                cmd: "note.add".to_string(),
+                args: json!({
+                    "path": "/tracks/track-1/clips/clip-1",
+                    "pitch": 69,
+                    "start": 0.0,
+                    "duration": 0.5,
+                    "velocity": 0.8
+                }),
+            })
+            .unwrap();
+        let rendered = session
+            .execute(&CommandRequest {
+                cmd: "render.segment".to_string(),
+                args: json!({ "duration_seconds": 0.5, "path": format!("{wav}.out.wav") }),
+            })
+            .unwrap();
+        assert!(rendered.data["peak"].as_f64().unwrap() > 0.0);
+        let output = format!("{wav}.out.wav");
+        let _ = std::fs::remove_file(&wav);
+        let _ = std::fs::remove_file(output);
     }
 }
 

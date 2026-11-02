@@ -99,12 +99,15 @@ Aurtrack 的节点系统里有一批“看起来是节点、实际是复合算�
 - 默认钢琴不再用 `voice.pitch` / `voice.velocity` 读取隐式上下文；`note.separate` 的 pitch/velocity 作为外部自由变量直接进入 `piano.partial`，不占 Repeat 携带端口。
 - Repeat Input 现在提供 `iteration` 输出；旧的独立 `p-index` 已从默认图移除。
 - Repeat 支持数值多输出、任意嵌套、自由变量和 Note 上下文端口；旧 `piano.voice` 图在打开时自动迁移。
-- 当前节点目录有 54 个 Voice 节点、22 个 Audio 节点；具体清单以 `node.types` 为准。
+- 当前节点目录有 55 个 Voice 节点、22 个 Audio 节点；具体清单以 `node.types` 为准。
+- 新增 `buffer.import`：导入 16/24/32 位 PCM 或 32 位浮点 WAV，多声道下混为单声道。
+- 新增 `buffer.sample` 节点和 `sampler.voice` 组；`track.create` 支持 `source: "sampler" | "wavetable"`，文件菜单“导入采样…”会创建采样轨。
+- `buffer.sample` 的 `loop` 参数为 1 时按单周期循环，可作为波表使用。
 - 多输出数值组改为 `GroupCall` 子计划加每输出 `GroupResult` 读取缓存，不再把所有输出映射到同一个槽。
 
 ## 剩余缺口
 
-- `buffer.sample` 需要 Buffer 端口/资产和采样插值，尚未实现。
+- `buffer.sample` 已支持工程 buffer、线性插值和循环；图形化 buffer 选择器尚未加入。
 - `sine.voice` 已组化，但波表和采样尚未暴露。
 - 节点计划仍是固定 256 上限，状态是固定 128 槽；动态 scratch 未实现。
 - 带 Note 输入的组仍回退到内联展开。

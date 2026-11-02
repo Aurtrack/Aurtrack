@@ -206,8 +206,14 @@ fn track_create_schema() -> Value {
     object_schema(
         json!({
             "name": { "type": "string", "description": "轨道名，不能为空" },
-            "source": { "type": "string", "enum": ["silence", "sine", "piano"], "default": "silence" },
-            "frequency": { "type": "number", "minimum": 20, "maximum": 20000, "default": 440 }
+            "source": {
+                "type": "string",
+                "enum": ["silence", "sine", "piano", "sampler", "wavetable"],
+                "default": "silence"
+            },
+            "frequency": { "type": "number", "minimum": 20, "maximum": 20000, "default": 440 },
+            "buffer_id": { "type": "string", "description": "sampler/wavetable 使用的 buffer" },
+            "looped": { "type": "boolean", "description": "采样是否循环" }
         }),
         &["name"],
     )
@@ -516,6 +522,17 @@ fn project_state_schema() -> Value {
 
 fn project_migrate_schema() -> Value {
     object_schema(json!({}), &[])
+}
+
+fn buffer_import_schema() -> Value {
+    object_schema(
+        json!({
+            "path": { "type": "string", "description": "WAV 文件路径" },
+            "id": { "type": "string", "description": "可选 buffer ID" },
+            "name": { "type": "string", "description": "可选显示名" }
+        }),
+        &["path"],
+    )
 }
 
 fn project_path_schema() -> Value {
@@ -988,7 +1005,7 @@ fn transport_metronome_schema() -> Value {
     )
 }
 
-static COMMANDS: [CommandSpec; 76] = [
+static COMMANDS: [CommandSpec; 77] = [
     CommandSpec {
         id: "project.create",
         summary: "创建或替换当前工程",
@@ -1012,6 +1029,12 @@ static COMMANDS: [CommandSpec; 76] = [
         summary: "迁移旧版 Repeat Zone 图",
         undo: UndoKind::Snapshot,
         input_schema: project_migrate_schema,
+    },
+    CommandSpec {
+        id: "buffer.import",
+        summary: "导入 WAV 为采样 buffer",
+        undo: UndoKind::Snapshot,
+        input_schema: buffer_import_schema,
     },
     CommandSpec {
         id: "project.save",

@@ -523,7 +523,11 @@ fn build_plan(
         .iter()
         .map(|track| {
             let (frequency, adsr_settings, graph) = track
-                .playback_graph(&project.node_groups, &project.audio_groups)
+                .playback_graph_with_buffers(
+                    &project.node_groups,
+                    &project.audio_groups,
+                    &project.buffers,
+                )
                 .map_err(|error| CommandError::invalid_args(format!("节点图错误：{error}")))?;
             let adsr = adsr_settings.map(|settings| AdsrPlan {
                 attack: settings.attack,
@@ -664,6 +668,7 @@ struct MetronomeArgs {
 mod tests {
     use super::*;
     use aurtrack_session::{Clip, Note, TICKS_PER_QUARTER, TimeSignature, Track};
+    use std::collections::BTreeMap;
 
     fn run(runtime: &mut Runtime, cmd: &str, args: Value) -> Result<CommandResponse, CommandError> {
         runtime.execute(&CommandRequest {
@@ -744,6 +749,7 @@ mod tests {
                 }],
             }],
             master_plugin: None,
+            buffers: BTreeMap::new(),
         };
 
         let plan = build_plan(&project, 48_000, false).unwrap();
@@ -797,6 +803,7 @@ mod tests {
                 }],
             }],
             master_plugin: None,
+            buffers: BTreeMap::new(),
         };
 
         let plan = build_plan(&project, 48_000, false).unwrap();
