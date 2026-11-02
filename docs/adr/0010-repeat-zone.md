@@ -71,6 +71,26 @@ Repeat Input 额外提供 `iteration` 输出，类型 `Int`，从 0 开始；循
 - 组节点的未连接数值端口在节点内显示参数输入框。
 - Repeat Input 底部显示 `Iteration` 输出端口。
 
+### 旧工程迁移
+
+旧工程的 `piano.voice` 可能包含：
+
+```text
+pitch/velocity 作为 Zone 携带对
+p-pitch / p-velocity 上下文节点
+p-index 独立迭代节点
+p-open-* 常量节点
+```
+
+`project.open` 会调用幂等迁移：
+
+- 把携带对改回外部自由变量，并补 `note-separate → p-partial` 直连
+- 删除 `p-pitch` / `p-velocity`
+- 删除 `p-open-*`，值写入 `p-partial.params`
+- 删除 `p-index`，改接 `p-in.iteration → p-partial.index`
+
+也可以显式执行 `project.migrate`。迁移不改 `format_version`，重复执行无副作用。
+
 ## 非目标
 
 - 不做 Geometry/Collection 端口；Aurtrack 目前是 Voice/Audio 域。
