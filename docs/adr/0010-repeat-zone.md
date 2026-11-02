@@ -55,6 +55,10 @@ iteration 从 0 开始
 自由变量每轮保持父图当前值
 ```
 
+Repeat Input 额外提供 `iteration` 输出，类型 `Int`，从 0 开始；循环体里的
+`voice.zone.input` 会把它绑定到 `VoiceOp::Iteration`。默认钢琴不再使用独立的
+`p-index` 节点。
+
 音频线程只使用栈数组和固定缓存，不分配、不加锁。
 
 ### UI
@@ -65,6 +69,7 @@ iteration 从 0 开始
 - 上下边界节点自动同步端口。
 - 外部值可以直接连进 Zone 内部；音高/力度等不参与迭代的值不再占用携带端口。
 - 组节点的未连接数值端口在节点内显示参数输入框。
+- Repeat Input 底部显示 `Iteration` 输出端口。
 
 ## 非目标
 
