@@ -532,6 +532,7 @@ export const zhCN = {
   "param.max": "最大",
   "socket.audio": "音频",
   "socket.count": "迭代",
+  "socket.iteration": "迭代序号",
   "socket.note": "音符",
   "socket.value": "值",
   "socket.gate": "门",

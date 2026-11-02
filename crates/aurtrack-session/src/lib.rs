@@ -1053,6 +1053,8 @@ fn compile_voice_inner(
                 body_inputs.push(VoiceNodePlan::new(VoiceOp::Input(slot), Vec::new()));
                 free_values.push(source);
             }
+            bindings.insert("iteration".to_string(), body_inputs.len());
+            body_inputs.push(VoiceNodePlan::new(VoiceOp::Iteration, Vec::new()));
             let body = compile_voice_inner(
                 &body_graph,
                 &body_interface,

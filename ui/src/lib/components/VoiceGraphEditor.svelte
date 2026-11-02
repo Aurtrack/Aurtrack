@@ -668,7 +668,10 @@
   function allOutputList(node: VoiceNode): PortInfo[] {
     if (node.type_id === "voice.zone.repeat") return [];
     if (node.type_id === "voice.zone.input") {
-      return zoneSocketPorts(node.zone_inputs, { id: "out", name: "Audio" });
+      return [
+        ...zoneSocketPorts(node.zone_inputs, { id: "out", name: "Audio" }),
+        { id: "iteration", name: "Iteration", ty: "int" },
+      ];
     }
     if (node.type_id === "voice.zone.output") {
       return zoneSocketPorts(node.zone_outputs, { id: "in", name: "Audio" });
@@ -982,7 +985,7 @@
       const count = header
         ? zoneSocketPorts(header.zone_inputs, { id: "out", name: "Audio" }).length
         : 0;
-      return expandedNodeHeight(count + 1, 0);
+      return expandedNodeHeight(count + 2, 0);
     }
     if (node.type_id === "voice.zone.output") {
       const header = node.zone ? voice.nodes[node.zone] : undefined;
@@ -3647,6 +3650,29 @@
                 ></button>
               </div>
             {/each}
+            <div
+              class="voice-socket-row out"
+              style:top={`${NODE_HEADER + NODE_BODY_TOP + (sockets.length + 1) * NODE_ROW}px`}
+            >
+              <span class="voice-socket-name out">{socketLabel("iteration")}</span>
+              <button
+                class="voice-port out port-int"
+                style:top={`${NODE_ROW / 2 - 4}px`}
+                title="iteration (int)"
+                aria-label="iteration"
+                data-port-node={node.id}
+                data-port-id="iteration"
+                data-port-side="out"
+                data-port-type="int"
+                onmousedown={(event) =>
+                  startWire(
+                    event,
+                    node,
+                    { id: "iteration", name: "Iteration", ty: "int" },
+                    "out",
+                  )}
+              ></button>
+            </div>
           {:else if node.type_id === "voice.zone.output"}
             {@const header = node.zone ? voice.nodes[node.zone] : undefined}
             {@const sockets = header

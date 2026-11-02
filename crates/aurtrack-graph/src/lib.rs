@@ -468,6 +468,14 @@ pub fn zone_input_sockets(node: &VoiceNode) -> Vec<NodeGroupSocket> {
     )]
 }
 
+/// Repeat Input 的当前迭代序号输出，不参与携带配对。
+pub fn zone_iteration_socket() -> NodeGroupSocket {
+    NodeGroupSocket::new("iteration", "Iteration", NodeGroupSocketType::Int)
+        .with_default(0.0)
+        .with_range(0.0, 63.0)
+        .with_step(1.0)
+}
+
 pub fn zone_output_sockets(node: &VoiceNode) -> Vec<NodeGroupSocket> {
     if !node.zone_outputs.is_empty() {
         return node.zone_outputs.clone();
@@ -515,7 +523,11 @@ pub fn node_outputs(
 ) -> Result<Vec<VoicePort>, GraphError> {
     match node.type_id.as_str() {
         "voice.zone.repeat" | "group.output" => Ok(Vec::new()),
-        "voice.zone.input" => Ok(interface_ports(&zone_input_sockets(node))),
+        "voice.zone.input" => {
+            let mut ports = interface_ports(&zone_input_sockets(node));
+            ports.extend(interface_ports(&[zone_iteration_socket()]));
+            Ok(ports)
+        },
         "voice.zone.output" => Ok(interface_ports(&zone_output_sockets(node))),
         "group.input" => Ok(interface_ports(&interface.inputs)),
         "voice.group" => {
@@ -2023,14 +2035,12 @@ impl VoiceGraph {
         let mut partial = VoiceNode::new(NodeId::fixed("p-partial"), "voice.partial");
         let mut partial_add = VoiceNode::new(NodeId::fixed("p-add"), "voice.add");
         let mut partial_time = VoiceNode::new(NodeId::fixed("p-time"), "voice.time");
-        let mut partial_index = VoiceNode::new(NodeId::fixed("p-index"), "voice.iteration");
         for node in [
             &mut zone_in,
             &mut zone_out,
             &mut partial,
             &mut partial_add,
             &mut partial_time,
-            &mut partial_index,
         ] {
             node.zone = Some("partials".to_string());
         }
@@ -2082,7 +2092,6 @@ impl VoiceGraph {
             partial,
             partial_add,
             partial_time,
-            partial_index,
         ] {
             nodes.insert(node.id.clone(), node);
         }
@@ -2113,7 +2122,6 @@ impl VoiceGraph {
             ("p-add", [940.0, 820.0]),
             ("p-out", [1200.0, 820.0]),
             ("p-time", [500.0, 1100.0]),
-            ("p-index", [500.0, 1180.0]),
         ];
         for (id, position) in positions {
             if let Some(node) = nodes.get_mut(&NodeId::fixed(id)) {
@@ -2252,7 +2260,7 @@ impl VoiceGraph {
                     PortRef::fixed(NodeId::fixed("p-partial"), "time"),
                 ),
                 VoiceConnection::new(
-                    PortRef::fixed(NodeId::fixed("p-index"), "out"),
+                    PortRef::fixed(NodeId::fixed("p-in"), "iteration"),
                     PortRef::fixed(NodeId::fixed("p-partial"), "index"),
                 ),
                 VoiceConnection::new(
@@ -2393,7 +2401,12 @@ impl VoiceGraph {
                 });
             }
         }
-        let interface = NodeGroupInterface { inputs, outputs };
+        let mut body_inputs = inputs;
+        body_inputs.push(zone_iteration_socket());
+        let interface = NodeGroupInterface {
+            inputs: body_inputs,
+            outputs,
+        };
         Ok((
             VoiceGraph {
                 nodes,
@@ -3883,8 +3896,14 @@ mod tests {
         let (_, interface) = graph
             .zone_body(&graph.nodes[&NodeId::fixed("partials")])
             .unwrap();
-        assert_eq!(interface.inputs.len(), 2);
+        assert_eq!(interface.inputs.len(), 3);
         assert_eq!(interface.outputs.len(), 2);
+        assert!(
+            interface
+                .inputs
+                .iter()
+                .any(|socket| socket.id == "iteration")
+        );
     }
 
     #[test]
@@ -3964,6 +3983,23 @@ mod tests {
                     && connection.to.port() == port
             }));
         }
+        assert!(
+            node_outputs(
+                &graph.nodes[&NodeId::fixed("p-in")],
+                &NodeGroupInterface::piano(),
+                &BTreeMap::new()
+            )
+            .unwrap()
+            .iter()
+            .any(|port| port.id == "iteration")
+        );
+        assert!(graph.connections.iter().any(|connection| {
+            connection.from.node == NodeId::fixed("p-in")
+                && connection.from.port() == "iteration"
+                && connection.to.node == NodeId::fixed("p-partial")
+                && connection.to.port() == "index"
+        }));
+        assert!(!graph.nodes.contains_key(&NodeId::fixed("p-index")));
     }
 
     #[test]
@@ -3975,7 +4011,7 @@ mod tests {
         let group = NodeGroup::piano_default();
         assert_eq!(group.interface.inputs.len(), 1);
         assert_eq!(group.interface.inputs[0].ty, NodeGroupSocketType::Note);
-        assert_eq!(group.graph.nodes.len(), 26);
+        assert_eq!(group.graph.nodes.len(), 25);
     }
 
     #[test]
