@@ -811,6 +811,11 @@ impl Track {
             }
         }
         let output_path = output_path_nodes(&self.graph);
+        if let Some(source) = &self.source
+            && !output_path.contains(source)
+        {
+            return Err(GraphError::SourceDisconnected(source.clone()));
+        }
         for node in self.graph.nodes() {
             if !output_path.contains(node.id()) {
                 continue;

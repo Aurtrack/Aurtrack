@@ -4090,6 +4090,8 @@ pub enum GraphError {
     EmptyGraph,
     #[error("轨道音源节点缺失或不是乐器：{0}")]
     SourceMissing(NodeId),
+    #[error("轨道音源没有连接到输出：{0}")]
+    SourceDisconnected(NodeId),
     #[error("图必须恰好有一个乐器节点，当前 {0} 个")]
     InstrumentCount(usize),
     #[error("图必须恰好有一个输出节点，当前 {0} 个")]

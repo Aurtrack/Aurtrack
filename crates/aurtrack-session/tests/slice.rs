@@ -2150,9 +2150,13 @@ fn connecting_to_occupied_input_replaces_previous_link() {
         .unwrap();
     assert_eq!(output_source.from.node().as_str(), node_id);
     assert_eq!(connections.len(), 2);
-    project.tracks[0]
+    let error = project.tracks[0]
         .playback_graph(&project.node_groups, &project.audio_groups)
-        .unwrap();
+        .unwrap_err();
+    assert!(matches!(
+        error,
+        aurtrack_graph::GraphError::SourceDisconnected(_)
+    ));
 }
 
 #[test]
