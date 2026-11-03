@@ -1977,20 +1977,35 @@ impl VoiceGraph {
         let pitch_n = push(&mut graph, "pitch-n", "math.multiply", [660.0, 260.0]);
         let frequency = push(&mut graph, "frequency", "math.multiply", [1200.0, 100.0]);
         let sine = push(&mut graph, "sine", "osc.sine", [1380.0, 100.0]);
-        let detune_ratio = value(&mut graph, "detune-ratio", 1.00025, [80.0, 1960.0]);
+        let detune_high = value(&mut graph, "detune-high", 1.00025, [80.0, 1960.0]);
+        let detune_low = value(&mut graph, "detune-low", 0.99975, [80.0, 2040.0]);
+        let third = value(&mut graph, "third", 1.0 / 3.0, [80.0, 2120.0]);
         let detuned_pitch = push(
             &mut graph,
             "detuned-pitch",
             "math.multiply",
             [1200.0, 240.0],
         );
+        let pitch_low = push(&mut graph, "pitch-low", "math.multiply", [1200.0, 320.0]);
         let sine_detuned = push(&mut graph, "sine-detuned", "osc.sine", [1380.0, 240.0]);
+        let sine_low = push(&mut graph, "sine-low", "osc.sine", [1380.0, 320.0]);
         let string_add = push(&mut graph, "string-add", "voice.add", [1560.0, 240.0]);
+        let string_add_low = push(&mut graph, "string-add-low", "voice.add", [1640.0, 300.0]);
         let string_level = push(&mut graph, "string-level", "voice.vca", [1740.0, 240.0]);
         let decay_k = push(&mut graph, "decay-k", "math.multiply", [480.0, 360.0]);
         let decay_bias = push(&mut graph, "decay-bias", "math.add", [660.0, 360.0]);
         let decay_arg = push(&mut graph, "decay-arg", "math.multiply", [840.0, 360.0]);
         let decay_clamp = push(&mut graph, "decay-clamp", "math.clamp", [840.0, 520.0]);
+        let pitch_ref = value(&mut graph, "pitch-ref", 261.63, [80.0, 2280.0]);
+        let pitch_tilt = push(&mut graph, "pitch-tilt", "math.divide", [300.0, 2280.0]);
+        let pitch_tilt_power = push(
+            &mut graph,
+            "pitch-tilt-power",
+            "math.power",
+            [480.0, 2280.0],
+        );
+        let decay_scaled = push(&mut graph, "decay-scaled", "math.multiply", [660.0, 2280.0]);
+        let quarter = value(&mut graph, "quarter", 0.25, [300.0, 2360.0]);
         let decay_div = push(&mut graph, "decay-div", "math.divide", [1020.0, 360.0]);
         let decay_neg = push(&mut graph, "decay-neg", "math.multiply", [1200.0, 360.0]);
         let envelope = push(&mut graph, "envelope", "math.exp", [1380.0, 360.0]);
@@ -2143,7 +2158,31 @@ impl VoiceGraph {
                 PortRef::fixed(decay_arg.clone(), "b"),
             ),
             VoiceConnection::new(
+                PortRef::fixed(pitch_ref.clone(), "out"),
+                PortRef::fixed(pitch_tilt.clone(), "a"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(NodeId::fixed("voice-in"), "pitch"),
+                PortRef::fixed(pitch_tilt.clone(), "b"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(pitch_tilt.clone(), "out"),
+                PortRef::fixed(pitch_tilt_power.clone(), "a"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(quarter.clone(), "out"),
+                PortRef::fixed(pitch_tilt_power.clone(), "b"),
+            ),
+            VoiceConnection::new(
                 PortRef::fixed(NodeId::fixed("voice-in"), "decay"),
+                PortRef::fixed(decay_scaled.clone(), "a"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(pitch_tilt_power.clone(), "out"),
+                PortRef::fixed(decay_scaled.clone(), "b"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(decay_scaled.clone(), "out"),
                 PortRef::fixed(decay_clamp.clone(), "value"),
             ),
             VoiceConnection::new(
@@ -2239,12 +2278,32 @@ impl VoiceGraph {
                 PortRef::fixed(detuned_pitch.clone(), "a"),
             ),
             VoiceConnection::new(
-                PortRef::fixed(detune_ratio.clone(), "out"),
+                PortRef::fixed(detune_high.clone(), "out"),
                 PortRef::fixed(detuned_pitch.clone(), "b"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(pitch_n.clone(), "out"),
+                PortRef::fixed(pitch_low.clone(), "a"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(detune_low.clone(), "out"),
+                PortRef::fixed(pitch_low.clone(), "b"),
             ),
             VoiceConnection::new(
                 PortRef::fixed(detuned_pitch.clone(), "out"),
                 PortRef::fixed(sine_detuned.clone(), "freq"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(pitch_low.clone(), "out"),
+                PortRef::fixed(sine_low.clone(), "freq"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(zero.clone(), "out"),
+                PortRef::fixed(sine_low.clone(), "phase"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(NodeId::fixed("voice-in"), "time"),
+                PortRef::fixed(sine_low.clone(), "time"),
             ),
             VoiceConnection::new(
                 PortRef::fixed(zero.clone(), "out"),
@@ -2264,10 +2323,18 @@ impl VoiceGraph {
             ),
             VoiceConnection::new(
                 PortRef::fixed(string_add.clone(), "out"),
+                PortRef::fixed(string_add_low.clone(), "in1"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(sine_low.clone(), "out"),
+                PortRef::fixed(string_add_low.clone(), "in2"),
+            ),
+            VoiceConnection::new(
+                PortRef::fixed(string_add_low.clone(), "out"),
                 PortRef::fixed(string_level.clone(), "in"),
             ),
             VoiceConnection::new(
-                PortRef::fixed(half.clone(), "out"),
+                PortRef::fixed(third.clone(), "out"),
                 PortRef::fixed(string_level.clone(), "gain"),
             ),
             VoiceConnection::new(
@@ -2978,7 +3045,7 @@ impl VoiceGraph {
                 PortRef::new(NodeId::fixed("p-partial"), "inharmonicity"),
             ),
             VoiceConnection::new(
-                PortRef::new(NodeId::fixed("brightness"), "out"),
+                PortRef::new(NodeId::fixed("note-separate"), "velocity"),
                 PortRef::new(NodeId::fixed("p-partial"), "brightness"),
             ),
             VoiceConnection::new(
@@ -3006,7 +3073,7 @@ impl VoiceGraph {
                 PortRef::new(NodeId::fixed("hammer"), "velocity"),
             ),
             VoiceConnection::new(
-                PortRef::new(NodeId::fixed("hardness"), "out"),
+                PortRef::new(NodeId::fixed("note-separate"), "velocity"),
                 PortRef::new(NodeId::fixed("hammer"), "hardness"),
             ),
             VoiceConnection::new(
