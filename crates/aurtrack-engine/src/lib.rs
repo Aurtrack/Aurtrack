@@ -1526,35 +1526,40 @@ impl DelayPlan {
     }
 }
 
-const SOUNDBOARD_SLOTS: usize = 8192;
-
 #[derive(Debug, Clone)]
-struct SoundboardComb {
-    buffer: Arc<Vec<AtomicU64>>,
-    write: Arc<AtomicUsize>,
-    delay: f64,
-    feedback: f64,
+struct SoundboardMode {
+    state: Arc<[AtomicU64; 4]>,
+    frequency: f64,
+    q: f64,
+    gain: f64,
 }
 
-/// 音频域共享音板：所有声部先混合，再进入四条短共振。
+/// 音频域共享音板：所有声部先混合，再进入一组固定模态。
 #[derive(Debug, Clone)]
 pub struct SoundboardPlan {
-    combs: Vec<SoundboardComb>,
+    modes: Vec<SoundboardMode>,
 }
 
 impl SoundboardPlan {
     pub fn new() -> Self {
-        let delays = [0.007, 0.011, 0.017, 0.023];
-        let feedback = [0.72, 0.66, 0.58, 0.52];
+        let modes = [
+            (110.0, 4.0, 1.2),
+            (190.0, 5.0, 1.0),
+            (320.0, 6.0, 0.9),
+            (540.0, 7.0, 0.8),
+            (860.0, 8.0, 0.7),
+            (1_280.0, 7.0, 0.6),
+            (1_900.0, 5.0, 0.5),
+            (2_800.0, 4.0, 0.4),
+        ];
         Self {
-            combs: delays
+            modes: modes
                 .iter()
-                .zip(feedback)
-                .map(|(delay, feedback)| SoundboardComb {
-                    buffer: Arc::new((0..SOUNDBOARD_SLOTS).map(|_| AtomicU64::new(0)).collect()),
-                    write: Arc::new(AtomicUsize::new(0)),
-                    delay: *delay,
-                    feedback,
+                .map(|(frequency, q, gain)| SoundboardMode {
+                    state: Arc::new(std::array::from_fn(|_| AtomicU64::new(0))),
+                    frequency: *frequency,
+                    q: *q,
+                    gain: *gain,
                 })
                 .collect(),
         }
@@ -1563,29 +1568,33 @@ impl SoundboardPlan {
     pub fn process(&self, sample_rate: u32, input: f64) -> f64 {
         let rate = f64::from(sample_rate.max(1));
         let mut wet = 0.0;
-        for comb in &self.combs {
-            let delay = (comb.delay * rate).round() as usize;
-            let delay = delay.clamp(2, SOUNDBOARD_SLOTS - 2);
-            let write = comb.write.load(Ordering::Relaxed) % SOUNDBOARD_SLOTS;
-            let read = (write + SOUNDBOARD_SLOTS - delay) % SOUNDBOARD_SLOTS;
-            let delayed = f64::from_bits(comb.buffer[read].load(Ordering::Relaxed));
-            comb.buffer[write].store(
-                (input * 0.25 + delayed * comb.feedback).to_bits(),
-                Ordering::Relaxed,
-            );
-            comb.write
-                .store((write + 1) % SOUNDBOARD_SLOTS, Ordering::Relaxed);
-            wet += delayed;
+        for mode in &self.modes {
+            let w0 = std::f64::consts::TAU * mode.frequency / rate;
+            let alpha = w0.sin() / (2.0 * mode.q);
+            let a0 = 1.0 + alpha;
+            let b0 = alpha / a0;
+            let b2 = -alpha / a0;
+            let a1 = -2.0 * w0.cos() / a0;
+            let a2 = (1.0 - alpha) / a0;
+            let x1 = f64::from_bits(mode.state[0].load(Ordering::Relaxed));
+            let x2 = f64::from_bits(mode.state[1].load(Ordering::Relaxed));
+            let y1 = f64::from_bits(mode.state[2].load(Ordering::Relaxed));
+            let y2 = f64::from_bits(mode.state[3].load(Ordering::Relaxed));
+            let y = b0 * input + b2 * x2 - a1 * y1 - a2 * y2;
+            mode.state[0].store(input.to_bits(), Ordering::Relaxed);
+            mode.state[1].store(x1.to_bits(), Ordering::Relaxed);
+            mode.state[2].store(y.to_bits(), Ordering::Relaxed);
+            mode.state[3].store(y1.to_bits(), Ordering::Relaxed);
+            wet += y * mode.gain;
         }
-        input * 0.7 + wet * 0.075
+        input * 0.72 + wet * 0.09
     }
 
     pub fn reset(&self) {
-        for comb in &self.combs {
-            for slot in comb.buffer.iter() {
+        for mode in &self.modes {
+            for slot in mode.state.iter() {
                 slot.store(0.0_f64.to_bits(), Ordering::Relaxed);
             }
-            comb.write.store(0, Ordering::Relaxed);
         }
     }
 }
