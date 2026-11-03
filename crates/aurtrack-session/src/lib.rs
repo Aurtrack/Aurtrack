@@ -150,8 +150,6 @@ impl Project {
 pub struct Track {
     pub id: String,
     pub name: String,
-    #[serde(default)]
-    pub source: Option<aurtrack_graph::NodeId>,
     pub graph: aurtrack_graph::AudioGraph,
     pub clips: Vec<Clip>,
 }
@@ -716,11 +714,11 @@ impl Track {
             .find(|node| path.contains(node.id()) && node.is_instrument())
     }
 
-    pub fn source(&self) -> Result<Source, GraphError> {
+    pub fn source(&self) -> Source {
         let Some(instrument) = self.active_instrument() else {
-            return Ok(Source::Silence);
+            return Source::Silence;
         };
-        Ok(match instrument.type_id.as_str() {
+        match instrument.type_id.as_str() {
             "audio.instrument.sine" => Source::Sine {
                 frequency: instrument.param("frequency").unwrap_or(440.0),
             },
@@ -741,7 +739,7 @@ impl Track {
                 }
             },
             _ => Source::Silence,
-        })
+        }
     }
 
     pub fn devices(&self) -> Vec<Device> {
@@ -1844,7 +1842,6 @@ impl Session {
             "project.master_plugin" => self.cmd_master_plugin(&request.args),
             "project.master_plugin_off" => self.cmd_master_plugin_off(),
             "track.create" => self.cmd_track_create(&request.args),
-            "track.source" => self.cmd_track_source(&request.args),
             "track.remove" => self.cmd_track_remove(&request.args),
             "node.types" => Ok(CommandResponse::ok(json!({
                 "types": voice_types_json(),
@@ -2158,7 +2155,6 @@ impl Session {
         project.tracks.push(Track {
             id: track_id.clone(),
             name: args.name,
-            source: Some(aurtrack_graph::NodeId::new("instrument").map_err(graph_error)?),
             graph,
             clips: Vec::new(),
         });
@@ -3374,53 +3370,6 @@ impl Session {
             "node_ids": id_map.values().map(ToString::to_string).collect::<Vec<_>>(),
         }))
         .with_undo(token))
-    }
-
-    fn cmd_track_source(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
-        #[derive(Deserialize)]
-        #[serde(deny_unknown_fields)]
-        struct SourceArgs {
-            track_id: String,
-            node_id: Option<String>,
-        }
-        let args: SourceArgs = parse_args(args)?;
-        let project = self
-            .project
-            .as_ref()
-            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
-        let track = project
-            .tracks
-            .iter()
-            .find(|track| track.id == args.track_id)
-            .ok_or_else(|| CommandError::not_found(format!("找不到轨道：{}", args.track_id)))?;
-        let source = args
-            .node_id
-            .as_deref()
-            .map(|node| {
-                let node = NodeId::new(node).map_err(graph_error)?;
-                let node = track
-                    .graph
-                    .node(&node)
-                    .filter(|node| node.is_instrument())
-                    .ok_or_else(|| CommandError::invalid_args("音源节点必须是存在的乐器节点"))?;
-                Ok::<NodeId, CommandError>(node.id().clone())
-            })
-            .transpose()?;
-        let token = self.snapshot("track.source");
-        let project = self
-            .project
-            .as_mut()
-            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
-        let track = project
-            .tracks
-            .iter_mut()
-            .find(|track| track.id == args.track_id)
-            .ok_or_else(|| CommandError::not_found(format!("找不到轨道：{}", args.track_id)))?;
-        track.source.clone_from(&source);
-        Ok(
-            CommandResponse::ok(json!({ "track_id": args.track_id, "source_node": source }))
-                .with_undo(token),
-        )
     }
 
     fn cmd_track_remove(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
@@ -5702,9 +5651,6 @@ impl Session {
                 .iter_mut()
                 .find(|track| track.id == track_id)
                 .ok_or_else(|| CommandError::not_found(format!("找不到轨道：{track_id}")))?;
-            if track.source.as_ref() == Some(&node_id) {
-                track.source = None;
-            }
             track.graph.remove_node(&node_id).map_err(graph_error)?;
         }
         Ok(CommandResponse::ok(json!({ "paths": args.paths })).with_undo(token))
@@ -5752,8 +5698,8 @@ impl Session {
             "tracks": project.tracks.iter().map(|track| json!({
                 "id": &track.id,
                 "name": &track.name,
-                "source": track.source().ok(),
-                "source_node": track.active_instrument().map(|node| node.id()),
+                "source": track.source(),
+                "source_node": track.active_instrument().map(AudioNode::id),
                 "device_count": track.devices().len(),
             })).collect::<Vec<_>>(),
         })
@@ -5780,8 +5726,8 @@ fn project_view(project: &Project) -> Value {
         "tracks": project.tracks.iter().map(|track| json!({
             "id": &track.id,
             "name": &track.name,
-            "source": track.source().ok(),
-            "source_node": &track.source,
+            "source": track.source(),
+            "source_node": track.active_instrument().map(AudioNode::id),
             "devices": track.devices(),
             "graph": graph_view(&track.graph),
             "clips": track.clips.iter().map(|clip| clip_view(project, clip)).collect::<Vec<_>>(),
@@ -6144,7 +6090,7 @@ fn validate_project(project: &Project) -> Result<(u64, u64, u64, u64), CommandEr
             .graph
             .validate_with_audio_groups(&project.node_groups, &project.audio_groups)
             .map_err(graph_error)?;
-        if let Ok(Source::Sine { frequency }) = track.source() {
+        if let Source::Sine { frequency } = track.source() {
             if !frequency.is_finite()
                 || frequency <= 0.0
                 || frequency >= f64::from(project.sample_rate) / 2.0
@@ -6282,7 +6228,9 @@ fn render_project(
             )
             .map_err(graph_error)?;
         let pianos = &graph.pianos;
-        let piano_notes: Vec<NotePlan> = if !pianos.is_empty() {
+        let piano_notes: Vec<NotePlan> = if pianos.is_empty() {
+            Vec::new()
+        } else {
             track
                 .clips
                 .iter()
@@ -6295,8 +6243,6 @@ fn render_project(
                     })
                 })
                 .collect()
-        } else {
-            Vec::new()
         };
         for (index, slot) in mix.iter_mut().enumerate() {
             let time = start_seconds + index as f64 / sample_rate_f64;
@@ -6966,9 +6912,7 @@ mod buffer_tests {
             })
             .unwrap();
         assert!(rendered.data["peak"].as_f64().unwrap() > 0.0);
-        let source = session.project.as_ref().unwrap().tracks[0]
-            .source()
-            .unwrap();
+        let source = session.project.as_ref().unwrap().tracks[0].source();
         assert!(matches!(source, Source::Physical));
         let project = session.project.as_ref().unwrap();
         assert!(

@@ -732,7 +732,6 @@ mod tests {
             tracks: vec![Track {
                 id: "track-1".to_string(),
                 name: "lead".to_string(),
-                source: Some(aurtrack_graph::NodeId::new("instrument").unwrap()),
                 graph: aurtrack_graph::AudioGraph::track("audio.instrument.sine"),
                 clips: vec![Clip {
                     id: "clip-1".to_string(),
@@ -786,7 +785,6 @@ mod tests {
             tracks: vec![Track {
                 id: "track-1".to_string(),
                 name: "silence".to_string(),
-                source: Some(aurtrack_graph::NodeId::new("instrument").unwrap()),
                 graph: aurtrack_graph::AudioGraph::track("audio.instrument.silence"),
                 clips: vec![Clip {
                     id: "clip-1".to_string(),
@@ -816,7 +814,7 @@ mod tests {
         let mut runtime = Runtime::new();
         let response = run(&mut runtime, "describe", json!({})).unwrap();
         let commands = response.data["commands"].as_array().unwrap();
-        assert_eq!(commands.len(), 77);
+        assert_eq!(commands.len(), 76);
         assert!(
             commands
                 .iter()

@@ -921,42 +921,6 @@ fn node_positions_and_batch_remove() {
 }
 
 #[test]
-fn track_source_can_be_reassigned_and_cleared() {
-    let mut session = Session::default();
-    run(&mut session, "project.create", json!({}));
-    run(
-        &mut session,
-        "track.create",
-        json!({ "name": "lead", "source": "sine" }),
-    );
-    let group = run(
-        &mut session,
-        "node.add",
-        json!({
-            "track_id": "track-1",
-            "kind": "audio.group",
-            "group": "piano.voice"
-        }),
-    );
-    let group_id = group["node_id"].as_str().unwrap();
-    run(
-        &mut session,
-        "track.source",
-        json!({ "track_id": "track-1", "node_id": group_id }),
-    );
-    assert_eq!(
-        session.project().unwrap().tracks[0].source,
-        Some(aurtrack_graph::NodeId::new(group_id).unwrap())
-    );
-    run(
-        &mut session,
-        "track.source",
-        json!({ "track_id": "track-1", "node_id": null }),
-    );
-    assert_eq!(session.project().unwrap().tracks[0].source, None);
-}
-
-#[test]
 fn node_removal_keeps_group_data_and_allows_source() {
     let mut session = Session::default();
     run(&mut session, "project.create", json!({}));
@@ -1002,7 +966,7 @@ fn node_removal_keeps_group_data_and_allows_source() {
     );
     assert!(matches!(
         project.tracks[0].source(),
-        Ok(aurtrack_session::Source::Silence)
+        aurtrack_session::Source::Silence
     ));
 }
 
@@ -2869,23 +2833,6 @@ fn playback_collects_all_active_instruments() {
             .count(),
         2
     );
-}
-
-#[test]
-fn track_source_is_ignored_by_playback() {
-    let mut session = Session::default();
-    run(&mut session, "project.create", json!({ "name": "source" }));
-    run(
-        &mut session,
-        "track.create",
-        json!({ "name": "sine", "source": "sine" }),
-    );
-    let mut project = session.project().unwrap().clone();
-    project.tracks[0].source = Some(aurtrack_graph::NodeId::new("output").unwrap());
-    let (_, _, plan) = project.tracks[0]
-        .playback_graph(&project.node_groups, &project.audio_groups)
-        .unwrap();
-    assert!(!plan.pianos.is_empty());
 }
 
 #[test]

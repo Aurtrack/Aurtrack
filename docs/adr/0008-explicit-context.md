@@ -78,6 +78,8 @@
 
 复查补充：`Track.source` 是显式文档字段，不是图端口，按本 ADR 合规定义成立；如果要求“所有音源都必须由端口连接决定”，它仍不满足，需要改成专用 source 节点。`audio.instrument.silence` 输出的是 Audio 类型的 0 值，不是隐藏 voice。
 
+后续：ADR 0010 已删除 `Track.source`，改为从输出反向收集所有活乐器。
+
 ## 强制手段
 
 1. `AGENTS.md` 架构红线增加“禁止隐式上下文”。

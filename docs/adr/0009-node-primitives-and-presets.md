@@ -101,7 +101,7 @@ Aurtrack 的节点系统里有一批“看起来是节点、实际是复合算�
 - 迁移中发现并修复嵌套组展开时输入索引未加偏移的问题；新增 `math.int_to_float`。
 - `delay.line` 编译期为每个音符分配 4096 采样环形缓冲；状态槽为 128，约 4 MiB / delay 节点。
 - 默认 sine 轨已改为 `sine.voice` 组：`note.separate → osc.sine → env.adsr → voice.vca`，可进入编辑；旧的 `audio.instrument.sine` 保留兼容。
-- 新增 `track.source` 命令和节点侧栏“设为音源”入口；删除源后可以重新指定，传 null 清空。
+- 新增节点侧栏“设为音源”入口；ADR 0010 已删除该入口和 `track.source` 命令。
 - 数值输入的 Voice 组改为 `GroupCall` 子计划，按插槽传入父图的值；修复嵌套组把父索引误当子节点、导致 `piano.partial` 的 time 绑到内部常量的问题。
 - 默认钢琴不再用 `voice.pitch` / `voice.velocity` 读取隐式上下文；`note.separate` 的 pitch/velocity 作为外部自由变量直接进入 `piano.partial`，不占 Repeat 携带端口。
 - Repeat Input 现在提供 `iteration` 输出；旧的独立 `p-index` 已从默认图移除。
@@ -130,7 +130,7 @@ Aurtrack 的节点系统里有一批“看起来是节点、实际是复合算�
 - 节点是实例，组是数据块。删除节点只移除实例，不删除 `NodeGroup`。
 - 删除组数据必须显式使用 `group.delete`；仍被引用时拒绝。
 - 允许删除音源和输出节点。图暂时不合法时，播放/渲染返回明确错误，而不是阻止编辑。
-- 删除音源节点时清空 `Track.source`；无源轨道明确按静音处理，不保留悬空指针。
+- 删除音源节点后，输出路径上不再有活乐器，轨道按静音处理；不存在悬空音源指针。
 - 这与 Blender 的“删节点不等于删 datablock”保持一致。
 
 ## 非目标
