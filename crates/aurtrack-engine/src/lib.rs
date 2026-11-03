@@ -519,7 +519,7 @@ impl VoicePlan {
                         stiffness,
                         context.seed,
                     );
-                    (x * 0.25 + dispersed * 0.75) * 0.35 + modal * 0.9
+                    (x * 0.25 + dispersed * 0.75) * 0.2 + modal
                 },
                 VoiceOp::Damper => {
                     let input = node
@@ -1214,23 +1214,35 @@ fn modal_string_sample(
 ) -> f64 {
     let brightness = brightness.clamp(0.0, 1.0);
     let stiffness = stiffness.clamp(0.0, 1.0);
-    let velocity = velocity.clamp(0.0, 1.0).powf(0.6 + brightness * 0.8);
+    let velocity = velocity.clamp(0.0, 1.0).powf(0.55 + brightness * 0.7);
+    let position = 0.12 + ((seed >> 7) & 15) as f64 * 0.002;
     let mut output = 0.0;
-    for partial in 1..=12 {
+    for partial in 1..=18 {
         let harmonic = partial as f64;
-        let stretch = (1.0 + stiffness * 0.0015 * harmonic * harmonic).sqrt();
-        let detune = 1.0 + (((seed >> partial) & 3) as f64 - 1.5) * 0.00018;
+        let stretch = (1.0 + (0.00035 + stiffness * 0.0009) * harmonic * harmonic).sqrt();
+        let detune = 1.0 + (((seed >> partial) & 3) as f64 - 1.5) * 0.00016;
         let frequency = pitch * harmonic * stretch * detune;
         if frequency >= 20_000.0 {
             break;
         }
-        let decay = (2.2 + 5.0 / harmonic) * (pitch / 261.63).powf(-0.25);
-        let attack = 1.0 - (-time / 0.0025).exp();
-        let envelope = (-time / decay).exp() * attack;
-        let amplitude = velocity / harmonic.powf(0.65 + brightness * 0.8);
-        output += (std::f64::consts::TAU * frequency * time).sin() * envelope * amplitude;
+        let base_decay = (1.8 + 5.5 / harmonic.powf(0.8)) * (261.63 / pitch).powf(0.15);
+        let prompt = (-time / (0.035 + 0.02 / harmonic)).exp();
+        let sustain = (-time / base_decay).exp();
+        let envelope = 0.55 * prompt + 0.65 * sustain;
+        let position_amplitude = (std::f64::consts::PI * harmonic * position)
+            .sin()
+            .abs()
+            .max(0.08);
+        let amplitude = velocity * position_amplitude / harmonic.powf(0.55 + brightness * 0.7);
+        let phase = ((hash64(seed ^ harmonic.to_bits()) % 1_000) as f64 / 1_000.0 - 0.5) * 0.7;
+        output += (std::f64::consts::TAU * frequency * time + phase).sin() * envelope * amplitude;
     }
-    output * 0.12
+    let transient = ((hash64(seed ^ time.to_bits().rotate_left(11)) % 2_000) as f64 / 1_000.0
+        - 1.0)
+        * (-time / 0.0025).exp()
+        * velocity
+        * 0.18;
+    output * 0.15 + transient
 }
 
 fn partial_sample(
