@@ -430,14 +430,15 @@ impl VoicePlan {
                         .map_or(0.5, |input| scratch_value(*input))
                         .clamp(0.0, 1.0);
                     let time = context.local_time.max(0.0);
-                    let decay = 90.0 + hardness * 260.0;
-                    let envelope = (-time * decay).exp();
+                    let contact = 0.0012 + (1.0 - velocity) * 0.0025;
+                    let envelope = (-time / contact).exp();
                     let noise = (hash64(context.seed ^ time.to_bits().rotate_left(17) ^ 0x51ed_2701)
                         as f64
                         / u64::MAX as f64)
                         * 2.0
                         - 1.0;
-                    noise * envelope * velocity * (0.5 + hardness * 0.5)
+                    let thump = (std::f64::consts::TAU * 92.0 * time).sin();
+                    (noise * (0.55 + hardness * 0.35) + thump * 0.45) * envelope * velocity * 0.22
                 },
                 VoiceOp::Waveguide => {
                     let Some(buffer) = &node.buffer else {
@@ -487,16 +488,17 @@ impl VoicePlan {
                     let x = a + (b - a) * fraction;
                     let state = node.state[slot].load(Ordering::Relaxed);
                     let stored = f64::from_bits(state);
+                    let coefficient = 0.15 + brightness * 0.8;
                     let y = if stored.is_nan() {
                         x
                     } else {
-                        stored + brightness * (x - stored)
+                        stored + coefficient * (x - stored)
                     };
                     node.state[slot].store(y.to_bits(), Ordering::Relaxed);
                     let feedback = (y * damping).clamp(-1.0, 1.0);
                     buffer[base + write]
                         .store((excitation + feedback).to_bits(), Ordering::Relaxed);
-                    x
+                    x * 0.25 + y * 0.75
                 },
                 VoiceOp::Damper => {
                     let input = node
