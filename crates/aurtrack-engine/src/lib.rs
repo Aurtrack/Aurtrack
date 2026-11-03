@@ -3102,6 +3102,39 @@ mod tests {
     }
 
     #[test]
+    fn graph_mixes_multiple_voice_indices() {
+        let plan = GraphPlan {
+            nodes: vec![
+                GraphNodePlan {
+                    op: GraphOp::Voice { index: 0 },
+                    inputs: Vec::new(),
+                    controls: Vec::new(),
+                },
+                GraphNodePlan {
+                    op: GraphOp::Voice { index: 1 },
+                    inputs: Vec::new(),
+                    controls: Vec::new(),
+                },
+                GraphNodePlan {
+                    op: GraphOp::Mix,
+                    inputs: vec![0, 1],
+                    controls: Vec::new(),
+                },
+                GraphNodePlan {
+                    op: GraphOp::Output,
+                    inputs: vec![2],
+                    controls: Vec::new(),
+                },
+            ],
+            output: 3,
+            plugin: None,
+            pianos: Vec::new(),
+            fallback_sine: None,
+        };
+        assert!((plan.sample(&[0.25, 0.5], 48_000, 0.0) - 0.75).abs() < 1e-9);
+    }
+
+    #[test]
     fn soundboard_rings_after_voice_stops() {
         let plan = GraphPlan {
             nodes: vec![
