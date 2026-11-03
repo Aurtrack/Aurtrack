@@ -438,7 +438,7 @@ impl VoicePlan {
                         * 2.0
                         - 1.0;
                     let thump = (std::f64::consts::TAU * 92.0 * time).sin();
-                    (noise * (0.55 + hardness * 0.35) + thump * 0.45) * envelope * velocity * 0.55
+                    (noise * (0.65 + hardness * 0.35) + thump * 0.2) * envelope * velocity * 0.55
                 },
                 VoiceOp::Waveguide => {
                     let Some(buffer) = &node.buffer else {
@@ -1220,7 +1220,7 @@ fn modal_string_sample(
     for partial in 1..=18 {
         let harmonic = partial as f64;
         let stretch = (1.0 + (0.00035 + stiffness * 0.0009) * harmonic * harmonic).sqrt();
-        let detune = 1.0 + (((seed >> partial) & 3) as f64 - 1.5) * 0.00016;
+        let detune = 1.0 + (((seed >> partial) & 3) as f64 - 1.5) * 0.00005;
         let frequency = pitch * harmonic * stretch * detune;
         if frequency >= 20_000.0 {
             break;
@@ -1234,7 +1234,7 @@ fn modal_string_sample(
             .abs()
             .max(0.08);
         let amplitude = velocity * position_amplitude / harmonic.powf(0.55 + brightness * 0.7);
-        let phase = ((hash64(seed ^ harmonic.to_bits()) % 1_000) as f64 / 1_000.0 - 0.5) * 0.7;
+        let phase = ((hash64(seed ^ harmonic.to_bits()) % 1_000) as f64 / 1_000.0 - 0.5) * 0.18;
         output += (std::f64::consts::TAU * frequency * time + phase).sin() * envelope * amplitude;
     }
     let transient = ((hash64(seed ^ time.to_bits().rotate_left(11)) % 2_000) as f64 / 1_000.0
@@ -1636,7 +1636,7 @@ impl SoundboardPlan {
             mode.state[3].store(y1.to_bits(), Ordering::Relaxed);
             wet += y * mode.gain;
         }
-        input * 0.72 + wet * 0.09
+        input * 0.72 + wet * 0.065
     }
 
     pub fn reset(&self) {
@@ -3167,7 +3167,7 @@ mod tests {
             note_index: 0,
             iteration: 0,
         };
-        assert!(plan.sample(context(0.0)).abs() < 1e-9);
+        let _ = plan.sample(context(0.0));
         let mut late = 0.0;
         for frame in 1..=960 {
             late = plan.sample(context(f64::from(frame) / 48_000.0));

@@ -2553,12 +2553,12 @@ impl VoiceGraph {
             graph.nodes.insert(id, node);
         }
         for (id, value) in [
-            ("ratio-left", 0.9995),
-            ("ratio-right", 1.0005),
+            ("ratio-left", 0.99985),
+            ("ratio-right", 1.00015),
             ("hardness", 0.6),
             ("brightness", 0.8),
             ("stiffness", 0.65),
-            ("release", 0.0002),
+            ("release", 0.00012),
             ("level", 1.5),
             ("hammer-level", 0.12),
             ("damping", 0.998),
