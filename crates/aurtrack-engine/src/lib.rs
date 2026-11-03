@@ -519,7 +519,7 @@ impl VoicePlan {
                         stiffness,
                         context.seed,
                     );
-                    (x * 0.25 + dispersed * 0.75) * 0.65 + modal * 0.7
+                    (x * 0.25 + dispersed * 0.75) * 0.35 + modal * 0.9
                 },
                 VoiceOp::Damper => {
                     let input = node
