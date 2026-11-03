@@ -1247,10 +1247,6 @@
     };
   }
 
-  function isInstrumentNode(node: GraphNode | undefined): boolean {
-    return node ? nodeType(node)?.category === "Instrument" : false;
-  }
-
   function openNodeMenu(event: MouseEvent, node: GraphNode) {
     event.preventDefault();
     event.stopPropagation();
@@ -2469,23 +2465,6 @@
               {t("graph.ungroupAudioGroup")}
             </button>
           {/if}
-          {#if nodeMenu && isInstrumentNode(graph?.nodes[nodeMenu.nodeId])}
-            <button
-              role="menuitem"
-              disabled={busy || track?.source_node === nodeMenu.nodeId}
-              onclick={() => {
-                const node = nodeMenu
-                  ? graph?.nodes[nodeMenu.nodeId]
-                  : undefined;
-                nodeMenu = null;
-                if (node && track) void session.setTrackSource(track.id, node.id);
-              }}
-            >
-              {track?.source_node === nodeMenu.nodeId
-                ? t("graph.currentSource")
-                : t("graph.setAsSource")}
-            </button>
-          {/if}
           <button role="menuitem" disabled={busy} onclick={duplicateFromMenu}>
             {t("graph.duplicate")}
           </button>
@@ -2623,17 +2602,6 @@
                   node.group && void session.duplicateGroup(node.group)}
               >
                 {t("graph.duplicateGroup")}
-              </button>
-            {/if}
-            {#if track && nodeType(node)?.category === "Instrument"}
-              <button
-                class="ghost small"
-                disabled={track.source_node === node.id}
-                onclick={() => void session.setTrackSource(track.id, node.id)}
-              >
-                {track.source_node === node.id
-                  ? t("graph.currentSource")
-                  : t("graph.setAsSource")}
               </button>
             {/if}
             {#each sidebarSections(node) as [panel, params] (panel)}

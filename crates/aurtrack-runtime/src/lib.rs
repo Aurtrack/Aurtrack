@@ -535,12 +535,12 @@ fn build_plan(
                 sustain: settings.sustain,
                 release: settings.release,
             });
-            let piano = graph.piano.clone();
-            let source = track
-                .source()
-                .map_err(|error| CommandError::invalid_args(format!("节点图错误：{error}")))?;
-            let uses_implicit_notes =
-                matches!(source, aurtrack_session::Source::Sine { .. }) || piano.is_some();
+            let has_voices = !graph.pianos.is_empty();
+            let has_sine = graph
+                .nodes
+                .iter()
+                .any(|node| matches!(node.op, aurtrack_engine::GraphOp::Sine));
+            let uses_implicit_notes = has_voices || has_sine;
             let notes = if uses_implicit_notes {
                 track
                     .clips
@@ -566,7 +566,7 @@ fn build_plan(
                 graph: Some(graph),
                 notes,
                 plugin,
-                piano,
+                piano: None,
             })
         })
         .collect::<Result<Vec<_>, CommandError>>()?;
@@ -816,7 +816,7 @@ mod tests {
         let mut runtime = Runtime::new();
         let response = run(&mut runtime, "describe", json!({})).unwrap();
         let commands = response.data["commands"].as_array().unwrap();
-        assert_eq!(commands.len(), 75);
+        assert_eq!(commands.len(), 77);
         assert!(
             commands
                 .iter()

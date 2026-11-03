@@ -126,7 +126,7 @@ fn silence_instrument_with_notes_renders_zero() {
         !plan
             .nodes
             .iter()
-            .any(|node| matches!(node.op, aurtrack_engine::GraphOp::Voice))
+            .any(|node| matches!(node.op, aurtrack_engine::GraphOp::Voice { .. }))
     );
 
     let path = temp_path("silence");
@@ -1709,7 +1709,7 @@ fn nested_group_compiles_into_voice_plan() {
         .playback_graph(&project.node_groups, &project.audio_groups)
         .unwrap()
         .2;
-    assert!(plan.piano.unwrap().voice.unwrap().nodes.len() > 6);
+    assert!(plan.pianos[0].voice.as_ref().unwrap().nodes.len() > 6);
 }
 
 #[test]
@@ -1786,7 +1786,7 @@ fn group_from_nodes_rewires_boundaries() {
         .playback_graph(&project.node_groups, &project.audio_groups)
         .unwrap()
         .2;
-    assert!(plan.piano.unwrap().voice.unwrap().nodes.len() > 6);
+    assert!(plan.pianos[0].voice.as_ref().unwrap().nodes.len() > 6);
 
     run(
         &mut session,
@@ -1820,7 +1820,7 @@ fn group_from_nodes_rewires_boundaries() {
         .playback_graph(&project.node_groups, &project.audio_groups)
         .unwrap()
         .2;
-    assert!(plan.piano.unwrap().voice.unwrap().nodes.len() > 6);
+    assert!(plan.pianos[0].voice.as_ref().unwrap().nodes.len() > 6);
 }
 
 #[test]
@@ -2150,13 +2150,9 @@ fn connecting_to_occupied_input_replaces_previous_link() {
         .unwrap();
     assert_eq!(output_source.from.node().as_str(), node_id);
     assert_eq!(connections.len(), 2);
-    let error = project.tracks[0]
+    project.tracks[0]
         .playback_graph(&project.node_groups, &project.audio_groups)
-        .unwrap_err();
-    assert!(matches!(
-        error,
-        aurtrack_graph::GraphError::SourceDisconnected(_)
-    ));
+        .unwrap();
 }
 
 #[test]
@@ -2182,7 +2178,7 @@ fn piano_note_source_is_explicit() {
     let (_, _, plan) = project.tracks[0]
         .playback_graph(&project.node_groups, &project.audio_groups)
         .unwrap();
-    assert!(plan.piano.is_some());
+    assert!(!plan.pianos.is_empty());
     run(
         &mut session,
         "node.disconnect",
@@ -2197,7 +2193,7 @@ fn piano_note_source_is_explicit() {
     let (_, _, plan) = project.tracks[0]
         .playback_graph(&project.node_groups, &project.audio_groups)
         .unwrap();
-    assert!(plan.piano.is_none());
+    assert!(plan.pianos.is_empty());
     let path = temp_path("no-note-source");
     let rendered = run(
         &mut session,
@@ -2299,9 +2295,9 @@ fn piano_instrument_exposes_note_input() {
     assert!(
         plan.nodes
             .iter()
-            .any(|node| matches!(node.op, aurtrack_engine::GraphOp::Voice))
+            .any(|node| matches!(node.op, aurtrack_engine::GraphOp::Voice { .. }))
     );
-    let voice = plan.piano.unwrap().voice.unwrap();
+    let voice = plan.pianos[0].voice.as_ref().unwrap();
     assert!(
         voice
             .nodes
@@ -2718,7 +2714,7 @@ fn muted_voice_link_compiles_as_unconnected() {
         .playback_graph(&project.node_groups, &project.audio_groups)
         .unwrap()
         .2;
-    assert!(plan.piano.unwrap().voice.is_some());
+    assert!(plan.pianos.first().unwrap().voice.is_some());
 }
 
 #[test]
@@ -2782,7 +2778,7 @@ fn default_piano_partial_loop_is_explicit() {
         .playback_graph(&project.node_groups, &project.audio_groups)
         .unwrap()
         .2;
-    assert!(plan.piano.unwrap().voice.is_some());
+    assert!(plan.pianos.first().unwrap().voice.is_some());
 }
 
 #[test]
@@ -2812,7 +2808,71 @@ fn dangling_adsr_is_not_selected() {
 }
 
 #[test]
-fn track_source_is_an_explicit_node_reference() {
+fn playback_collects_all_active_instruments() {
+    let mut session = Session::default();
+    run(&mut session, "project.create", json!({ "name": "multi" }));
+    run(
+        &mut session,
+        "track.create",
+        json!({ "name": "piano", "source": "piano" }),
+    );
+    let second = run(
+        &mut session,
+        "node.add",
+        json!({ "track_id": "track-1", "kind": "audio.group", "group": "piano.voice" }),
+    );
+    let second = second["node_id"].as_str().unwrap().to_string();
+    run(
+        &mut session,
+        "node.connect",
+        json!({
+            "from": "/tracks/track-1/nodes/note-input",
+            "to": format!("/tracks/track-1/nodes/{second}"),
+            "to_port": "note"
+        }),
+    );
+    let mix = run(
+        &mut session,
+        "node.add",
+        json!({ "track_id": "track-1", "kind": "mix" }),
+    );
+    let mix = mix["node_id"].as_str().unwrap().to_string();
+    for (from, port) in [("instrument", "in1"), (second.as_str(), "in2")] {
+        run(
+            &mut session,
+            "node.connect",
+            json!({
+                "from": format!("/tracks/track-1/nodes/{from}"),
+                "to": format!("/tracks/track-1/nodes/{mix}"),
+                "to_port": port
+            }),
+        );
+    }
+    run(
+        &mut session,
+        "node.connect",
+        json!({
+            "from": format!("/tracks/track-1/nodes/{mix}"),
+            "to": "/tracks/track-1/nodes/output",
+            "to_port": "in"
+        }),
+    );
+    let project = session.project().unwrap();
+    let (_, _, plan) = project.tracks[0]
+        .playback_graph(&project.node_groups, &project.audio_groups)
+        .unwrap();
+    assert_eq!(plan.pianos.len(), 2);
+    assert_eq!(
+        plan.nodes
+            .iter()
+            .filter(|node| matches!(node.op, aurtrack_engine::GraphOp::Voice { .. }))
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn track_source_is_ignored_by_playback() {
     let mut session = Session::default();
     run(&mut session, "project.create", json!({ "name": "source" }));
     run(
@@ -2822,13 +2882,10 @@ fn track_source_is_an_explicit_node_reference() {
     );
     let mut project = session.project().unwrap().clone();
     project.tracks[0].source = Some(aurtrack_graph::NodeId::new("output").unwrap());
-    let error = project.tracks[0]
+    let (_, _, plan) = project.tracks[0]
         .playback_graph(&project.node_groups, &project.audio_groups)
-        .unwrap_err();
-    assert!(matches!(
-        error,
-        aurtrack_graph::GraphError::SourceMissing(_)
-    ));
+        .unwrap();
+    assert!(!plan.pianos.is_empty());
 }
 
 #[test]
@@ -2861,7 +2918,7 @@ fn piano_track_renders_audible_wav() {
         .playback_graph(&project.node_groups, &project.audio_groups)
         .unwrap()
         .2;
-    assert!(plan.piano.as_ref().unwrap().voice.is_some());
+    assert!(plan.pianos.first().unwrap().voice.is_some());
     let path = temp_path("piano");
     let rendered = run(
         &mut session,

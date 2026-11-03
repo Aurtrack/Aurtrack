@@ -30,9 +30,9 @@ use std::sync::Arc;
 
 use aurtrack_command::{CommandError, CommandRequest, CommandResponse, registry};
 use aurtrack_engine::{
-    AdsrPlan, DelayPlan, FilterPlan, FilterSettings, GraphNodePlan, GraphOp, GraphPlan,
-    HighpassPlan, LfoPlan, MAX_GRAPH_NODES, NotePlan, PluginPlan, VOICE_DELAY_SAMPLES,
-    VoiceNodePlan, VoiceOp, VoicePlan, adsr_envelope, midi_to_hz, note_envelope,
+    DelayPlan, FilterPlan, FilterSettings, GraphNodePlan, GraphOp, GraphPlan, HighpassPlan,
+    LfoPlan, MAX_GRAPH_NODES, NotePlan, PluginPlan, VOICE_DELAY_SAMPLES, VoiceNodePlan, VoiceOp,
+    VoicePlan, midi_to_hz,
 };
 use aurtrack_graph::{
     AudioConnection, AudioGraph, AudioGroup, AudioNode, GraphError, NodeGroup, NodeGroupInterface,
@@ -308,7 +308,7 @@ fn compile_audio_graph(
     audio_groups: &BTreeMap<String, AudioGroup>,
     interface: Option<&NodeGroupInterface>,
     input_bindings: Option<&BTreeMap<String, usize>>,
-    source: Option<&NodeId>,
+    voice_sources: &BTreeMap<NodeId, usize>,
     stack: &mut Vec<String>,
 ) -> Result<CompiledAudio, GraphError> {
     let mut indices = BTreeMap::<(NodeId, String), usize>::new();
@@ -401,7 +401,7 @@ fn compile_audio_graph(
                     audio_groups,
                     Some(&group.interface),
                     Some(&bindings),
-                    None,
+                    &BTreeMap::new(),
                     stack,
                 );
                 stack.pop();
@@ -501,8 +501,8 @@ fn compile_audio_graph(
                 )?;
                 let op = match node.type_id.as_str() {
                     "audio.group" => {
-                        if source == Some(node.id()) {
-                            GraphOp::Voice
+                        if let Some(index) = voice_sources.get(node.id()) {
+                            GraphOp::Voice { index: *index }
                         } else {
                             GraphOp::Constant(0.0)
                         }
@@ -708,15 +708,18 @@ fn output_path_nodes(graph: &AudioGraph) -> BTreeSet<NodeId> {
 }
 
 impl Track {
+    /// 输出路径上第一个活乐器；`source` 字段只保留给旧工程读取。
+    pub fn active_instrument(&self) -> Option<&AudioNode> {
+        let path = output_path_nodes(&self.graph);
+        self.graph
+            .nodes()
+            .find(|node| path.contains(node.id()) && node.is_instrument())
+    }
+
     pub fn source(&self) -> Result<Source, GraphError> {
-        let Some(source) = &self.source else {
+        let Some(instrument) = self.active_instrument() else {
             return Ok(Source::Silence);
         };
-        let instrument = self
-            .graph
-            .node(source)
-            .filter(|node| node.is_instrument())
-            .ok_or_else(|| GraphError::SourceMissing(source.clone()))?;
         Ok(match instrument.type_id.as_str() {
             "audio.instrument.sine" => Source::Sine {
                 frequency: instrument.param("frequency").unwrap_or(440.0),
@@ -780,42 +783,10 @@ impl Track {
                         .is_some_and(|node| node.type_id == "audio.note")
             })
         };
-        let instrument = match &self.source {
-            Some(source) => Some(
-                self.graph
-                    .node(source)
-                    .filter(|node| node.is_instrument())
-                    .ok_or_else(|| GraphError::SourceMissing(source.clone()))?,
-            ),
-            None => None,
-        };
-        let mut group_id: Option<String> = None;
         let mut source_frequency = None;
         let mut adsr = None;
         let mut plugin = None;
-        if let Some(instrument) = instrument {
-            match instrument.type_id.as_str() {
-                "audio.group" => {
-                    if has_note_source(instrument.id()) {
-                        group_id.clone_from(&instrument.group);
-                        if instrument.group.as_deref() == Some("sine.voice") {
-                            source_frequency =
-                                Some(instrument.port_value("frequency").unwrap_or(440.0));
-                        }
-                    }
-                },
-                "audio.instrument.sine" => {
-                    source_frequency = Some(instrument.param("frequency").unwrap_or(440.0));
-                },
-                _ => {},
-            }
-        }
         let output_path = output_path_nodes(&self.graph);
-        if let Some(source) = &self.source
-            && !output_path.contains(source)
-        {
-            return Err(GraphError::SourceDisconnected(source.clone()));
-        }
         for node in self.graph.nodes() {
             if !output_path.contains(node.id()) {
                 continue;
@@ -837,13 +808,46 @@ impl Track {
                 _ => {},
             }
         }
+        let mut pianos = Vec::new();
+        let mut voice_sources = BTreeMap::new();
+        for node in self.graph.nodes() {
+            if !output_path.contains(node.id()) {
+                continue;
+            }
+            if node.muted {
+                continue;
+            }
+            if node.type_id == "audio.group" && has_note_source(node.id()) {
+                let Some(group_id) = node.group.as_deref() else {
+                    continue;
+                };
+                let group = groups
+                    .get(group_id)
+                    .ok_or_else(|| GraphError::GroupMissing(group_id.to_string()))?;
+                group.validate_with_groups(groups)?;
+                let mut piano = aurtrack_engine::PianoPlan::new(10, 1.2, 0.5, 0.2);
+                piano.voice = Some(compile_voice(
+                    &group.graph,
+                    &group.interface,
+                    groups,
+                    buffers,
+                )?);
+                voice_sources.insert(node.id().clone(), pianos.len());
+                pianos.push(piano);
+                if group_id == "sine.voice" && !node.muted {
+                    source_frequency = Some(node.port_value("frequency").unwrap_or(440.0));
+                }
+            } else if node.type_id == "audio.instrument.sine" && !node.muted {
+                source_frequency = Some(node.param("frequency").unwrap_or(440.0));
+            }
+        }
         let compiled = compile_audio_graph(
             &self.graph,
             groups,
             audio_groups,
             None,
             None,
-            self.source.as_ref(),
+            &voice_sources,
             &mut Vec::new(),
         )?;
         let nodes = compiled.nodes;
@@ -851,22 +855,6 @@ impl Track {
         if nodes.len() > aurtrack_engine::MAX_GRAPH_NODES {
             return Err(GraphError::TooManyNodes(nodes.len()));
         }
-        let piano = if let Some(group_id) = group_id.as_ref() {
-            let group = groups
-                .get(group_id)
-                .ok_or_else(|| GraphError::GroupMissing(group_id.clone()))?;
-            group.validate_with_groups(groups)?;
-            let mut piano = aurtrack_engine::PianoPlan::new(10, 1.2, 0.5, 0.2);
-            piano.voice = Some(compile_voice(
-                &group.graph,
-                &group.interface,
-                groups,
-                buffers,
-            )?);
-            Some(piano)
-        } else {
-            None
-        };
         Ok((
             source_frequency,
             adsr,
@@ -874,7 +862,8 @@ impl Track {
                 nodes,
                 output,
                 plugin: plugin.map(|plugin| PluginPlan::new(plugin.path, plugin.id, plugin.state)),
-                piano,
+                pianos,
+                fallback_sine: source_frequency,
             },
         ))
     }
@@ -5764,7 +5753,7 @@ impl Session {
                 "id": &track.id,
                 "name": &track.name,
                 "source": track.source().ok(),
-                "source_node": &track.source,
+                "source_node": track.active_instrument().map(|node| node.id()),
                 "device_count": track.devices().len(),
             })).collect::<Vec<_>>(),
         })
@@ -6285,24 +6274,15 @@ fn render_project(
     let frames = (duration_seconds * sample_rate_f64).round() as usize;
     let mut mix = vec![0.0_f32; frames];
     for track in &project.tracks {
-        let (source_frequency, adsr_settings, graph) = track
+        let (_, _adsr_settings, graph) = track
             .playback_graph_with_buffers(
                 &project.node_groups,
                 &project.audio_groups,
                 &project.buffers,
             )
             .map_err(graph_error)?;
-        let adsr = adsr_settings.map(|settings| AdsrPlan {
-            attack: settings.attack,
-            decay: settings.decay,
-            sustain: settings.sustain,
-            release: settings.release,
-        });
-        let piano = graph.piano.as_ref();
-        let source = track.source().map_err(graph_error)?;
-        let silent = matches!(source, Source::Silence);
-        let explicit_piano = matches!(source, Source::Piano);
-        let piano_notes: Vec<NotePlan> = if piano.is_some() {
+        let pianos = &graph.pianos;
+        let piano_notes: Vec<NotePlan> = if !pianos.is_empty() {
             track
                 .clips
                 .iter()
@@ -6318,58 +6298,17 @@ fn render_project(
         } else {
             Vec::new()
         };
-        let release = adsr.map_or(0.0, |envelope| envelope.release.max(0.001));
-        let fallback_sine = if matches!(source, Source::Sine { .. })
-            && piano_notes.is_empty()
-            && piano.is_some()
-            && track
-                .source
-                .as_ref()
-                .and_then(|id| track.graph.node(id))
-                .is_some_and(|node| !node.muted)
-        {
-            source_frequency
-        } else {
-            None
-        };
         for (index, slot) in mix.iter_mut().enumerate() {
             let time = start_seconds + index as f64 / sample_rate_f64;
-            let mut sample = if silent {
-                0.0
-            } else if let Some(piano) = piano.as_ref() {
-                piano.sample(&piano_notes, time)
-                    + fallback_sine.map_or(0.0, |frequency| {
-                        (std::f64::consts::TAU * frequency * time).sin() * 0.25
-                    })
-            } else {
-                let mut sample = source_frequency.map_or(0.0, |frequency| {
-                    (std::f64::consts::TAU * frequency * time).sin() * 0.25
-                });
-                if !explicit_piano {
-                    for clip in &track.clips {
-                        for note in &clip.notes {
-                            let note_start =
-                                project.ticks_to_seconds(clip.start_tick + note.start_tick);
-                            let note_duration = project.ticks_to_seconds(note.duration_tick);
-                            let note_end = note_start + note_duration;
-                            if time >= note_start && time < note_end + release {
-                                let local = time - note_start;
-                                let envelope = adsr.map_or_else(
-                                    || note_envelope(local, note_duration),
-                                    |envelope| adsr_envelope(local, note_duration, envelope),
-                                );
-                                sample += (std::f64::consts::TAU * midi_to_hz(note.pitch) * local)
-                                    .sin()
-                                    * note.velocity
-                                    * envelope
-                                    * 0.25;
-                            }
-                        }
-                    }
-                }
-                sample
-            };
-            sample = graph.sample(sample, project.sample_rate, time);
+            let mut voices = [0.0_f64; aurtrack_engine::MAX_VOICES];
+            for (voice_index, piano) in pianos.iter().enumerate().take(aurtrack_engine::MAX_VOICES)
+            {
+                voices[voice_index] = piano.sample(&piano_notes, time);
+            }
+            if let Some(frequency) = graph.fallback_sine {
+                voices[0] += (std::f64::consts::TAU * frequency * time).sin() * 0.25;
+            }
+            let sample = graph.sample(&voices, project.sample_rate, time);
             *slot += sample as f32;
         }
     }

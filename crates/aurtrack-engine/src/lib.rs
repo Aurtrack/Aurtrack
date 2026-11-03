@@ -1682,6 +1682,9 @@ pub const MAX_GRAPH_NODES: usize = 256;
 /// 单个 Voice 子图的节点计划上限。
 pub const MAX_VOICE_NODES: usize = 256;
 
+/// 一个音频图里同时混合的活乐器上限。
+pub const MAX_VOICES: usize = 8;
+
 /// 每个 Voice 节点的状态槽数；Biquad 每音符占两槽。
 pub const VOICE_STATE_SLOTS: usize = 128;
 
@@ -1705,7 +1708,7 @@ pub struct GraphNodePlan {
 /// DAG 节点操作。
 #[derive(Debug, Clone)]
 pub enum GraphOp {
-    Voice,
+    Voice { index: usize },
     Sine,
     Constant(f64),
     Lfo(LfoPlan),
@@ -1730,7 +1733,8 @@ pub struct GraphPlan {
     pub nodes: Vec<GraphNodePlan>,
     pub output: usize,
     pub plugin: Option<PluginPlan>,
-    pub piano: Option<PianoPlan>,
+    pub pianos: Vec<PianoPlan>,
+    pub fallback_sine: Option<f64>,
 }
 
 fn control_value(
@@ -1745,14 +1749,14 @@ fn control_value(
 }
 
 impl GraphPlan {
-    pub fn sample(&self, voice: f64, sample_rate: u32, time: f64) -> f64 {
+    pub fn sample(&self, voices: &[f64], sample_rate: u32, time: f64) -> f64 {
         if self.nodes.len() > MAX_GRAPH_NODES || self.output >= self.nodes.len() {
             return 0.0;
         }
         let mut values = [0.0_f64; MAX_GRAPH_NODES];
         for (index, node) in self.nodes.iter().enumerate() {
             let value = match &node.op {
-                GraphOp::Voice => voice,
+                GraphOp::Voice { index } => voices.get(*index).copied().unwrap_or(0.0),
                 GraphOp::Sine => {
                     let frequency = control_value(node, 0, &values, 440.0).clamp(20.0, 20_000.0);
                     let phase = control_value(node, 1, &values, 0.0);
@@ -2336,12 +2340,30 @@ impl Playback {
     fn sample_track(plan: &PlaybackPlan, track: &TrackPlan, position: u64) -> f64 {
         let sample_rate = f64::from(plan.sample_rate).max(1.0);
         let time = position as f64 / sample_rate;
-        let mut voice = if let Some(piano) = &track.piano {
-            piano.sample(&track.notes, time)
-        } else {
-            0.0
-        };
-        if track.piano.is_none() {
+        let mut voices = [0.0_f64; MAX_VOICES];
+        let mut voice = 0.0;
+        let mut has_voices = false;
+        if let Some(graph) = &track.graph {
+            for (index, piano) in graph.pianos.iter().enumerate().take(MAX_VOICES) {
+                voices[index] = piano.sample(&track.notes, time);
+                voice += voices[index];
+                has_voices = true;
+            }
+        }
+        if let Some(graph) = &track.graph
+            && let Some(frequency) = graph.fallback_sine
+        {
+            let sine = (std::f64::consts::TAU * frequency * time).sin() * 0.25;
+            voices[0] += sine;
+            voice += sine;
+            has_voices = true;
+        }
+        if !has_voices && let Some(piano) = &track.piano {
+            voices[0] = piano.sample(&track.notes, time);
+            voice = voices[0];
+            has_voices = true;
+        }
+        if !has_voices {
             if let Some(frequency) = track.frequency {
                 voice += (std::f64::consts::TAU * frequency * time).sin() * 0.25;
             }
@@ -2363,7 +2385,7 @@ impl Playback {
             }
         }
         if let Some(graph) = &track.graph {
-            return graph.sample(voice, plan.sample_rate, time);
+            return graph.sample(&voices, plan.sample_rate, time);
         }
         for filter in &track.filters {
             voice = filter.process(plan.sample_rate, voice);
@@ -2480,9 +2502,10 @@ mod tests {
             ],
             output: 2,
             plugin: None,
-            piano: None,
+            pianos: Vec::new(),
+            fallback_sine: None,
         };
-        assert!((plan.sample(0.0, 48_000, 0.0) - 0.25).abs() < 1e-9);
+        assert!((plan.sample(&[0.0], 48_000, 0.0) - 0.25).abs() < 1e-9);
     }
 
     #[test]
@@ -3083,7 +3106,7 @@ mod tests {
         let plan = GraphPlan {
             nodes: vec![
                 GraphNodePlan {
-                    op: GraphOp::Voice,
+                    op: GraphOp::Voice { index: 0 },
                     inputs: Vec::new(),
                     controls: Vec::new(),
                 },
@@ -3100,15 +3123,16 @@ mod tests {
             ],
             output: 2,
             plugin: None,
-            piano: None,
+            pianos: Vec::new(),
+            fallback_sine: None,
         };
         for index in 0..500 {
-            let _ = plan.sample(1.0, 48_000, index as f64 / 48_000.0);
+            let _ = plan.sample(&[1.0], 48_000, index as f64 / 48_000.0);
         }
         let mut tail = 0.0_f64;
         for index in 0..500 {
             tail += plan
-                .sample(0.0, 48_000, (500 + index) as f64 / 48_000.0)
+                .sample(&[0.0], 48_000, (500 + index) as f64 / 48_000.0)
                 .abs();
         }
         assert!(tail > 1e-6);

@@ -171,12 +171,38 @@ const FILTER_INPUTS: [AudioSocketSpec; 3] = [
         default: 0.2,
     },
 ];
-const MIX_INPUTS: [AudioSocketSpec; 1] = [AudioSocketSpec {
-    id: "in",
-    name: "Audio",
-    ty: SocketType::Audio,
-    default: 0.0,
-}];
+const MIX_INPUTS: [AudioSocketSpec; 5] = [
+    AudioSocketSpec {
+        id: "in",
+        name: "Audio",
+        ty: SocketType::Audio,
+        default: 0.0,
+    },
+    AudioSocketSpec {
+        id: "in1",
+        name: "Audio 1",
+        ty: SocketType::Audio,
+        default: 0.0,
+    },
+    AudioSocketSpec {
+        id: "in2",
+        name: "Audio 2",
+        ty: SocketType::Audio,
+        default: 0.0,
+    },
+    AudioSocketSpec {
+        id: "in3",
+        name: "Audio 3",
+        ty: SocketType::Audio,
+        default: 0.0,
+    },
+    AudioSocketSpec {
+        id: "in4",
+        name: "Audio 4",
+        ty: SocketType::Audio,
+        default: 0.0,
+    },
+];
 
 /// Audio 域节点类型注册表。
 pub const AUDIO_NODE_TYPES: &[AudioNodeType] = &[
