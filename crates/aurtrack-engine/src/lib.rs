@@ -511,7 +511,15 @@ impl VoicePlan {
                     let feedback = (dispersed * damping).clamp(-1.0, 1.0);
                     buffer[base + write]
                         .store((excitation + feedback).to_bits(), Ordering::Relaxed);
-                    x * 0.25 + dispersed * 0.75
+                    let modal = modal_string_sample(
+                        frequency,
+                        context.velocity,
+                        context.local_time.max(0.0),
+                        brightness,
+                        stiffness,
+                        context.seed,
+                    );
+                    (x * 0.25 + dispersed * 0.75) * 0.65 + modal * 0.7
                 },
                 VoiceOp::Damper => {
                     let input = node
@@ -1194,6 +1202,35 @@ fn adsr_held(time: f64, attack: f64, decay: f64, sustain: f64) -> f64 {
         return 1.0 - (1.0 - sustain) * ((time - attack) / decay);
     }
     sustain
+}
+
+fn modal_string_sample(
+    pitch: f64,
+    velocity: f64,
+    time: f64,
+    brightness: f64,
+    stiffness: f64,
+    seed: u64,
+) -> f64 {
+    let brightness = brightness.clamp(0.0, 1.0);
+    let stiffness = stiffness.clamp(0.0, 1.0);
+    let velocity = velocity.clamp(0.0, 1.0).powf(0.6 + brightness * 0.8);
+    let mut output = 0.0;
+    for partial in 1..=12 {
+        let harmonic = partial as f64;
+        let stretch = (1.0 + stiffness * 0.0015 * harmonic * harmonic).sqrt();
+        let detune = 1.0 + (((seed >> partial) & 3) as f64 - 1.5) * 0.00018;
+        let frequency = pitch * harmonic * stretch * detune;
+        if frequency >= 20_000.0 {
+            break;
+        }
+        let decay = (2.2 + 5.0 / harmonic) * (pitch / 261.63).powf(-0.25);
+        let attack = 1.0 - (-time / 0.0025).exp();
+        let envelope = (-time / decay).exp() * attack;
+        let amplitude = velocity / harmonic.powf(0.65 + brightness * 0.8);
+        output += (std::f64::consts::TAU * frequency * time).sin() * envelope * amplitude;
+    }
+    output * 0.12
 }
 
 fn partial_sample(
