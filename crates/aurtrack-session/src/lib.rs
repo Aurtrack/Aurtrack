@@ -1494,6 +1494,8 @@ fn compile_voice_inner(
             "math.ceil" => VoiceOp::Ceil,
             "math.round" => VoiceOp::Round,
             "math.exp" => VoiceOp::Exp,
+            "math.sin" => VoiceOp::Sin,
+            "math.abs" => VoiceOp::Abs,
             "math.sqrt" => VoiceOp::Sqrt,
             "math.int_to_float" => VoiceOp::IntToFloat,
             "math.greater_than" => VoiceOp::GreaterThan,
@@ -1754,6 +1756,45 @@ fn migrate_piano_voice_graph(graph: &mut VoiceGraph) -> bool {
         changed = true;
     }
     changed
+}
+
+fn upgrade_builtin_piano_groups(project: &mut Project) -> usize {
+    let mut upgraded = 0;
+    let old_physical = project
+        .node_groups
+        .get("piano.physical")
+        .is_some_and(|group| {
+            group.name == "Physical Piano Voice"
+                && group
+                    .graph
+                    .nodes
+                    .values()
+                    .any(|node| node.type_id == "string.waveguide")
+        });
+    if old_physical {
+        project
+            .node_groups
+            .insert("piano.physical".to_string(), NodeGroup::physical_default());
+        upgraded += 1;
+    }
+    let old_partial = project
+        .node_groups
+        .get("piano.partial")
+        .is_some_and(|group| {
+            group.name == "Piano Partial"
+                && !group
+                    .graph
+                    .nodes
+                    .values()
+                    .any(|node| node.type_id == "math.sin")
+        });
+    if old_partial {
+        project
+            .node_groups
+            .insert("piano.partial".to_string(), NodeGroup::partial_default());
+        upgraded += 1;
+    }
+    upgraded
 }
 
 fn migrate_legacy_repeat_groups(project: &mut Project) -> usize {
@@ -2635,6 +2676,11 @@ impl Session {
             CommandError::invalid_args(format!("工程文件不是合法 JSON：{error}"))
         })?;
         let mut project = file.project;
+        let upgraded_builtin = upgrade_builtin_piano_groups(&mut project);
+        project
+            .node_groups
+            .entry("piano.partial".to_string())
+            .or_insert_with(NodeGroup::partial_default);
         project
             .node_groups
             .entry("piano.physical".to_string())
@@ -2652,6 +2698,7 @@ impl Session {
             "path": path,
             "migrated_groups": migrated_groups,
             "migrated_params": migrated_params,
+            "upgraded_builtin": upgraded_builtin,
             "project": self.project_summary(),
         }))
         .with_undo(token))
@@ -6881,6 +6928,29 @@ mod buffer_tests {
                 args: json!({ "name": "physical" }),
             })
             .unwrap();
+        let project = session.project().unwrap();
+        let physical = &project.node_groups["piano.physical"];
+        assert!(
+            !physical
+                .graph
+                .nodes
+                .values()
+                .any(|node| node.type_id == "string.waveguide")
+        );
+        assert!(
+            physical
+                .graph
+                .nodes
+                .values()
+                .any(|node| node.group.as_deref() == Some("piano.partial"))
+        );
+        assert!(
+            project.node_groups["piano.partial"]
+                .graph
+                .nodes
+                .values()
+                .any(|node| node.type_id == "math.sin")
+        );
         session
             .execute(&CommandRequest {
                 cmd: "track.create".to_string(),
