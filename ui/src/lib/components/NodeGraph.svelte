@@ -1247,8 +1247,11 @@
     };
   }
 
+  function isInstrumentNode(node: GraphNode | undefined): boolean {
+    return node ? nodeType(node)?.category === "Instrument" : false;
+  }
+
   function openNodeMenu(event: MouseEvent, node: GraphNode) {
-    if (!isDevice(node)) return;
     event.preventDefault();
     event.stopPropagation();
     if (!selected.has(node.id)) selected = new Set([node.id]);
@@ -2464,6 +2467,23 @@
               }}
             >
               {t("graph.ungroupAudioGroup")}
+            </button>
+          {/if}
+          {#if nodeMenu && isInstrumentNode(graph?.nodes[nodeMenu.nodeId])}
+            <button
+              role="menuitem"
+              disabled={busy || track?.source_node === nodeMenu.nodeId}
+              onclick={() => {
+                const node = nodeMenu
+                  ? graph?.nodes[nodeMenu.nodeId]
+                  : undefined;
+                nodeMenu = null;
+                if (node && track) void session.setTrackSource(track.id, node.id);
+              }}
+            >
+              {track?.source_node === nodeMenu.nodeId
+                ? t("graph.currentSource")
+                : t("graph.setAsSource")}
             </button>
           {/if}
           <button role="menuitem" disabled={busy} onclick={duplicateFromMenu}>
