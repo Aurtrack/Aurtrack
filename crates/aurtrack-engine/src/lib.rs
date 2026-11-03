@@ -1542,6 +1542,53 @@ impl DelayPlan {
     }
 }
 
+/// 单个音频域模态谐振器，状态固定，音频线程无分配。
+#[derive(Debug, Clone)]
+pub struct ResonatorPlan {
+    state: Arc<[AtomicU64; 4]>,
+    frequency: f64,
+    q: f64,
+    gain: f64,
+}
+
+impl ResonatorPlan {
+    pub fn new(frequency: f64, q: f64, gain: f64) -> Self {
+        Self {
+            state: Arc::new(std::array::from_fn(|_| AtomicU64::new(0))),
+            frequency: frequency.clamp(20.0, 20_000.0),
+            q: q.clamp(0.1, 40.0),
+            gain: gain.clamp(0.0, 4.0),
+        }
+    }
+
+    pub fn process(&self, sample_rate: u32, input: f64) -> f64 {
+        let rate = f64::from(sample_rate.max(1));
+        let w0 = std::f64::consts::TAU * self.frequency / rate;
+        let alpha = w0.sin() / (2.0 * self.q);
+        let a0 = 1.0 + alpha;
+        let b0 = alpha / a0;
+        let b2 = -alpha / a0;
+        let a1 = -2.0 * w0.cos() / a0;
+        let a2 = (1.0 - alpha) / a0;
+        let x1 = f64::from_bits(self.state[0].load(Ordering::Relaxed));
+        let x2 = f64::from_bits(self.state[1].load(Ordering::Relaxed));
+        let y1 = f64::from_bits(self.state[2].load(Ordering::Relaxed));
+        let y2 = f64::from_bits(self.state[3].load(Ordering::Relaxed));
+        let y = b0 * input + b2 * x2 - a1 * y1 - a2 * y2;
+        self.state[0].store(input.to_bits(), Ordering::Relaxed);
+        self.state[1].store(x1.to_bits(), Ordering::Relaxed);
+        self.state[2].store(y.to_bits(), Ordering::Relaxed);
+        self.state[3].store(y1.to_bits(), Ordering::Relaxed);
+        y * self.gain
+    }
+
+    pub fn reset(&self) {
+        for slot in self.state.iter() {
+            slot.store(0.0_f64.to_bits(), Ordering::Relaxed);
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct SoundboardMode {
     state: Arc<[AtomicU64; 4]>,
@@ -1687,6 +1734,7 @@ pub enum GraphOp {
     Highpass(HighpassPlan),
     Delay(DelayPlan),
     Soundboard(SoundboardPlan),
+    Resonator(ResonatorPlan),
     Gain,
     Drive,
     Mix,
@@ -1778,6 +1826,10 @@ impl GraphPlan {
                 GraphOp::Soundboard(soundboard) => {
                     let value = node.inputs.first().map_or(0.0, |input| values[*input]);
                     soundboard.process(sample_rate, value)
+                },
+                GraphOp::Resonator(resonator) => {
+                    let value = node.inputs.first().map_or(0.0, |input| values[*input]);
+                    resonator.process(sample_rate, value)
                 },
                 GraphOp::Delay(delay) => {
                     let value = node.inputs.first().map_or(0.0, |input| values[*input]);
@@ -1964,6 +2016,9 @@ impl Playback {
                     }
                     if let GraphOp::Soundboard(soundboard) = &node.op {
                         soundboard.reset();
+                    }
+                    if let GraphOp::Resonator(resonator) = &node.op {
+                        resonator.reset();
                     }
                 }
             }
@@ -3099,6 +3154,43 @@ mod tests {
             fallback_sine: None,
         };
         assert!((plan.sample(&[0.25, 0.5], 48_000, 0.0) - 0.75).abs() < 1e-9);
+    }
+
+    #[test]
+    fn resonator_rings_after_voice_stops() {
+        let plan = GraphPlan {
+            nodes: vec![
+                GraphNodePlan {
+                    op: GraphOp::Voice { index: 0 },
+                    inputs: Vec::new(),
+                    controls: Vec::new(),
+                },
+                GraphNodePlan {
+                    op: GraphOp::Resonator(ResonatorPlan::new(440.0, 12.0, 1.0)),
+                    inputs: vec![0],
+                    controls: Vec::new(),
+                },
+                GraphNodePlan {
+                    op: GraphOp::Output,
+                    inputs: vec![1],
+                    controls: Vec::new(),
+                },
+            ],
+            output: 2,
+            plugin: None,
+            pianos: Vec::new(),
+            fallback_sine: None,
+        };
+        let mut tail = 0.0;
+        for index in 0..480 {
+            let _ = plan.sample(&[1.0], 48_000, index as f64 / 48_000.0);
+        }
+        for index in 0..480 {
+            tail += plan
+                .sample(&[0.0], 48_000, (480 + index) as f64 / 48_000.0)
+                .abs();
+        }
+        assert!(tail > 0.01, "tail={tail}");
     }
 
     #[test]

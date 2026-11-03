@@ -30,16 +30,20 @@
    - `damper` 接收 gate、pedal、release；
    - 不再使用 `string.waveguide`。
 5. `string.waveguide` 回到纯波导：移除引擎内硬编码的 18 partial 模态层。
-6. 旧工程打开时，如果内置 `piano.physical` 仍是波导版，或 `piano.partial` 没有 `math.sin`，替换为新的内置默认组。
+6. 新增 `audio.resonator` 音频原语：输入 audio，参数 `frequency`、`q`、`gain`。
+7. `track.create` 的物理钢琴不再插入 `audio.soundboard`，而是插入 8 个 `audio.resonator`、一个干声 gain 和两级 mix。
+8. 旧工程打开时：
+   - 内置 `piano.physical` 仍是波导版，或 `piano.partial` 没有 `math.sin`，替换为新的内置默认组；
+   - 轨道里的旧 `audio.soundboard` 替换为谐振器音板网络。
 
 ## 后果
 
 - 钢琴音色现在可以在节点图里改：partial 数量、index 曲线、inharmonicity、brightness、decay、position、prompt 权重。
 - 16 个 partial 的默认图明显比 10 partial 的旧钢琴更重，但仍在 Voice 计划上限内。
-- 音板仍是 `audio.soundboard` 音频原语，尚未节点化；下一阶段处理。
-- 三弦/双极化仍未实现；当前是单 partial 银行加锤击瞬态。
+- 音板现在是每轨 8 个 `audio.resonator` 的网络；跨轨共享音板尚未保留。
+- 双弦失谐在 `piano.partial` 内部；三弦/双极化仍未实现。
 
 ## 验证
 
-- `physical_piano_track_renders` 检查物理组没有 `string.waveguide`、包含 `piano.partial`，且 `piano.partial` 有 `math.sin`。
+- `physical_piano_track_renders` 检查物理组没有 `string.waveguide`、包含 `piano.partial`，`piano.partial` 有 `math.sin`，轨道有 8 个 `audio.resonator`。
 - C4 渲染峰值约 0.09；基频 440 Hz，泛音延伸到 2.6 kHz 以上。

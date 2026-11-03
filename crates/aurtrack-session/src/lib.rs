@@ -31,8 +31,8 @@ use std::sync::Arc;
 use aurtrack_command::{CommandError, CommandRequest, CommandResponse, registry};
 use aurtrack_engine::{
     DelayPlan, FilterPlan, FilterSettings, GraphNodePlan, GraphOp, GraphPlan, HighpassPlan,
-    LfoPlan, MAX_GRAPH_NODES, NotePlan, PluginPlan, VOICE_DELAY_SAMPLES, VoiceNodePlan, VoiceOp,
-    VoicePlan, midi_to_hz,
+    LfoPlan, MAX_GRAPH_NODES, NotePlan, PluginPlan, ResonatorPlan, VOICE_DELAY_SAMPLES,
+    VoiceNodePlan, VoiceOp, VoicePlan, midi_to_hz,
 };
 use aurtrack_graph::{
     AudioConnection, AudioGraph, AudioGroup, AudioNode, GraphError, NodeGroup, NodeGroupInterface,
@@ -533,6 +533,11 @@ fn compile_audio_graph(
                     "audio.soundboard" => {
                         GraphOp::Soundboard(aurtrack_engine::SoundboardPlan::new())
                     },
+                    "audio.resonator" => GraphOp::Resonator(ResonatorPlan::new(
+                        node.param("frequency").unwrap_or(440.0),
+                        node.param("q").unwrap_or(6.0),
+                        node.param("gain").unwrap_or(0.1),
+                    )),
                     "audio.delay" => GraphOp::Delay(DelayPlan::new(
                         node.param("time").unwrap_or(0.25),
                         node.param("feedback").unwrap_or(0.2),
@@ -1758,6 +1763,115 @@ fn migrate_piano_voice_graph(graph: &mut VoiceGraph) -> bool {
     changed
 }
 
+fn insert_modal_soundboard(graph: &mut AudioGraph) -> Result<(), GraphError> {
+    let instrument = NodeId::fixed("instrument");
+    let output = NodeId::fixed("output");
+    graph.connections.retain(|connection| {
+        !(connection.from.node() == &instrument && connection.to.node() == &output)
+    });
+    let mut resonator_ids = Vec::new();
+    for (index, (frequency, q, gain)) in [
+        (110.0, 4.0, 0.12),
+        (190.0, 5.0, 0.10),
+        (320.0, 6.0, 0.09),
+        (540.0, 7.0, 0.08),
+        (860.0, 8.0, 0.07),
+        (1_280.0, 7.0, 0.06),
+        (1_900.0, 5.0, 0.05),
+        (2_800.0, 4.0, 0.04),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let id = NodeId::new(format!("soundboard-{}", index + 1))?;
+        let mut node = AudioNode::new(id.clone(), "audio.resonator");
+        node.position = Some([300.0 + index as f64 * 70.0, 340.0]);
+        node.params.insert("frequency".to_string(), frequency);
+        node.params.insert("q".to_string(), q);
+        node.params.insert("gain".to_string(), gain);
+        graph.nodes.insert(id.clone(), node);
+        graph.connections.push(AudioConnection::new(
+            PortRef::new(instrument.clone(), "out"),
+            PortRef::new(id.clone(), "in"),
+        ));
+        resonator_ids.push(id);
+    }
+    let dry = NodeId::new("soundboard-dry")?;
+    let mut dry_node = AudioNode::new(dry.clone(), "audio.gain");
+    dry_node.params.insert("gain".to_string(), 0.72);
+    dry_node.position = Some([300.0, 460.0]);
+    graph.nodes.insert(dry.clone(), dry_node);
+    graph.connections.push(AudioConnection::new(
+        PortRef::new(instrument, "out"),
+        PortRef::new(dry.clone(), "in"),
+    ));
+    let mix_a = NodeId::new("soundboard-mix-a")?;
+    let mut mix_a_node = AudioNode::new(mix_a.clone(), "audio.mix");
+    mix_a_node.position = Some([860.0, 340.0]);
+    graph.nodes.insert(mix_a.clone(), mix_a_node);
+    let mix_b = NodeId::new("soundboard-mix-b")?;
+    let mut mix_b_node = AudioNode::new(mix_b.clone(), "audio.mix");
+    mix_b_node.position = Some([1_100.0, 340.0]);
+    graph.nodes.insert(mix_b.clone(), mix_b_node);
+    for (index, resonator) in resonator_ids.iter().take(5).enumerate() {
+        let port = if index < 4 {
+            format!("in{}", index + 1)
+        } else {
+            "in".to_string()
+        };
+        graph.connections.push(AudioConnection::new(
+            PortRef::new(resonator.clone(), "out"),
+            PortRef::new(mix_a.clone(), port),
+        ));
+    }
+    for (index, resonator) in resonator_ids.iter().skip(5).enumerate() {
+        graph.connections.push(AudioConnection::new(
+            PortRef::new(resonator.clone(), "out"),
+            PortRef::new(mix_b.clone(), format!("in{}", index + 1)),
+        ));
+    }
+    graph.connections.push(AudioConnection::new(
+        PortRef::new(mix_a, "out"),
+        PortRef::new(mix_b.clone(), "in4"),
+    ));
+    graph.connections.push(AudioConnection::new(
+        PortRef::new(dry, "out"),
+        PortRef::new(mix_b.clone(), "in"),
+    ));
+    graph.connections.push(AudioConnection::new(
+        PortRef::new(mix_b, "out"),
+        PortRef::new(output, "in"),
+    ));
+    Ok(())
+}
+
+fn upgrade_track_soundboards(project: &mut Project) -> usize {
+    let mut upgraded = 0;
+    for track in &mut project.tracks {
+        let old: Vec<NodeId> = track
+            .graph
+            .nodes
+            .values()
+            .filter(|node| node.type_id == "audio.soundboard")
+            .map(|node| node.id.clone())
+            .collect();
+        if old.is_empty() {
+            continue;
+        }
+        for id in old {
+            track.graph.nodes.remove(&id);
+            track
+                .graph
+                .connections
+                .retain(|connection| connection.from.node() != &id && connection.to.node() != &id);
+        }
+        if insert_modal_soundboard(&mut track.graph).is_ok() {
+            upgraded += 1;
+        }
+    }
+    upgraded
+}
+
 fn upgrade_builtin_piano_groups(project: &mut Project) -> usize {
     let mut upgraded = 0;
     let old_physical = project
@@ -2137,25 +2251,7 @@ impl Session {
                 node.port_values
                     .insert("sample_rate".to_string(), f64::from(sample_rate));
             }
-            let soundboard = NodeId::new("soundboard").map_err(graph_error)?;
-            let mut node = aurtrack_graph::AudioNode::new(soundboard.clone(), "audio.soundboard");
-            node.position = Some([620.0, 220.0]);
-            graph.nodes.insert(soundboard.clone(), node);
-            graph.connections.retain(|connection| {
-                !(connection.from.node().as_str() == "instrument"
-                    && connection.to.node().as_str() == "output")
-            });
-            graph.connections.push(aurtrack_graph::AudioConnection::new(
-                aurtrack_graph::PortRef::new(
-                    NodeId::new("instrument").map_err(graph_error)?,
-                    "out",
-                ),
-                aurtrack_graph::PortRef::new(soundboard.clone(), "in"),
-            ));
-            graph.connections.push(aurtrack_graph::AudioConnection::new(
-                aurtrack_graph::PortRef::new(soundboard, "out"),
-                aurtrack_graph::PortRef::new(NodeId::new("output").map_err(graph_error)?, "in"),
-            ));
+            insert_modal_soundboard(&mut graph).map_err(graph_error)?;
         }
         if let Some(frequency) = frequency {
             if let Some(node) = graph
@@ -2677,6 +2773,7 @@ impl Session {
         })?;
         let mut project = file.project;
         let upgraded_builtin = upgrade_builtin_piano_groups(&mut project);
+        let upgraded_soundboards = upgrade_track_soundboards(&mut project);
         project
             .node_groups
             .entry("piano.partial".to_string())
@@ -2699,6 +2796,7 @@ impl Session {
             "migrated_groups": migrated_groups,
             "migrated_params": migrated_params,
             "upgraded_builtin": upgraded_builtin,
+            "upgraded_soundboards": upgraded_soundboards,
             "project": self.project_summary(),
         }))
         .with_undo(token))
@@ -6985,12 +7083,21 @@ mod buffer_tests {
         let source = session.project.as_ref().unwrap().tracks[0].source();
         assert!(matches!(source, Source::Physical));
         let project = session.project.as_ref().unwrap();
+        assert_eq!(
+            project.tracks[0]
+                .graph
+                .nodes
+                .values()
+                .filter(|node| node.type_id == "audio.resonator")
+                .count(),
+            8
+        );
         assert!(
             project.tracks[0]
                 .graph
                 .nodes
                 .values()
-                .any(|node| node.type_id == "audio.soundboard")
+                .all(|node| node.type_id != "audio.soundboard")
         );
         session
             .execute(&CommandRequest {
