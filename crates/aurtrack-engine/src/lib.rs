@@ -438,7 +438,7 @@ impl VoicePlan {
                         * 2.0
                         - 1.0;
                     let thump = (std::f64::consts::TAU * 92.0 * time).sin();
-                    (noise * (0.55 + hardness * 0.35) + thump * 0.45) * envelope * velocity * 0.22
+                    (noise * (0.55 + hardness * 0.35) + thump * 0.45) * envelope * velocity * 0.55
                 },
                 VoiceOp::Waveguide => {
                     let Some(buffer) = &node.buffer else {
@@ -446,7 +446,8 @@ impl VoicePlan {
                         continue;
                     };
                     let capacity = VOICE_DELAY_SAMPLES;
-                    if capacity < 8 || buffer.len() < capacity * node.state.len() {
+                    let stride = capacity + 4;
+                    if capacity < 8 || buffer.len() < stride * node.state.len() {
                         self.scratch[base + index].store(0.0_f64.to_bits(), Ordering::Relaxed);
                         continue;
                     }
@@ -475,12 +476,17 @@ impl VoicePlan {
                         .get(4)
                         .map_or(0.5, |input| scratch_value(*input))
                         .clamp(0.0, 1.0);
+                    let stiffness = node
+                        .inputs
+                        .get(5)
+                        .map_or(0.5, |input| scratch_value(*input))
+                        .clamp(0.0, 1.0);
                     let delay = (sample_rate / frequency).clamp(2.0, (capacity - 2) as f64);
                     let write = ((context.local_time.max(0.0) * sample_rate) as usize) % capacity;
                     let read = (write as f64 - delay).rem_euclid(capacity as f64);
                     let read_index = read.floor() as usize;
                     let fraction = read - read_index as f64;
-                    let base = slot * capacity;
+                    let base = slot * stride;
                     let a = f64::from_bits(buffer[base + read_index].load(Ordering::Relaxed));
                     let b = f64::from_bits(
                         buffer[base + (read_index + 1) % capacity].load(Ordering::Relaxed),
@@ -495,10 +501,17 @@ impl VoicePlan {
                         stored + coefficient * (x - stored)
                     };
                     node.state[slot].store(y.to_bits(), Ordering::Relaxed);
-                    let feedback = (y * damping).clamp(-1.0, 1.0);
+                    let allpass = stiffness * 0.55;
+                    let state_base = base + capacity;
+                    let x_previous = f64::from_bits(buffer[state_base + 1].load(Ordering::Relaxed));
+                    let y_previous = f64::from_bits(buffer[state_base + 2].load(Ordering::Relaxed));
+                    let dispersed = -allpass * y + x_previous + allpass * y_previous;
+                    buffer[state_base + 1].store(y.to_bits(), Ordering::Relaxed);
+                    buffer[state_base + 2].store(dispersed.to_bits(), Ordering::Relaxed);
+                    let feedback = (dispersed * damping).clamp(-1.0, 1.0);
                     buffer[base + write]
                         .store((excitation + feedback).to_bits(), Ordering::Relaxed);
-                    x * 0.25 + y * 0.75
+                    x * 0.25 + dispersed * 0.75
                 },
                 VoiceOp::Damper => {
                     let input = node
@@ -3078,10 +3091,15 @@ mod tests {
             VoiceNodePlan::new(VoiceOp::Constant(48_000.0), Vec::new()),
             VoiceNodePlan::new(VoiceOp::Constant(0.99), Vec::new()),
             VoiceNodePlan::new(VoiceOp::Constant(1.0), Vec::new()),
-            VoiceNodePlan::with_buffer(VoiceOp::Waveguide, vec![0, 1, 2, 3, 4], 4096),
-            VoiceNodePlan::new(VoiceOp::Output, vec![5]),
+            VoiceNodePlan::new(VoiceOp::Constant(0.5), Vec::new()),
+            VoiceNodePlan::with_buffer(
+                VoiceOp::Waveguide,
+                vec![0, 1, 2, 3, 4, 5],
+                VOICE_DELAY_SAMPLES + 4,
+            ),
+            VoiceNodePlan::new(VoiceOp::Output, vec![6]),
         ];
-        let plan = VoicePlan::new(nodes, 6);
+        let plan = VoicePlan::new(nodes, 7);
         let context = |time| VoiceContext {
             pitch: 100.0,
             velocity: 1.0,
@@ -3092,7 +3110,11 @@ mod tests {
             iteration: 0,
         };
         assert!(plan.sample(context(0.0)).abs() < 1e-9);
-        assert!((plan.sample(context(0.01)) - 1.0).abs() < 0.1);
+        let mut late = 0.0;
+        for frame in 1..=960 {
+            late = plan.sample(context(f64::from(frame) / 48_000.0));
+        }
+        assert!(late > 0.2, "late={late}");
     }
 
     #[test]

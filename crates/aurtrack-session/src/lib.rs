@@ -1439,7 +1439,7 @@ fn compile_voice_inner(
             nodes.push(VoiceNodePlan::with_buffer(
                 VoiceOp::Waveguide,
                 inputs,
-                VOICE_DELAY_SAMPLES,
+                VOICE_DELAY_SAMPLES + 4,
             ));
             for port in aurtrack_graph::node_outputs(node, interface, groups)? {
                 indices.insert((id.clone(), port.id), index);

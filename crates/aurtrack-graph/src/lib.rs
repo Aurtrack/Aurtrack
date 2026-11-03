@@ -1088,7 +1088,7 @@ const HAMMER_INPUTS: [VoiceSocketSpec; 2] = [
         .with_range(0.0, 1.0)
         .with_step(0.01),
 ];
-const WAVEGUIDE_INPUTS: [VoiceSocketSpec; 5] = [
+const WAVEGUIDE_INPUTS: [VoiceSocketSpec; 6] = [
     VoiceSocketSpec::new("excitation", "Excitation", SocketType::Audio),
     VoiceSocketSpec::new("frequency", "Frequency", SocketType::Float)
         .with_default(261.63)
@@ -1103,6 +1103,10 @@ const WAVEGUIDE_INPUTS: [VoiceSocketSpec; 5] = [
         .with_range(0.0, 0.9999)
         .with_step(0.0001),
     VoiceSocketSpec::new("brightness", "Brightness", SocketType::Float)
+        .with_default(0.5)
+        .with_range(0.0, 1.0)
+        .with_step(0.01),
+    VoiceSocketSpec::new("stiffness", "Stiffness", SocketType::Float)
         .with_default(0.5)
         .with_range(0.0, 1.0)
         .with_step(0.01),
@@ -2533,11 +2537,14 @@ impl VoiceGraph {
             ("freq-right", "math.multiply", [300.0, 500.0]),
             ("sum", "voice.sum", [760.0, 220.0]),
             ("string-gain", "voice.vca", [760.0, 40.0]),
+            ("hammer-gain", "voice.vca", [560.0, 520.0]),
+            ("hammer-level", "value.float", [560.0, 600.0]),
             ("level", "value.float", [760.0, 820.0]),
             ("damper", "damper", [940.0, 220.0]),
             ("hardness", "value.float", [40.0, 580.0]),
             ("damping", "value.float", [40.0, 660.0]),
             ("brightness", "value.float", [40.0, 740.0]),
+            ("stiffness", "value.float", [40.0, 820.0]),
             ("release", "value.float", [760.0, 740.0]),
         ] {
             let id = NodeId::fixed(id);
@@ -2549,10 +2556,12 @@ impl VoiceGraph {
             ("ratio-left", 0.9995),
             ("ratio-right", 1.0005),
             ("hardness", 0.6),
-            ("damping", 0.997),
-            ("brightness", 0.6),
-            ("release", 0.01),
-            ("level", 0.33),
+            ("brightness", 0.8),
+            ("stiffness", 0.65),
+            ("release", 0.0002),
+            ("level", 1.5),
+            ("hammer-level", 0.12),
+            ("damping", 0.998),
         ] {
             if let Some(node) = graph.nodes.get_mut(&NodeId::fixed(id)) {
                 node.params.insert("value".to_string(), value);
@@ -2584,6 +2593,18 @@ impl VoiceGraph {
             VoiceConnection::new(
                 PortRef::new(NodeId::fixed("level"), "out"),
                 PortRef::new(NodeId::fixed("string-gain"), "gain"),
+            ),
+            VoiceConnection::new(
+                PortRef::new(NodeId::fixed("hammer"), "out"),
+                PortRef::new(NodeId::fixed("hammer-gain"), "in"),
+            ),
+            VoiceConnection::new(
+                PortRef::new(NodeId::fixed("hammer-level"), "out"),
+                PortRef::new(NodeId::fixed("hammer-gain"), "gain"),
+            ),
+            VoiceConnection::new(
+                PortRef::new(NodeId::fixed("hammer-gain"), "out"),
+                PortRef::new(NodeId::fixed("sum"), "in"),
             ),
             VoiceConnection::new(
                 PortRef::new(NodeId::fixed("string-gain"), "out"),
@@ -2621,6 +2642,10 @@ impl VoiceGraph {
                 VoiceConnection::new(
                     PortRef::new(NodeId::fixed("brightness"), "out"),
                     PortRef::new(string.clone(), "brightness"),
+                ),
+                VoiceConnection::new(
+                    PortRef::new(NodeId::fixed("stiffness"), "out"),
+                    PortRef::new(string.clone(), "stiffness"),
                 ),
                 VoiceConnection::new(
                     PortRef::new(string.clone(), "out"),
