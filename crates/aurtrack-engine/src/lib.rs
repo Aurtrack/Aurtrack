@@ -3710,6 +3710,40 @@ mod tests {
     }
 
     #[test]
+    fn group_fusion_preserves_input_order() {
+        let body = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Input(0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Input(1), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Multiply, vec![0, 1]),
+                VoiceNodePlan::new(VoiceOp::Output, vec![2]),
+            ],
+            3,
+        );
+        let mut plan = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Constant(2.0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(3.0), Vec::new()),
+                VoiceNodePlan::new(
+                    VoiceOp::GroupCall {
+                        body: Box::new(body),
+                        outputs: vec![3],
+                    },
+                    vec![0, 1],
+                ),
+                VoiceNodePlan::new(VoiceOp::GroupResult { source: 2, slot: 0 }, Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Output, vec![3]),
+            ],
+            4,
+        );
+        let before = plan.sample(test_context(0.0));
+        plan.fuse_group_calls();
+        let after = plan.sample(test_context(0.0));
+        assert!((before - 6.0).abs() < 1e-9, "before={before}");
+        assert!((after - 6.0).abs() < 1e-9, "after={after}");
+    }
+
+    #[test]
     fn voice_optimizer_folds_constants_and_dce() {
         let plan = VoicePlan::new(
             vec![
