@@ -3000,7 +3000,8 @@ impl VoiceGraph {
             "Audio",
             NodeGroupSocketType::Audio,
         )];
-        let mut partial = VoiceNode::new(NodeId::fixed("p-partial"), "voice.piano_partial");
+        let mut partial = VoiceNode::new(NodeId::fixed("p-partial"), "voice.group");
+        partial.group = Some("piano.partial".to_string());
         let mut partial_add = VoiceNode::new(NodeId::fixed("p-add"), "voice.add");
         for node in [&mut zone_in, &mut zone_out, &mut partial, &mut partial_add] {
             node.zone = Some("partials".to_string());
@@ -3022,7 +3023,7 @@ impl VoiceGraph {
             ("inharmonicity", "value.float", [40.0, 620.0]),
             ("brightness", "value.float", [40.0, 700.0]),
             ("decay", "value.float", [40.0, 780.0]),
-            ("position", "value.float", [40.0, 860.0]),
+            ("builtin-version", "value.float", [40.0, 860.0]),
         ] {
             let id = NodeId::fixed(id);
             let mut node = VoiceNode::new(id.clone(), ty);
@@ -3041,7 +3042,7 @@ impl VoiceGraph {
             ("inharmonicity", 0.00045),
             ("brightness", 0.75),
             ("decay", 2.2),
-            ("position", 0.12),
+            ("builtin-version", 2.0),
         ] {
             if let Some(node) = nodes.get_mut(&NodeId::fixed(id)) {
                 node.params.insert("value".to_string(), value);
@@ -3096,15 +3097,11 @@ impl VoiceGraph {
                 PortRef::new(NodeId::fixed("p-partial"), "decay"),
             ),
             VoiceConnection::new(
-                PortRef::new(NodeId::fixed("position"), "out"),
-                PortRef::new(NodeId::fixed("p-partial"), "position"),
-            ),
-            VoiceConnection::new(
                 PortRef::new(NodeId::fixed("p-in"), "out"),
                 PortRef::new(NodeId::fixed("p-add"), "in1"),
             ),
             VoiceConnection::new(
-                PortRef::new(NodeId::fixed("p-partial"), "out"),
+                PortRef::new(NodeId::fixed("p-partial"), "audio"),
                 PortRef::new(NodeId::fixed("p-add"), "in2"),
             ),
             VoiceConnection::new(

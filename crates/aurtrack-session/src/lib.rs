@@ -1305,6 +1305,38 @@ fn compile_voice_inner(
             let group = groups
                 .get(group_id)
                 .ok_or_else(|| GraphError::GroupMissing(group_id.to_string()))?;
+            if group_id == "piano.partial" && group == &NodeGroup::partial_default() {
+                let mut op_inputs = Vec::with_capacity(group.interface.inputs.len());
+                for socket in &group.interface.inputs {
+                    let source = incoming
+                        .iter()
+                        .find(|connection| connection.to.port() == socket.id)
+                        .and_then(|connection| {
+                            indices
+                                .get(&(
+                                    connection.from.node().clone(),
+                                    connection.from.port().to_string(),
+                                ))
+                                .copied()
+                        })
+                        .unwrap_or_else(|| {
+                            let value = node
+                                .params
+                                .get(&socket.id)
+                                .copied()
+                                .or_else(|| socket.effective_default())
+                                .unwrap_or(0.0);
+                            let index = nodes.len();
+                            nodes.push(VoiceNodePlan::new(VoiceOp::Constant(value), Vec::new()));
+                            index
+                        });
+                    op_inputs.push(source);
+                }
+                let index = nodes.len();
+                nodes.push(VoiceNodePlan::new(VoiceOp::PianoPartial, op_inputs));
+                indices.insert((id.clone(), "audio".to_string()), index);
+                continue;
+            }
             if group
                 .interface
                 .inputs
@@ -1880,21 +1912,10 @@ fn upgrade_builtin_piano_groups(project: &mut Project) -> usize {
         .get("piano.physical")
         .is_some_and(|group| {
             group.name == "Physical Piano Voice"
-                && (group
+                && !group
                     .graph
                     .nodes
-                    .values()
-                    .any(|node| node.type_id == "string.waveguide")
-                    || group
-                        .graph
-                        .nodes
-                        .values()
-                        .any(|node| node.group.as_deref() == Some("piano.partial"))
-                    || !group
-                        .graph
-                        .nodes
-                        .values()
-                        .any(|node| node.type_id == "voice.piano_partial"))
+                    .contains_key(&NodeId::fixed("builtin-version"))
         });
     if old_physical {
         project
@@ -7038,6 +7059,10 @@ mod buffer_tests {
             })
             .unwrap();
         let project = session.project().unwrap();
+        assert_eq!(
+            project.node_groups["piano.partial"],
+            NodeGroup::partial_default()
+        );
         let physical = &project.node_groups["piano.physical"];
         assert!(
             !physical
@@ -7051,7 +7076,7 @@ mod buffer_tests {
                 .graph
                 .nodes
                 .values()
-                .any(|node| node.type_id == "voice.piano_partial")
+                .any(|node| node.group.as_deref() == Some("piano.partial"))
         );
         assert!(
             project.node_groups["piano.partial"]
@@ -7112,6 +7137,28 @@ mod buffer_tests {
                 .as_ref()
                 .is_some_and(|voice| voice.nodes.len() < 200),
             "物理钢琴的展开节点数应保持在线性成本范围"
+        );
+        let voice = plan.pianos[0].voice.as_ref().unwrap();
+        let repeat = voice.nodes.iter().find_map(|node| match &node.op {
+            VoiceOp::Repeat { body, .. } => Some(body.as_ref()),
+            _ => None,
+        });
+        let Some(repeat) = repeat else {
+            panic!("物理钢琴应有 partial repeat");
+        };
+        assert_eq!(
+            repeat
+                .nodes
+                .iter()
+                .filter(|node| matches!(node.op, VoiceOp::PianoPartial))
+                .count(),
+            1
+        );
+        assert!(
+            repeat
+                .nodes
+                .iter()
+                .all(|node| !matches!(node.op, VoiceOp::GroupCall { .. }))
         );
         assert!(
             project.tracks[0]
