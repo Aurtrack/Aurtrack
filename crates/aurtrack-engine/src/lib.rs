@@ -589,10 +589,35 @@ struct CompiledInstruction {
 }
 
 /// 寄存器式表达式程序；音频线程在固定数组上执行。
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct CompiledVoice {
     instructions: Vec<CompiledInstruction>,
     root: usize,
+    jit: Option<std::sync::Arc<JitVoice>>,
+}
+
+struct JitVoice {
+    _module: usize,
+    entry: JitEntry,
+}
+
+type JitEntry = extern "C" fn(f64, f64, f64, f64, f64, f64, f64, *const f64) -> f64;
+
+impl std::fmt::Debug for JitVoice {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("JitVoice")
+    }
+}
+
+impl std::fmt::Debug for CompiledVoice {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CompiledVoice")
+            .field("instructions", &self.instructions.len())
+            .field("root", &self.root)
+            .field("jit", &self.jit.is_some())
+            .finish()
+    }
 }
 
 impl CompiledVoice {
@@ -600,10 +625,32 @@ impl CompiledVoice {
         let mut instructions = Vec::new();
         let mut registers = 0;
         let root = compile_expr(expr, &mut instructions, &mut registers)?;
-        (registers <= 256).then_some(Self { instructions, root })
+        if registers > 256 {
+            return None;
+        }
+        let jit = build_jit_voice(&instructions, root)
+            .ok()
+            .map(std::sync::Arc::new);
+        Some(Self {
+            instructions,
+            root,
+            jit,
+        })
     }
 
     fn eval(&self, context: &VoiceContext, inputs: &[f64]) -> f64 {
+        if let Some(jit) = &self.jit {
+            return (jit.entry)(
+                context.pitch,
+                context.velocity,
+                context.local_time,
+                f64::from(u8::from(context.gate)),
+                context.seed as f64,
+                context.note_index as f64,
+                context.iteration as f64,
+                inputs.as_ptr(),
+            );
+        }
         let mut values = [0.0_f64; 256];
         for instruction in &self.instructions {
             let operands = instruction.operands;
@@ -789,6 +836,250 @@ fn compile_expr(
             Some(emit!(CompiledOp::Sine, [frequency, time, phase, 0, 0]))
         },
     }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn aurtrack_jit_sin(value: f64) -> f64 {
+    value.sin()
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn aurtrack_jit_exp(value: f64) -> f64 {
+    value.exp()
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn aurtrack_jit_pow(base: f64, exponent: f64) -> f64 {
+    base.powf(exponent)
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn aurtrack_jit_gt(a: f64, b: f64) -> f64 {
+    f64::from(u8::from(a > b))
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn aurtrack_jit_lt(a: f64, b: f64) -> f64 {
+    f64::from(u8::from(a < b))
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn aurtrack_jit_mod(a: f64, b: f64) -> f64 {
+    if b == 0.0 { 0.0 } else { a % b }
+}
+
+#[unsafe(no_mangle)]
+extern "C" fn aurtrack_jit_map(
+    value: f64,
+    in_min: f64,
+    in_max: f64,
+    out_min: f64,
+    out_max: f64,
+) -> f64 {
+    let span = in_max - in_min;
+    if span.abs() < 1e-12 {
+        out_min
+    } else {
+        out_min + (value - in_min) / span * (out_max - out_min)
+    }
+}
+
+#[allow(
+    clippy::too_many_lines,
+    clippy::expect_used,
+    clippy::cast_possible_truncation,
+    clippy::cast_possible_wrap
+)]
+fn build_jit_voice(instructions: &[CompiledInstruction], root: usize) -> Result<JitVoice, ()> {
+    use cranelift_codegen::ir::{AbiParam, InstBuilder, MemFlags, UserFuncName, types};
+    use cranelift_frontend::{FunctionBuilder, FunctionBuilderContext};
+    use cranelift_module::{Linkage, Module};
+
+    let mut builder = cranelift_jit::JITBuilder::new(cranelift_module::default_libcall_names())
+        .map_err(|_| ())?;
+    builder.symbol("aurtrack_jit_sin", aurtrack_jit_sin as *const u8);
+    builder.symbol("aurtrack_jit_exp", aurtrack_jit_exp as *const u8);
+    builder.symbol("aurtrack_jit_pow", aurtrack_jit_pow as *const u8);
+    builder.symbol("aurtrack_jit_mod", aurtrack_jit_mod as *const u8);
+    builder.symbol("aurtrack_jit_gt", aurtrack_jit_gt as *const u8);
+    builder.symbol("aurtrack_jit_lt", aurtrack_jit_lt as *const u8);
+    builder.symbol("aurtrack_jit_map", aurtrack_jit_map as *const u8);
+    let mut module = cranelift_jit::JITModule::new(builder);
+    let pointer_type = module.target_config().pointer_type();
+    let mut signature = module.make_signature();
+    for _ in 0..7 {
+        signature.params.push(AbiParam::new(types::F64));
+    }
+    signature.params.push(AbiParam::new(pointer_type));
+    signature.returns.push(AbiParam::new(types::F64));
+    let mut context = module.make_context();
+    context.func.signature = signature.clone();
+    context.func.name = UserFuncName::user(0, 0);
+    let mut function_context = FunctionBuilderContext::new();
+    let mut builder = FunctionBuilder::new(&mut context.func, &mut function_context);
+    let entry = builder.create_block();
+    builder.append_block_params_for_function_params(entry);
+    builder.switch_to_block(entry);
+    builder.seal_block(entry);
+    let params = builder.block_params(entry).to_vec();
+    let input_pointer = params[7];
+    let mut variables = Vec::with_capacity(instructions.len());
+    for _ in 0..instructions.len() {
+        variables.push(builder.declare_var(types::F64));
+    }
+    let mut call_helper =
+        |builder: &mut FunctionBuilder<'_>, name: &str, args: &[cranelift_codegen::ir::Value]| {
+            let mut helper = module.make_signature();
+            for _ in args {
+                helper.params.push(AbiParam::new(types::F64));
+            }
+            helper.returns.push(AbiParam::new(types::F64));
+            let id = module
+                .declare_function(name, Linkage::Import, &helper)
+                .expect("JIT helper");
+            let reference = module.declare_func_in_func(id, builder.func);
+            let call = builder.ins().call(reference, args);
+            builder.inst_results(call)[0]
+        };
+    let mut common_values = std::collections::HashMap::new();
+    for (index, instruction) in instructions.iter().enumerate() {
+        let operands = instruction.operands;
+        let key = format!("{:?}:{operands:?}", instruction.op);
+        if let Some(existing) = common_values.get(&key).copied() {
+            builder.def_var(variables[index], existing);
+            continue;
+        }
+        let mut value = |slot: usize| builder.use_var(variables[operands[slot]]);
+        let value = match instruction.op {
+            CompiledOp::Constant(value) => builder.ins().f64const(value),
+            CompiledOp::External(slot) => builder.ins().load(
+                types::F64,
+                MemFlags::trusted(),
+                input_pointer,
+                (slot * 8) as i32,
+            ),
+            CompiledOp::ContextPitch => params[0],
+            CompiledOp::ContextVelocity => params[1],
+            CompiledOp::ContextTime => params[2],
+            CompiledOp::ContextGate => params[3],
+            CompiledOp::Add => {
+                let a = value(0);
+                let b = value(1);
+                builder.ins().fadd(a, b)
+            },
+            CompiledOp::Subtract => {
+                let a = value(0);
+                let b = value(1);
+                builder.ins().fsub(a, b)
+            },
+            CompiledOp::Multiply => {
+                let a = value(0);
+                let b = value(1);
+                builder.ins().fmul(a, b)
+            },
+            CompiledOp::Divide => {
+                let a = value(0);
+                let b = value(1);
+                let zero = builder.ins().f64const(0.0);
+                let is_zero =
+                    builder
+                        .ins()
+                        .fcmp(cranelift_codegen::ir::condcodes::FloatCC::Equal, b, zero);
+                let zero_value = builder.ins().f64const(0.0);
+                let quotient = builder.ins().fdiv(a, b);
+                builder.ins().select(is_zero, zero_value, quotient)
+            },
+            CompiledOp::Power => {
+                let a = value(0);
+                let b = value(1);
+                call_helper(&mut builder, "aurtrack_jit_pow", &[a, b])
+            },
+            CompiledOp::Modulo => {
+                let a = value(0);
+                let b = value(1);
+                call_helper(&mut builder, "aurtrack_jit_mod", &[a, b])
+            },
+            CompiledOp::Floor => {
+                let a = value(0);
+                builder.ins().floor(a)
+            },
+            CompiledOp::Ceil => {
+                let a = value(0);
+                builder.ins().ceil(a)
+            },
+            CompiledOp::Round => {
+                let a = value(0);
+                builder.ins().nearest(a)
+            },
+            CompiledOp::Exp => {
+                let a = value(0);
+                call_helper(&mut builder, "aurtrack_jit_exp", &[a])
+            },
+            CompiledOp::Sqrt => {
+                let a = value(0);
+                builder.ins().sqrt(a)
+            },
+            CompiledOp::Sin => {
+                let a = value(0);
+                call_helper(&mut builder, "aurtrack_jit_sin", &[a])
+            },
+            CompiledOp::Abs => {
+                let a = value(0);
+                builder.ins().fabs(a)
+            },
+            CompiledOp::GreaterThan => {
+                let a = value(0);
+                let b = value(1);
+                call_helper(&mut builder, "aurtrack_jit_gt", &[a, b])
+            },
+            CompiledOp::LessThan => {
+                let a = value(0);
+                let b = value(1);
+                call_helper(&mut builder, "aurtrack_jit_lt", &[a, b])
+            },
+            CompiledOp::MapRange => {
+                let values = [value(0), value(1), value(2), value(3), value(4)];
+                call_helper(&mut builder, "aurtrack_jit_map", &values)
+            },
+            CompiledOp::Clamp => {
+                let clamped_value = value(0);
+                let min = value(1);
+                let max = value(2);
+                let clamped = builder.ins().fmax(clamped_value, min);
+                builder.ins().fmin(clamped, max)
+            },
+            CompiledOp::Sine => {
+                let frequency = value(0);
+                let time = value(1);
+                let phase = value(2);
+                let tau = builder.ins().f64const(std::f64::consts::TAU);
+                let angle = builder.ins().fmul(frequency, tau);
+                let angle = builder.ins().fmul(angle, time);
+                let angle = builder.ins().fadd(angle, phase);
+                call_helper(&mut builder, "aurtrack_jit_sin", &[angle])
+            },
+        };
+        common_values.insert(key, value);
+        builder.def_var(variables[index], value);
+    }
+    let result = builder.use_var(variables[root]);
+    builder.ins().return_(&[result]);
+    builder.finalize();
+    let id = module
+        .declare_function("aurtrack_voice_expr", Linkage::Export, &signature)
+        .map_err(|_| ())?;
+    module.define_function(id, &mut context).map_err(|_| ())?;
+    module.clear_context(&mut context);
+    module.finalize_definitions().map_err(|_| ())?;
+    let pointer = module.get_finalized_function(id);
+    // SAFETY: 函数签名由上方 signature 定义，参数与 eval 调用一致。
+    let entry: JitEntry = unsafe { std::mem::transmute(pointer) };
+    // NOTE: JIT 代码页必须活到进程结束；模块只在此处泄漏一次。
+    let module_address = Box::into_raw(Box::new(module)) as usize;
+    Ok(JitVoice {
+        _module: module_address,
+        entry,
+    })
 }
 
 fn compile_binary(

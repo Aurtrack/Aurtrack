@@ -8,6 +8,10 @@ repository.workspace = true
 
 [dependencies]
 arc-swap = "1"
+cranelift-codegen = "0.125"
+cranelift-frontend = "0.125"
+cranelift-jit = "0.125"
+cranelift-module = "0.125"
 
 [lints]
 workspace = true
