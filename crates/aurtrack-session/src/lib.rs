@@ -7050,6 +7050,93 @@ mod buffer_tests {
 
     #[test]
     #[ignore = "已知融合后计划输出不一致，待定位"]
+    fn fusion_independent_plans() {
+        use aurtrack_engine::VoiceContext;
+
+        let mut session = Session::default();
+        session
+            .execute(&CommandRequest {
+                cmd: "project.create".to_string(),
+                args: json!({ "name": "fusion" }),
+            })
+            .unwrap();
+        session
+            .execute(&CommandRequest {
+                cmd: "track.create".to_string(),
+                args: json!({ "name": "piano", "source": "physical" }),
+            })
+            .unwrap();
+        let mut project = session.project().unwrap().clone();
+        let mut custom = project.node_groups["piano.partial"].clone();
+        custom.id = "custom.partial".to_string();
+        custom
+            .graph
+            .nodes
+            .get_mut(&NodeId::fixed("gain"))
+            .unwrap()
+            .params
+            .insert("value".to_string(), 0.180_000_1);
+        project
+            .node_groups
+            .insert("custom.partial".to_string(), custom);
+        project
+            .node_groups
+            .get_mut("piano.physical")
+            .unwrap()
+            .graph
+            .nodes
+            .get_mut(&NodeId::fixed("p-partial"))
+            .unwrap()
+            .group = Some("custom.partial".to_string());
+        let compile = || {
+            project.tracks[0]
+                .playback_graph(&project.node_groups, &project.audio_groups)
+                .unwrap()
+                .2
+        };
+        let plan_a = compile();
+        let plan_b = compile();
+        let voice_a = plan_a.pianos[0].voice.as_ref().unwrap();
+        let voice_b = plan_b.pianos[0].voice.as_ref().unwrap();
+        let body = voice_b
+            .nodes
+            .iter()
+            .find_map(|node| match &node.op {
+                VoiceOp::Repeat { body, .. } => Some(body.as_ref()),
+                _ => None,
+            })
+            .unwrap();
+        let mut body = body.clone();
+        body.fuse_group_calls();
+        let body = body.optimize();
+        let mut fused_voice = voice_b.clone();
+        if let Some(node) = fused_voice
+            .nodes
+            .iter_mut()
+            .find(|node| matches!(node.op, VoiceOp::Repeat { .. }))
+        {
+            if let VoiceOp::Repeat { body: slot, .. } = &mut node.op {
+                *slot = Box::new(body);
+            }
+        }
+        for time in [0.001, 0.01, 0.1, 0.5] {
+            let context = VoiceContext {
+                pitch: 440.0,
+                velocity: 0.9,
+                local_time: time,
+                gate: true,
+                seed: 0,
+                note_index: 0,
+                iteration: 0,
+            };
+            let before = voice_a.sample(context);
+            let after = fused_voice.sample(context);
+            eprintln!("time={time} before={before} after={after}");
+        }
+    }
+
+    #[test]
+    #[ignore = "已知融合后计划输出不一致，待定位"]
     fn fusion_matches_expanded_piano() {
         use aurtrack_engine::VoiceContext;
 
