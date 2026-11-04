@@ -7091,22 +7091,36 @@ mod buffer_tests {
         let (_, _, plan) = project.tracks[0]
             .playback_graph(&project.node_groups, &project.audio_groups)
             .unwrap();
-        let voice = plan.pianos[0].voice.as_ref().unwrap().clone();
-        let mut fused = voice.clone();
+        let voice = plan.pianos[0].voice.as_ref().unwrap();
+        let body = voice
+            .nodes
+            .iter()
+            .find_map(|node| match &node.op {
+                VoiceOp::Repeat { body, .. } => Some(body.as_ref()),
+                _ => None,
+            })
+            .unwrap();
+        let mut fused = body.clone();
         fused.fuse_group_calls();
-        for time in [0.001, 0.01, 0.1, 0.5, 1.0] {
-            let context = VoiceContext {
-                pitch: 440.0,
-                velocity: 0.9,
-                local_time: time,
-                gate: true,
-                seed: 0,
-                note_index: 0,
-                iteration: 0,
-            };
-            let before = voice.sample(context);
-            let after = fused.sample(context);
-            eprintln!("time={time} before={before} after={after}");
+        let fused = fused.optimize();
+        for index in 0..12 {
+            for time in [0.001, 0.01, 0.1] {
+                let context = VoiceContext {
+                    pitch: 440.0,
+                    velocity: 0.9,
+                    local_time: time,
+                    gate: true,
+                    seed: 0,
+                    note_index: 0,
+                    iteration: 0,
+                };
+                let values = [0.0, 440.0, 0.9, time, index as f64, 0.0004, 0.5, 1.2];
+                let before = body.sample_with_inputs(context, &values);
+                let after = fused.sample_with_inputs(context, &values);
+                if (before - after).abs() > 1e-12 {
+                    eprintln!("index={index} time={time} before={before} after={after}");
+                }
+            }
         }
     }
 
