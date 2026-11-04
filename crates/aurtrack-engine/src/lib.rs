@@ -195,14 +195,18 @@ impl VoicePlan {
                     fused.clear();
                     break;
                 };
-                fused.push((result_index, expr, node.inputs.clone()));
+                let Some(compiled) = CompiledVoice::compile(&expr) else {
+                    fused.clear();
+                    break;
+                };
+                fused.push((result_index, compiled, node.inputs.clone()));
             }
             if !fused.is_empty() {
                 replacements.extend(fused);
             }
         }
         for (index, expr, inputs) in replacements {
-            self.nodes[index].op = VoiceOp::Expression(expr);
+            self.nodes[index].op = VoiceOp::Expression(Arc::new(expr));
             self.nodes[index].inputs = inputs;
         }
     }
@@ -477,6 +481,7 @@ pub enum VoiceExpr {
     },
 }
 
+#[allow(dead_code)]
 impl VoiceExpr {
     fn eval(&self, context: &VoiceContext, source: &dyn Fn(usize) -> f64) -> f64 {
         match self {
@@ -548,6 +553,263 @@ impl VoiceExpr {
     }
 }
 
+#[derive(Debug, Clone)]
+enum CompiledOp {
+    Constant(f64),
+    External(usize),
+    ContextPitch,
+    ContextVelocity,
+    ContextTime,
+    ContextGate,
+    Add,
+    Subtract,
+    Multiply,
+    Divide,
+    Power,
+    Modulo,
+    Floor,
+    Ceil,
+    Round,
+    Exp,
+    Sqrt,
+    Sin,
+    Abs,
+    GreaterThan,
+    LessThan,
+    MapRange,
+    Clamp,
+    Sine,
+}
+
+#[derive(Debug, Clone)]
+struct CompiledInstruction {
+    op: CompiledOp,
+    destination: usize,
+    operands: [usize; 5],
+}
+
+/// 寄存器式表达式程序；音频线程在固定数组上执行。
+#[derive(Debug, Clone)]
+pub struct CompiledVoice {
+    instructions: Vec<CompiledInstruction>,
+    root: usize,
+}
+
+impl CompiledVoice {
+    fn compile(expr: &VoiceExpr) -> Option<Self> {
+        let mut instructions = Vec::new();
+        let mut registers = 0;
+        let root = compile_expr(expr, &mut instructions, &mut registers)?;
+        (registers <= 256).then_some(Self { instructions, root })
+    }
+
+    fn eval(&self, context: &VoiceContext, inputs: &[f64]) -> f64 {
+        let mut values = [0.0_f64; 256];
+        for instruction in &self.instructions {
+            let operands = instruction.operands;
+            values[instruction.destination] = match instruction.op {
+                CompiledOp::Constant(value) => value,
+                CompiledOp::External(slot) => inputs.get(slot).copied().unwrap_or(0.0),
+                CompiledOp::ContextPitch => context.pitch,
+                CompiledOp::ContextVelocity => context.velocity,
+                CompiledOp::ContextTime => context.local_time,
+                CompiledOp::ContextGate => f64::from(u8::from(context.gate)),
+                CompiledOp::Add => values[operands[0]] + values[operands[1]],
+                CompiledOp::Subtract => values[operands[0]] - values[operands[1]],
+                CompiledOp::Multiply => values[operands[0]] * values[operands[1]],
+                CompiledOp::Divide => {
+                    if values[operands[1]] == 0.0 {
+                        0.0
+                    } else {
+                        values[operands[0]] / values[operands[1]]
+                    }
+                },
+                CompiledOp::Power => values[operands[0]].powf(values[operands[1]]),
+                CompiledOp::Modulo => {
+                    if values[operands[1]] == 0.0 {
+                        0.0
+                    } else {
+                        values[operands[0]] % values[operands[1]]
+                    }
+                },
+                CompiledOp::Floor => values[operands[0]].floor(),
+                CompiledOp::Ceil => values[operands[0]].ceil(),
+                CompiledOp::Round => values[operands[0]].round(),
+                CompiledOp::Exp => values[operands[0]].exp(),
+                CompiledOp::Sqrt => values[operands[0]].max(0.0).sqrt(),
+                CompiledOp::Sin => values[operands[0]].sin(),
+                CompiledOp::Abs => values[operands[0]].abs(),
+                CompiledOp::GreaterThan => {
+                    f64::from(u8::from(values[operands[0]] > values[operands[1]]))
+                },
+                CompiledOp::LessThan => {
+                    f64::from(u8::from(values[operands[0]] < values[operands[1]]))
+                },
+                CompiledOp::MapRange => {
+                    let value = values[operands[0]];
+                    let in_min = values[operands[1]];
+                    let in_max = values[operands[2]];
+                    let out_min = values[operands[3]];
+                    let out_max = values[operands[4]];
+                    let span = in_max - in_min;
+                    if span.abs() < 1e-12 {
+                        out_min
+                    } else {
+                        out_min + (value - in_min) / span * (out_max - out_min)
+                    }
+                },
+                CompiledOp::Clamp => {
+                    values[operands[0]].clamp(values[operands[1]], values[operands[2]])
+                },
+                CompiledOp::Sine => {
+                    (std::f64::consts::TAU * values[operands[0]] * values[operands[1]]
+                        + values[operands[2]])
+                        .sin()
+                },
+            };
+        }
+        values[self.root]
+    }
+}
+
+fn compile_expr(
+    expr: &VoiceExpr,
+    instructions: &mut Vec<CompiledInstruction>,
+    registers: &mut usize,
+) -> Option<usize> {
+    macro_rules! emit {
+        ($op:expr, $operands:expr) => {{
+            let destination = *registers;
+            *registers += 1;
+            instructions.push(CompiledInstruction {
+                op: $op,
+                destination,
+                operands: $operands,
+            });
+            destination
+        }};
+    }
+    match expr {
+        VoiceExpr::External(slot) => {
+            let destination = *registers;
+            *registers += 1;
+            instructions.push(CompiledInstruction {
+                op: CompiledOp::External(*slot),
+                destination,
+                operands: [0; 5],
+            });
+            Some(destination)
+        },
+        VoiceExpr::Constant(value) => {
+            let destination = *registers;
+            *registers += 1;
+            instructions.push(CompiledInstruction {
+                op: CompiledOp::Constant(*value),
+                destination,
+                operands: [0; 5],
+            });
+            Some(destination)
+        },
+        VoiceExpr::ContextPitch
+        | VoiceExpr::ContextVelocity
+        | VoiceExpr::ContextTime
+        | VoiceExpr::ContextGate => {
+            let op = match expr {
+                VoiceExpr::ContextPitch => CompiledOp::ContextPitch,
+                VoiceExpr::ContextVelocity => CompiledOp::ContextVelocity,
+                VoiceExpr::ContextTime => CompiledOp::ContextTime,
+                _ => CompiledOp::ContextGate,
+            };
+            Some(emit!(op, [0; 5]))
+        },
+        VoiceExpr::Add(a, b) => compile_binary(a, b, instructions, registers, CompiledOp::Add),
+        VoiceExpr::Subtract(a, b) => {
+            compile_binary(a, b, instructions, registers, CompiledOp::Subtract)
+        },
+        VoiceExpr::Multiply(a, b) => {
+            compile_binary(a, b, instructions, registers, CompiledOp::Multiply)
+        },
+        VoiceExpr::Divide(a, b) => {
+            compile_binary(a, b, instructions, registers, CompiledOp::Divide)
+        },
+        VoiceExpr::Power(a, b) => compile_binary(a, b, instructions, registers, CompiledOp::Power),
+        VoiceExpr::Modulo(a, b) => {
+            compile_binary(a, b, instructions, registers, CompiledOp::Modulo)
+        },
+        VoiceExpr::GreaterThan(a, b) => {
+            compile_binary(a, b, instructions, registers, CompiledOp::GreaterThan)
+        },
+        VoiceExpr::LessThan(a, b) => {
+            compile_binary(a, b, instructions, registers, CompiledOp::LessThan)
+        },
+        VoiceExpr::Floor(a)
+        | VoiceExpr::Ceil(a)
+        | VoiceExpr::Round(a)
+        | VoiceExpr::Exp(a)
+        | VoiceExpr::Sqrt(a)
+        | VoiceExpr::Sin(a)
+        | VoiceExpr::Abs(a) => {
+            let source = compile_expr(a, instructions, registers)?;
+            let op = match expr {
+                VoiceExpr::Floor(_) => CompiledOp::Floor,
+                VoiceExpr::Ceil(_) => CompiledOp::Ceil,
+                VoiceExpr::Round(_) => CompiledOp::Round,
+                VoiceExpr::Exp(_) => CompiledOp::Exp,
+                VoiceExpr::Sqrt(_) => CompiledOp::Sqrt,
+                VoiceExpr::Sin(_) => CompiledOp::Sin,
+                _ => CompiledOp::Abs,
+            };
+            Some(emit!(op, [source, 0, 0, 0, 0]))
+        },
+        VoiceExpr::Clamp(value, min, max) => {
+            let value = compile_expr(value, instructions, registers)?;
+            let min = compile_expr(min, instructions, registers)?;
+            let max = compile_expr(max, instructions, registers)?;
+            Some(emit!(CompiledOp::Clamp, [value, min, max, 0, 0]))
+        },
+        VoiceExpr::MapRange(value, in_min, in_max, out_min, out_max) => {
+            let value = compile_expr(value, instructions, registers)?;
+            let in_min = compile_expr(in_min, instructions, registers)?;
+            let in_max = compile_expr(in_max, instructions, registers)?;
+            let out_min = compile_expr(out_min, instructions, registers)?;
+            let out_max = compile_expr(out_max, instructions, registers)?;
+            Some(emit!(
+                CompiledOp::MapRange,
+                [value, in_min, in_max, out_min, out_max]
+            ))
+        },
+        VoiceExpr::Sine {
+            frequency,
+            phase,
+            time,
+        } => {
+            let frequency = compile_expr(frequency, instructions, registers)?;
+            let time = compile_expr(time, instructions, registers)?;
+            let phase = compile_expr(phase, instructions, registers)?;
+            Some(emit!(CompiledOp::Sine, [frequency, time, phase, 0, 0]))
+        },
+    }
+}
+
+fn compile_binary(
+    a: &VoiceExpr,
+    b: &VoiceExpr,
+    instructions: &mut Vec<CompiledInstruction>,
+    registers: &mut usize,
+    op: CompiledOp,
+) -> Option<usize> {
+    let a = compile_expr(a, instructions, registers)?;
+    let b = compile_expr(b, instructions, registers)?;
+    let destination = *registers;
+    *registers += 1;
+    instructions.push(CompiledInstruction {
+        op,
+        destination,
+        operands: [a, b, 0, 0, 0],
+    });
+    Some(destination)
+}
+
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum VoiceOp {
@@ -599,7 +861,7 @@ pub enum VoiceOp {
         source: usize,
         slot: usize,
     },
-    Expression(VoiceExpr),
+    Expression(Arc<CompiledVoice>),
     OscPartials {
         partials: usize,
         inharmonicity: f64,
@@ -1461,11 +1723,14 @@ impl VoicePlan {
                         .get(base)
                         .map_or(0.0, |value| f64::from_bits(value.load(Ordering::Relaxed)))
                 },
-                VoiceOp::Expression(ref expr) => expr.eval(&context, &|slot| {
-                    node.inputs
-                        .get(slot)
-                        .map_or(0.0, |index| scratch_value(*index))
-                }),
+                VoiceOp::Expression(ref expr) => {
+                    let mut local_inputs = [0.0_f64; 16];
+                    let count = node.inputs.len().min(local_inputs.len());
+                    for (slot, input) in node.inputs.iter().take(count).enumerate() {
+                        local_inputs[slot] = scratch_value(*input);
+                    }
+                    expr.eval(&context, &local_inputs[..count])
+                },
                 VoiceOp::Repeat {
                     ref zone,
                     ref body,
