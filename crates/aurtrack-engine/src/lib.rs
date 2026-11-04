@@ -18,7 +18,7 @@
     clippy::too_many_lines
 )]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
 
@@ -139,6 +139,205 @@ impl VoicePlan {
     pub fn sample_node(&self, node_id: &str, context: VoiceContext) -> Option<f64> {
         let target = *self.node_outputs.get(node_id)?;
         self.sample_internal(context, &[], Some(target))
+    }
+
+    /// 编译期通用优化：嵌套子计划、常量折叠、代数化简、CSE 和死代码消除。
+    #[must_use]
+    pub fn optimize(mut self) -> Self {
+        self.optimize_bodies();
+        for _ in 0..2 {
+            self.simplify_and_fold();
+            self.common_subexpressions();
+            self.remove_dead_nodes();
+        }
+        self
+    }
+
+    fn optimize_bodies(&mut self) {
+        for node in &mut self.nodes {
+            if let VoiceOp::Repeat { body, .. } | VoiceOp::GroupCall { body, .. } = &mut node.op {
+                let placeholder = VoicePlan::new(Vec::new(), 0);
+                let old = std::mem::replace(body.as_mut(), placeholder);
+                *body = Box::new(old.optimize());
+            }
+        }
+    }
+
+    fn simplify_and_fold(&mut self) {
+        let mut values: Vec<Option<f64>> = vec![None; self.nodes.len()];
+        for index in 0..self.nodes.len() {
+            let inputs: Vec<Option<f64>> = self.nodes[index]
+                .inputs
+                .iter()
+                .map(|input| values.get(*input).copied().flatten())
+                .collect();
+            if let VoiceOp::Add = self.nodes[index].op {
+                let kept: Vec<usize> = self.nodes[index]
+                    .inputs
+                    .iter()
+                    .zip(&inputs)
+                    .filter_map(|(input, value)| (*value != Some(0.0)).then_some(*input))
+                    .collect();
+                if kept.len() != self.nodes[index].inputs.len() {
+                    self.nodes[index].inputs = kept;
+                }
+            }
+            if let VoiceOp::Multiply = self.nodes[index].op {
+                if inputs.contains(&Some(0.0)) {
+                    self.nodes[index].op = VoiceOp::Constant(0.0);
+                    self.nodes[index].inputs.clear();
+                    values[index] = Some(0.0);
+                    continue;
+                }
+                let kept: Vec<usize> = self.nodes[index]
+                    .inputs
+                    .iter()
+                    .zip(&inputs)
+                    .filter_map(|(input, value)| (*value != Some(1.0)).then_some(*input))
+                    .collect();
+                if kept.len() != self.nodes[index].inputs.len() {
+                    self.nodes[index].inputs = kept;
+                }
+            }
+            if let VoiceOp::Subtract = self.nodes[index].op
+                && inputs.get(1) == Some(&Some(0.0))
+            {
+                self.nodes[index].op = VoiceOp::Add;
+                self.nodes[index].inputs.truncate(1);
+            }
+            if let VoiceOp::Divide = self.nodes[index].op
+                && inputs.get(1) == Some(&Some(1.0))
+            {
+                self.nodes[index].op = VoiceOp::Add;
+                self.nodes[index].inputs.truncate(1);
+            }
+            if let VoiceOp::Power = self.nodes[index].op
+                && inputs.get(1) == Some(&Some(1.0))
+            {
+                self.nodes[index].op = VoiceOp::Add;
+                self.nodes[index].inputs.truncate(1);
+            }
+            let all_constant =
+                !self.nodes[index].inputs.is_empty() && inputs.iter().all(Option::is_some);
+            let folded = if all_constant {
+                let constants: Vec<f64> = inputs.iter().filter_map(|value| *value).collect();
+                eval_constant(&self.nodes[index].op, &constants)
+            } else {
+                None
+            };
+            if let Some(value) = folded {
+                self.nodes[index].op = VoiceOp::Constant(value);
+                self.nodes[index].inputs.clear();
+                values[index] = Some(value);
+            } else if let VoiceOp::Constant(value) = self.nodes[index].op {
+                values[index] = Some(value);
+            }
+        }
+    }
+
+    fn common_subexpressions(&mut self) {
+        let mut seen: HashMap<String, usize> = HashMap::new();
+        let mut replace: BTreeMap<usize, usize> = BTreeMap::new();
+        let roots: Vec<usize> = self
+            .outputs
+            .values()
+            .chain(self.node_outputs.values())
+            .copied()
+            .chain(std::iter::once(self.output))
+            .collect();
+        for index in 0..self.nodes.len() {
+            if roots.contains(&index) {
+                continue;
+            }
+            let Some(key) = pure_key(&self.nodes[index]) else {
+                continue;
+            };
+            if let Some(canonical) = seen.get(&key) {
+                replace.insert(index, *canonical);
+            } else {
+                seen.insert(key, index);
+            }
+        }
+        if replace.is_empty() {
+            return;
+        }
+        for node in &mut self.nodes {
+            for input in &mut node.inputs {
+                if let Some(canonical) = replace.get(input) {
+                    *input = *canonical;
+                }
+            }
+        }
+    }
+
+    fn remove_dead_nodes(&mut self) {
+        let mut live = vec![false; self.nodes.len()];
+        let mut stack: Vec<usize> = self
+            .outputs
+            .values()
+            .chain(self.node_outputs.values())
+            .copied()
+            .chain(std::iter::once(self.output))
+            .collect();
+        while let Some(index) = stack.pop() {
+            let Some(node) = self.nodes.get(index) else {
+                continue;
+            };
+            if live.get(index) == Some(&true) {
+                continue;
+            }
+            if let Some(slot) = live.get_mut(index) {
+                *slot = true;
+            }
+            stack.extend(node.inputs.iter().copied());
+            if let VoiceOp::RepeatResult { source, .. } | VoiceOp::GroupResult { source, .. } =
+                &node.op
+            {
+                stack.push(*source);
+            }
+        }
+        let mut mapping = vec![usize::MAX; self.nodes.len()];
+        let mut nodes = Vec::with_capacity(self.nodes.len());
+        for (index, node) in std::mem::take(&mut self.nodes).into_iter().enumerate() {
+            if !live[index] {
+                continue;
+            }
+            mapping[index] = nodes.len();
+            nodes.push(node);
+        }
+        for node in &mut nodes {
+            for input in &mut node.inputs {
+                if let Some(mapped) = mapping.get(*input).copied()
+                    && mapped != usize::MAX
+                {
+                    *input = mapped;
+                }
+            }
+            if let VoiceOp::RepeatResult { source, .. } | VoiceOp::GroupResult { source, .. } =
+                &mut node.op
+            {
+                let mapped = mapping.get(*source).copied().unwrap_or(usize::MAX);
+                if mapped != usize::MAX {
+                    *source = mapped;
+                }
+            }
+        }
+        let mut outputs = std::mem::take(&mut self.outputs);
+        let mut node_outputs = std::mem::take(&mut self.node_outputs);
+        let mut output = self.output;
+        for index in outputs
+            .values_mut()
+            .chain(node_outputs.values_mut())
+            .chain(std::iter::once(&mut output))
+        {
+            let mapped = mapping.get(*index).copied().unwrap_or(usize::MAX);
+            if mapped != usize::MAX {
+                *index = mapped;
+            }
+        }
+        *self = VoicePlan::new(nodes, output);
+        self.outputs = outputs;
+        self.node_outputs = node_outputs;
     }
 
     /// 离线诊断：记录每个 Repeat 每次迭代结束时的携带值。
@@ -1982,7 +2181,75 @@ pub fn midi_to_hz(pitch: u8) -> f64 {
 }
 
 /// 音符内部相对时间到振幅包络，首尾各 5 毫秒线性淡入淡出。
-pub fn note_envelope(local: f64, duration: f64) -> f64 {
+pub fn eval_constant(op: &VoiceOp, args: &[f64]) -> Option<f64> {
+    let at = |index: usize| args.get(index).copied();
+    match op {
+        VoiceOp::Add => Some(args.iter().sum()),
+        VoiceOp::Multiply => Some(args.iter().product()),
+        VoiceOp::Subtract => Some(at(0)? - at(1)?),
+        VoiceOp::Divide => {
+            let divisor = at(1)?;
+            (divisor != 0.0).then(|| at(0).unwrap_or(0.0) / divisor)
+        },
+        VoiceOp::Power => Some(at(0)?.powf(at(1)?)),
+        VoiceOp::Modulo => {
+            let divisor = at(1)?;
+            (divisor != 0.0).then(|| at(0).unwrap_or(0.0) % divisor)
+        },
+        VoiceOp::Floor => Some(at(0)?.floor()),
+        VoiceOp::Ceil => Some(at(0)?.ceil()),
+        VoiceOp::Round => Some(at(0)?.round()),
+        VoiceOp::Exp => Some(at(0)?.exp()),
+        VoiceOp::Sqrt => Some(at(0)?.max(0.0).sqrt()),
+        VoiceOp::IntToFloat => Some(at(0)?.round()),
+        VoiceOp::GreaterThan => Some(f64::from(u8::from(at(0)? > at(1)?))),
+        VoiceOp::LessThan => Some(f64::from(u8::from(at(0)? < at(1)?))),
+        VoiceOp::MapRange => {
+            let value = at(0)?;
+            let in_min = at(1)?;
+            let in_max = at(2)?;
+            let out_min = at(3)?;
+            let out_max = at(4)?;
+            let span = in_max - in_min;
+            if span == 0.0 {
+                Some(out_min)
+            } else {
+                Some(out_min + (value - in_min) / span * (out_max - out_min))
+            }
+        },
+        VoiceOp::Clamp => Some(at(0)?.clamp(at(1)?, at(2)?)),
+        VoiceOp::Sin => Some(at(0)?.sin()),
+        VoiceOp::Abs => Some(at(0)?.abs()),
+        _ => None,
+    }
+}
+
+fn pure_key(node: &VoiceNodePlan) -> Option<String> {
+    match &node.op {
+        VoiceOp::Add
+        | VoiceOp::Multiply
+        | VoiceOp::Subtract
+        | VoiceOp::Divide
+        | VoiceOp::Power
+        | VoiceOp::Modulo
+        | VoiceOp::Floor
+        | VoiceOp::Ceil
+        | VoiceOp::Round
+        | VoiceOp::Exp
+        | VoiceOp::Sqrt
+        | VoiceOp::IntToFloat
+        | VoiceOp::GreaterThan
+        | VoiceOp::LessThan
+        | VoiceOp::MapRange
+        | VoiceOp::Clamp
+        | VoiceOp::Sin
+        | VoiceOp::Abs
+        | VoiceOp::Constant(_) => Some(format!("{:?}{:?}", node.op, node.inputs)),
+        _ => None,
+    }
+}
+
+fn note_envelope(local: f64, duration: f64) -> f64 {
     let attack = (local / NOTE_FADE_SECONDS).clamp(0.0, 1.0);
     let release = ((duration - local) / NOTE_FADE_SECONDS).clamp(0.0, 1.0);
     attack.min(release)
@@ -2533,6 +2800,18 @@ fn advance(position: u64, loop_frames: u64, loop_start: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn test_context(local_time: f64) -> VoiceContext {
+        VoiceContext {
+            pitch: 261.63,
+            velocity: 0.8,
+            local_time,
+            gate: true,
+            seed: 1,
+            note_index: 0,
+            iteration: 0,
+        }
+    }
 
     #[test]
     fn exp_and_sqrt_primitives_sample() {
@@ -3204,6 +3483,38 @@ mod tests {
         let early_energy: f32 = early.iter().map(|sample| sample.abs()).sum();
         let late_energy: f32 = late.iter().map(|sample| sample.abs()).sum();
         assert!(late_energy < early_energy);
+    }
+
+    #[test]
+    fn voice_optimizer_folds_constants_and_dce() {
+        let plan = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Constant(2.0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(3.0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Add, vec![0, 1]),
+                VoiceNodePlan::new(VoiceOp::Output, vec![2]),
+            ],
+            3,
+        );
+        let optimized = plan.optimize();
+        assert!(optimized.nodes.len() <= 2);
+        assert!((optimized.sample(test_context(0.0)) - 5.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn voice_optimizer_eliminates_duplicate_subexpressions() {
+        let plan = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Constant(2.0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Add, vec![0, 0]),
+                VoiceNodePlan::new(VoiceOp::Add, vec![0, 0]),
+                VoiceNodePlan::new(VoiceOp::Output, vec![2]),
+            ],
+            3,
+        );
+        let optimized = plan.optimize();
+        assert!(optimized.nodes.len() <= 3);
+        assert!((optimized.sample(test_context(0.0)) - 4.0).abs() < 1e-9);
     }
 
     #[test]

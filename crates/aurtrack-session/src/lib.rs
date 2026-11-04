@@ -891,6 +891,7 @@ fn compile_voice(
         None,
         &[],
     )
+    .map(VoicePlan::optimize)
 }
 
 #[allow(clippy::too_many_arguments)]
