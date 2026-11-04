@@ -7049,6 +7049,68 @@ mod buffer_tests {
     use super::*;
 
     #[test]
+    #[ignore = "已知融合后计划输出不一致，待定位"]
+    fn fusion_matches_expanded_piano() {
+        use aurtrack_engine::VoiceContext;
+
+        let mut session = Session::default();
+        session
+            .execute(&CommandRequest {
+                cmd: "project.create".to_string(),
+                args: json!({ "name": "fusion" }),
+            })
+            .unwrap();
+        session
+            .execute(&CommandRequest {
+                cmd: "track.create".to_string(),
+                args: json!({ "name": "piano", "source": "physical" }),
+            })
+            .unwrap();
+        let mut project = session.project().unwrap().clone();
+        let mut custom = project.node_groups["piano.partial"].clone();
+        custom.id = "custom.partial".to_string();
+        custom
+            .graph
+            .nodes
+            .get_mut(&NodeId::fixed("gain"))
+            .unwrap()
+            .params
+            .insert("value".to_string(), 0.180_000_1);
+        project
+            .node_groups
+            .insert("custom.partial".to_string(), custom);
+        let partial = project
+            .node_groups
+            .get_mut("piano.physical")
+            .unwrap()
+            .graph
+            .nodes
+            .get_mut(&NodeId::fixed("p-partial"))
+            .unwrap();
+        partial.group = Some("custom.partial".to_string());
+        let (_, _, plan) = project.tracks[0]
+            .playback_graph(&project.node_groups, &project.audio_groups)
+            .unwrap();
+        let voice = plan.pianos[0].voice.as_ref().unwrap().clone();
+        let mut fused = voice.clone();
+        fused.fuse_group_calls();
+        for time in [0.001, 0.01, 0.1, 0.5, 1.0] {
+            let context = VoiceContext {
+                pitch: 440.0,
+                velocity: 0.9,
+                local_time: time,
+                gate: true,
+                seed: 0,
+                note_index: 0,
+                iteration: 0,
+            };
+            let before = voice.sample(context);
+            let after = fused.sample(context);
+            eprintln!("time={time} before={before} after={after}");
+        }
+    }
+
+    #[test]
     fn structural_partial_group_lowers_without_id() {
         let mut session = Session::default();
         session

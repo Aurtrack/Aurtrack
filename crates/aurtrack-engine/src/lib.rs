@@ -163,8 +163,7 @@ impl VoicePlan {
         }
     }
 
-    #[allow(dead_code)]
-    fn fuse_group_calls(&mut self) {
+    pub fn fuse_group_calls(&mut self) {
         let mut replacements = Vec::new();
         for (index, node) in self.nodes.iter().enumerate() {
             let VoiceOp::GroupCall { body, outputs } = &node.op else {
