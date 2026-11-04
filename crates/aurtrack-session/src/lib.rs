@@ -1880,11 +1880,21 @@ fn upgrade_builtin_piano_groups(project: &mut Project) -> usize {
         .get("piano.physical")
         .is_some_and(|group| {
             group.name == "Physical Piano Voice"
-                && group
+                && (group
                     .graph
                     .nodes
                     .values()
                     .any(|node| node.type_id == "string.waveguide")
+                    || group
+                        .graph
+                        .nodes
+                        .values()
+                        .any(|node| node.group.as_deref() == Some("piano.partial"))
+                    || !group
+                        .graph
+                        .nodes
+                        .values()
+                        .any(|node| node.type_id == "voice.piano_partial"))
         });
     if old_physical {
         project
