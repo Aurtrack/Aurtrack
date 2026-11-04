@@ -2358,7 +2358,7 @@ fn build_expression(plan: &VoicePlan, index: usize, depth: usize) -> Option<Voic
         Some(result)
     };
     match &node.op {
-        VoiceOp::Output => input(0),
+        VoiceOp::Output | VoiceOp::IntToFloat => input(0),
         VoiceOp::Vca => Some(VoiceExpr::Multiply(
             Box::new(input(0)?),
             Box::new(input(1).unwrap_or(VoiceExpr::Constant(1.0))),
@@ -2379,7 +2379,7 @@ fn build_expression(plan: &VoicePlan, index: usize, depth: usize) -> Option<Voic
         VoiceOp::LessThan => binary(VoiceExpr::LessThan),
         VoiceOp::Floor => Some(VoiceExpr::Floor(Box::new(input(0)?))),
         VoiceOp::Ceil => Some(VoiceExpr::Ceil(Box::new(input(0)?))),
-        VoiceOp::Round | VoiceOp::IntToFloat => Some(VoiceExpr::Round(Box::new(input(0)?))),
+        VoiceOp::Round => Some(VoiceExpr::Round(Box::new(input(0)?))),
         VoiceOp::Exp => Some(VoiceExpr::Exp(Box::new(input(0)?))),
         VoiceOp::Sqrt => Some(VoiceExpr::Sqrt(Box::new(input(0)?))),
         VoiceOp::Sin => Some(VoiceExpr::Sin(Box::new(input(0)?))),
@@ -3707,6 +3707,94 @@ mod tests {
         let early_energy: f32 = early.iter().map(|sample| sample.abs()).sum();
         let late_energy: f32 = late.iter().map(|sample| sample.abs()).sum();
         assert!(late_energy < early_energy);
+    }
+
+    fn fused_body_sample(body: VoicePlan, inputs: &[f64]) -> (f64, f64) {
+        let body_output = body.output;
+        let constants: Vec<VoiceNodePlan> = inputs
+            .iter()
+            .map(|value| VoiceNodePlan::new(VoiceOp::Constant(*value), Vec::new()))
+            .collect();
+        let input_count = constants.len();
+        let group_call = input_count;
+        let group_result = input_count + 1;
+        let output = input_count + 2;
+        let mut nodes = constants;
+        nodes.push(VoiceNodePlan::new(
+            VoiceOp::GroupCall {
+                body: Box::new(body),
+                outputs: vec![body_output],
+            },
+            (0..input_count).collect(),
+        ));
+        nodes.push(VoiceNodePlan::new(
+            VoiceOp::GroupResult {
+                source: group_call,
+                slot: 0,
+            },
+            Vec::new(),
+        ));
+        nodes.push(VoiceNodePlan::new(VoiceOp::Output, vec![group_result]));
+        let mut plan = VoicePlan::new(nodes, output);
+        let before = plan.sample(test_context(0.0));
+        plan.fuse_group_calls();
+        let after = plan.sample(test_context(0.0));
+        (before, after)
+    }
+
+    #[test]
+    fn group_fusion_preserves_map_range() {
+        let body = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Input(0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(0.0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(1.0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(0.0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(2.0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::MapRange, vec![0, 1, 2, 3, 4]),
+                VoiceNodePlan::new(VoiceOp::Output, vec![5]),
+            ],
+            6,
+        );
+        let (before, after) = fused_body_sample(body, &[0.5]);
+        assert!((before - 1.0).abs() < 1e-12, "before={before}");
+        assert!((after - 1.0).abs() < 1e-12, "after={after}");
+    }
+
+    #[test]
+    fn group_fusion_preserves_sine() {
+        let body = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Input(0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Input(1), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Input(2), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Sine, vec![0, 1, 2]),
+                VoiceNodePlan::new(VoiceOp::Output, vec![3]),
+            ],
+            4,
+        );
+        let (before, after) = fused_body_sample(body, &[2.0, 0.5, 0.25]);
+        assert!(
+            (before - after).abs() < 1e-12,
+            "before={before} after={after}"
+        );
+    }
+
+    #[test]
+    fn group_fusion_preserves_int_to_float() {
+        let body = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Input(0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::IntToFloat, vec![0]),
+                VoiceNodePlan::new(VoiceOp::Output, vec![1]),
+            ],
+            2,
+        );
+        let (before, after) = fused_body_sample(body, &[1.6]);
+        assert!(
+            (before - after).abs() < 1e-12,
+            "before={before} after={after}"
+        );
     }
 
     #[test]
