@@ -79,6 +79,7 @@ pub struct VoicePlan {
     pub output: usize,
     pub outputs: BTreeMap<String, usize>,
     pub node_outputs: BTreeMap<String, usize>,
+    last_remap: Vec<usize>,
     repeat_cache: Arc<[AtomicU64]>,
     repeat_stride: usize,
     scratch: Arc<[AtomicU64]>,
@@ -99,11 +100,13 @@ impl VoicePlan {
             .max(1);
         let repeat_slots = nodes.len().max(1).saturating_mul(repeat_stride);
         let scratch_slots = nodes.len().max(1).saturating_mul(VOICE_STATE_SLOTS);
+        let last_remap = (0..nodes.len()).collect();
         Self {
             nodes,
             output,
             outputs: BTreeMap::new(),
             node_outputs: BTreeMap::new(),
+            last_remap,
             repeat_cache: (0..repeat_slots)
                 .map(|_| AtomicU64::new(0))
                 .collect::<Vec<_>>()
@@ -155,10 +158,18 @@ impl VoicePlan {
 
     fn optimize_bodies(&mut self) {
         for node in &mut self.nodes {
-            if let VoiceOp::Repeat { body, .. } | VoiceOp::GroupCall { body, .. } = &mut node.op {
+            if let VoiceOp::Repeat { body, outputs, .. }
+            | VoiceOp::GroupCall { body, outputs, .. } = &mut node.op
+            {
+                let old_outputs = outputs.clone();
                 let placeholder = VoicePlan::new(Vec::new(), 0);
                 let old = std::mem::replace(body.as_mut(), placeholder);
                 *body = Box::new(old.optimize());
+                for (slot, old_index) in old_outputs.into_iter().enumerate() {
+                    if let Some(mapped) = body.last_remap.get(old_index).copied() {
+                        outputs[slot] = mapped;
+                    }
+                }
             }
         }
     }
@@ -304,6 +315,7 @@ impl VoicePlan {
     }
 
     fn remove_dead_nodes(&mut self) {
+        let previous_remap = self.last_remap.clone();
         let mut live = vec![false; self.nodes.len()];
         let mut stack: Vec<usize> = self
             .outputs
@@ -368,9 +380,16 @@ impl VoicePlan {
                 *index = mapped;
             }
         }
+        let mut composed = previous_remap;
+        for value in &mut composed {
+            if *value != usize::MAX {
+                *value = mapping.get(*value).copied().unwrap_or(usize::MAX);
+            }
+        }
         *self = VoicePlan::new(nodes, output);
         self.outputs = outputs;
         self.node_outputs = node_outputs;
+        self.last_remap = composed;
     }
 
     /// 离线诊断：记录每个 Repeat 每次迭代结束时的携带值。
@@ -3794,6 +3813,41 @@ mod tests {
             (before - after).abs() < 1e-12,
             "before={before} after={after}"
         );
+    }
+
+    #[test]
+    fn optimize_remaps_nested_repeat_outputs() {
+        let body = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Constant(99.0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(5.0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Output, vec![1]),
+            ],
+            2,
+        );
+        let plan = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Constant(2.0), Vec::new()),
+                VoiceNodePlan::new(
+                    VoiceOp::Repeat {
+                        zone: "test".to_string(),
+                        body: Box::new(body),
+                        outputs: vec![2],
+                        carried: 1,
+                    },
+                    vec![0],
+                ),
+                VoiceNodePlan::new(VoiceOp::Output, vec![1]),
+            ],
+            2,
+        );
+        let plan = plan.optimize();
+        let VoiceOp::Repeat { body, outputs, .. } = &plan.nodes[1].op else {
+            panic!("应有 Repeat");
+        };
+        let output = outputs[0];
+        assert!(output < body.nodes.len());
+        assert!(matches!(body.nodes[output].op, VoiceOp::Output));
     }
 
     #[test]
