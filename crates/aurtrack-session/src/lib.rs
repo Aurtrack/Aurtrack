@@ -1306,7 +1306,9 @@ fn compile_voice_inner(
             let group = groups
                 .get(group_id)
                 .ok_or_else(|| GraphError::GroupMissing(group_id.to_string()))?;
-            if group_id == "piano.partial" && group == &NodeGroup::partial_default() {
+            if group.interface == NodeGroupInterface::partial()
+                && group.graph == VoiceGraph::partial_default()
+            {
                 let mut op_inputs = Vec::with_capacity(group.interface.inputs.len());
                 for socket in &group.interface.inputs {
                     let source = incoming
@@ -7045,6 +7047,53 @@ mod repeat_zone_tests {
 #[allow(clippy::unwrap_used)]
 mod buffer_tests {
     use super::*;
+
+    #[test]
+    fn structural_partial_group_lowers_without_id() {
+        let mut session = Session::default();
+        session
+            .execute(&CommandRequest {
+                cmd: "project.create".to_string(),
+                args: json!({ "name": "structural" }),
+            })
+            .unwrap();
+        session
+            .execute(&CommandRequest {
+                cmd: "track.create".to_string(),
+                args: json!({ "name": "piano", "source": "physical" }),
+            })
+            .unwrap();
+        let mut project = session.project().unwrap().clone();
+        let mut custom = project.node_groups["piano.partial"].clone();
+        custom.id = "custom.partial".to_string();
+        project
+            .node_groups
+            .insert("custom.partial".to_string(), custom);
+        let physical = project.node_groups.get_mut("piano.physical").unwrap();
+        let partial = physical
+            .graph
+            .nodes
+            .get_mut(&NodeId::fixed("p-partial"))
+            .unwrap();
+        partial.group = Some("custom.partial".to_string());
+        let (_, _, plan) = project.tracks[0]
+            .playback_graph(&project.node_groups, &project.audio_groups)
+            .unwrap();
+        let voice = plan.pianos[0].voice.as_ref().unwrap();
+        let repeat = voice.nodes.iter().find_map(|node| match &node.op {
+            VoiceOp::Repeat { body, .. } => Some(body.as_ref()),
+            _ => None,
+        });
+        let Some(repeat) = repeat else {
+            panic!("应有 repeat");
+        };
+        assert!(
+            repeat
+                .nodes
+                .iter()
+                .any(|node| matches!(node.op, VoiceOp::PianoPartial))
+        );
+    }
 
     #[test]
     fn physical_piano_track_renders() {

@@ -57,12 +57,19 @@ x ^ 1       → x
 
 ## 与专用 lowering 的关系
 
-优化器是通用 pass 框架，但不会自动从任意组图合成 `VoiceOp::PianoPartial`。内置 partial 组的 lowering 保留为一条特化规则，因为它是语义融合，不是普通代数化简能推导出来的。
+优化器是通用 pass 框架，但不会自动从任意组图合成 `VoiceOp::PianoPartial`。partial 的 lowering 保留为一条**结构化**特化规则：不再检查 group ID，而是比较接口和整个组图：
+
+```text
+group.interface == NodeGroupInterface::partial()
+&& group.graph == VoiceGraph::partial_default()
+```
+
+因此复制出来的 `custom.partial`、改过 ID 的组，只要内容与内置图完全一致，也会被 lowering。用户修改组内容后比较失败，退回完整展开。
 
 也就是说：
 
 - DCE、折叠、CSE、嵌套优化对所有 VoicePlan 生效；
-- 物理钢琴的实时性能仍依赖内置组 lowering；
+- 物理钢琴的实时性能仍依赖这条结构化 lowering；
 - 用户修改 `piano.partial` 后 lowering 跳过，优化器仍会跑，但不会恢复同样的融合效果。
 
 ## 验证
@@ -71,6 +78,7 @@ x ^ 1       → x
 - `voice_optimizer_eliminates_duplicate_subexpressions`
 - `repeat_zone_tests` 全部通过，确认 Repeat/GroupResult 依赖没有被 DCE 误删。
 - `physical_piano_track_renders` 仍检查 lowering 后的 `PianoPartial`。
+- `structural_partial_group_lowers_without_id` 用 `custom.partial` 验证 lowering 不依赖 group ID。
 
 ## 后续
 
