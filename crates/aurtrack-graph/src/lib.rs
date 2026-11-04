@@ -977,6 +977,40 @@ const PARTIAL_INPUTS: [VoiceSocketSpec; 7] = [
         .with_range(0.05, 8.0)
         .with_step(0.01),
 ];
+const PIANO_PARTIAL_INPUTS: [VoiceSocketSpec; 8] = [
+    VoiceSocketSpec::new("pitch", "Pitch", SocketType::Float)
+        .with_default(261.63)
+        .with_range(20.0, 20_000.0)
+        .with_step(0.01),
+    VoiceSocketSpec::new("velocity", "Velocity", SocketType::Float)
+        .with_default(0.8)
+        .with_range(0.0, 1.0)
+        .with_step(0.01),
+    VoiceSocketSpec::new("time", "Time", SocketType::Float)
+        .with_default(0.0)
+        .with_range(0.0, 1000.0)
+        .with_step(0.001),
+    VoiceSocketSpec::new("index", "Index", SocketType::Int)
+        .with_default(0.0)
+        .with_range(0.0, 63.0)
+        .with_step(1.0),
+    VoiceSocketSpec::new("inharmonicity", "Inharmonicity", SocketType::Float)
+        .with_default(0.0004)
+        .with_range(0.0, 0.01)
+        .with_step(0.0001),
+    VoiceSocketSpec::new("brightness", "Brightness", SocketType::Float)
+        .with_default(0.5)
+        .with_range(0.0, 1.0)
+        .with_step(0.01),
+    VoiceSocketSpec::new("decay", "Decay", SocketType::Float)
+        .with_default(1.2)
+        .with_range(0.05, 8.0)
+        .with_step(0.01),
+    VoiceSocketSpec::new("position", "Position", SocketType::Float)
+        .with_default(0.12)
+        .with_range(0.0, 1.0)
+        .with_step(0.01),
+];
 const REPEAT_INPUTS: [VoiceSocketSpec; 1] =
     [VoiceSocketSpec::new("count", "Count", SocketType::Int)
         .with_default(10.0)
@@ -1292,6 +1326,14 @@ pub const VOICE_NODE_TYPES: &[VoiceNodeType] = &[
         name: "Partial",
         category: "Generator",
         inputs: &PARTIAL_INPUTS,
+        outputs: &AUDIO_OUT,
+        params: &[],
+    },
+    VoiceNodeType {
+        id: "voice.piano_partial",
+        name: "Piano Partial",
+        category: "String",
+        inputs: &PIANO_PARTIAL_INPUTS,
         outputs: &AUDIO_OUT,
         params: &[],
     },
@@ -2946,7 +2988,7 @@ impl VoiceGraph {
         let interface = NodeGroupInterface::physical_voice();
         let mut graph = Self::shell(&interface);
         let mut zone_in = VoiceNode::new(NodeId::fixed("p-in"), "voice.zone.input");
-        zone_in.params.insert("count".to_string(), 16.0);
+        zone_in.params.insert("count".to_string(), 12.0);
         zone_in.zone_inputs = vec![NodeGroupSocket::new(
             "out",
             "Audio",
@@ -2958,8 +3000,7 @@ impl VoiceGraph {
             "Audio",
             NodeGroupSocketType::Audio,
         )];
-        let mut partial = VoiceNode::new(NodeId::fixed("p-partial"), "voice.group");
-        partial.group = Some("piano.partial".to_string());
+        let mut partial = VoiceNode::new(NodeId::fixed("p-partial"), "voice.piano_partial");
         let mut partial_add = VoiceNode::new(NodeId::fixed("p-add"), "voice.add");
         for node in [&mut zone_in, &mut zone_out, &mut partial, &mut partial_add] {
             node.zone = Some("partials".to_string());
@@ -2981,6 +3022,7 @@ impl VoiceGraph {
             ("inharmonicity", "value.float", [40.0, 620.0]),
             ("brightness", "value.float", [40.0, 700.0]),
             ("decay", "value.float", [40.0, 780.0]),
+            ("position", "value.float", [40.0, 860.0]),
         ] {
             let id = NodeId::fixed(id);
             let mut node = VoiceNode::new(id.clone(), ty);
@@ -2999,6 +3041,7 @@ impl VoiceGraph {
             ("inharmonicity", 0.00045),
             ("brightness", 0.75),
             ("decay", 2.2),
+            ("position", 0.12),
         ] {
             if let Some(node) = nodes.get_mut(&NodeId::fixed(id)) {
                 node.params.insert("value".to_string(), value);
@@ -3053,11 +3096,15 @@ impl VoiceGraph {
                 PortRef::new(NodeId::fixed("p-partial"), "decay"),
             ),
             VoiceConnection::new(
+                PortRef::new(NodeId::fixed("position"), "out"),
+                PortRef::new(NodeId::fixed("p-partial"), "position"),
+            ),
+            VoiceConnection::new(
                 PortRef::new(NodeId::fixed("p-in"), "out"),
                 PortRef::new(NodeId::fixed("p-add"), "in1"),
             ),
             VoiceConnection::new(
-                PortRef::new(NodeId::fixed("p-partial"), "audio"),
+                PortRef::new(NodeId::fixed("p-partial"), "out"),
                 PortRef::new(NodeId::fixed("p-add"), "in2"),
             ),
             VoiceConnection::new(

@@ -211,6 +211,7 @@ pub enum VoiceOp {
         looped: bool,
     },
     Partial,
+    PianoPartial,
     Attack,
     Decay,
     Adsr,
@@ -418,6 +419,50 @@ impl VoicePlan {
                         inharmonicity,
                         brightness,
                         decay,
+                    )
+                },
+                VoiceOp::PianoPartial => {
+                    let pitch = node
+                        .inputs
+                        .first()
+                        .map_or(context.pitch, |input| scratch_value(*input));
+                    let velocity = node
+                        .inputs
+                        .get(1)
+                        .map_or(context.velocity, |input| scratch_value(*input));
+                    let time = node
+                        .inputs
+                        .get(2)
+                        .map_or(context.local_time, |input| scratch_value(*input));
+                    let index = node
+                        .inputs
+                        .get(3)
+                        .map_or(0.0, |input| scratch_value(*input));
+                    let inharmonicity = node
+                        .inputs
+                        .get(4)
+                        .map_or(0.0004, |input| scratch_value(*input));
+                    let brightness = node
+                        .inputs
+                        .get(5)
+                        .map_or(0.5, |input| scratch_value(*input));
+                    let decay = node
+                        .inputs
+                        .get(6)
+                        .map_or(1.2, |input| scratch_value(*input));
+                    let position = node
+                        .inputs
+                        .get(7)
+                        .map_or(0.12, |input| scratch_value(*input));
+                    piano_partial_sample(
+                        pitch,
+                        velocity,
+                        time,
+                        index,
+                        inharmonicity,
+                        brightness,
+                        decay,
+                        position,
                     )
                 },
                 VoiceOp::Hammer => {
@@ -1230,6 +1275,44 @@ fn partial_sample(
     let envelope = (-time * (0.8 + partial as f64 * 0.35) / decay.max(0.05)).exp();
     let velocity = velocity.clamp(0.0, 1.0).powf(brightness + 0.5);
     (std::f64::consts::TAU * frequency * time).sin() * envelope * velocity * 0.18 / partial as f64
+}
+
+#[allow(clippy::too_many_arguments)]
+fn piano_partial_sample(
+    pitch: f64,
+    velocity: f64,
+    time: f64,
+    index: f64,
+    inharmonicity: f64,
+    brightness: f64,
+    decay: f64,
+    position: f64,
+) -> f64 {
+    let partial = index.max(0.0).round() as usize + 1;
+    let harmonic = partial as f64;
+    let frequency =
+        pitch * harmonic * (1.0 + inharmonicity.clamp(0.0, 0.01) * harmonic * harmonic).sqrt();
+    if frequency >= 20_000.0 || time < 0.0 {
+        return 0.0;
+    }
+    let brightness = brightness.clamp(0.0, 1.0);
+    let velocity = velocity.clamp(0.0, 1.0).powf(0.55 + brightness * 0.7);
+    let decay = decay.clamp(0.05, 8.0) / (1.0 + harmonic * 0.06);
+    let prompt = (-time / 0.08).exp();
+    let sustain = (-time / decay).exp();
+    let envelope = (0.35 * prompt + 0.65 * sustain) * (1.0 - (-time / 0.0025).exp());
+    let position_amplitude = (std::f64::consts::PI * harmonic * position.clamp(0.0, 1.0))
+        .sin()
+        .abs()
+        .max(0.08);
+    let amplitude = velocity * position_amplitude / harmonic.powf(0.55 + brightness * 0.7);
+    let low = frequency * 0.99975;
+    let high = frequency * 1.00025;
+    let strings = ((std::f64::consts::TAU * frequency * time).sin()
+        + (std::f64::consts::TAU * low * time).sin()
+        + (std::f64::consts::TAU * high * time).sin())
+        / 3.0;
+    strings * envelope * amplitude * 0.18
 }
 
 fn osc_partials(

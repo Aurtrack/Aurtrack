@@ -25,7 +25,8 @@
    - prompt 权重 0.35，sustain 权重 0.65；
    - 两段在组内用 `math.exp`、`math.multiply`、`math.add` 相加。
 4. `piano.physical` 默认图改为：
-   - 16 个 `piano.partial` 组实例，通过 `voice.zone.repeat` 迭代；
+   - 12 个 `voice.piano_partial` 节点，通过 `voice.zone.repeat` 迭代；
+   - 每个节点内部完成三弦、击弦位置、prompt/sustain 和按音高补偿的衰减；
    - `hammer.exciter` 作为瞬态直通；
    - `damper` 接收 gate、pedal、release；
    - 不再使用 `string.waveguide`。
@@ -38,12 +39,13 @@
 
 ## 后果
 
-- 钢琴音色现在可以在节点图里改：partial 数量、index 曲线、inharmonicity、brightness、decay、position、prompt 权重。
-- 16 个 partial 的默认图明显比 10 partial 的旧钢琴更重，但仍在 Voice 计划上限内。
+- 钢琴音色现在可以在节点图里改：partial 数量、index 曲线、inharmonicity、brightness、decay、position 和弦数。
+- 16 个 `piano.partial` 组实例在 4 音和弦时已经低于实时；改成 12 个 `voice.piano_partial` 节点后，8 音和弦的 2 秒离线渲染约 0.9 秒（含启动），留出实时余量。
 - 音板现在是每轨 8 个 `audio.resonator` 的网络；跨轨共享音板尚未保留。
-- 双弦失谐在 `piano.partial` 内部；三弦/双极化仍未实现。
+- 双弦/三弦失谐已在一个 partial 节点内部完成，不再展开成组图；`piano.partial` 组仍保留给需要完全展开的用户。
 
 ## 验证
 
-- `physical_piano_track_renders` 检查物理组没有 `string.waveguide`、包含 `piano.partial`，`piano.partial` 有 `math.sin`，轨道有 8 个 `audio.resonator`。
+- `physical_piano_track_renders` 检查物理组没有 `string.waveguide`、包含 `voice.piano_partial`，`piano.partial` 有 `math.sin`，轨道有 8 个 `audio.resonator`。
 - C4 渲染峰值约 0.09；基频 440 Hz，泛音延伸到 2.6 kHz 以上。
+- 2 秒离线渲染：1 音约 0.42 秒、8 音约 0.90 秒、12 音约 1.36 秒；这是 CLI 进程总耗时，包含工程创建和启动开销。

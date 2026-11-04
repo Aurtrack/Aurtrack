@@ -1467,6 +1467,7 @@ fn compile_voice_inner(
             "hammer.exciter" => VoiceOp::Hammer,
             "damper" => VoiceOp::Damper,
             "voice.partial" => VoiceOp::Partial,
+            "voice.piano_partial" => VoiceOp::PianoPartial,
             "voice.iteration" => VoiceOp::Iteration,
             "voice.pitch" => VoiceOp::Pitch,
             "voice.velocity" => VoiceOp::Velocity,
@@ -7040,7 +7041,7 @@ mod buffer_tests {
                 .graph
                 .nodes
                 .values()
-                .any(|node| node.group.as_deref() == Some("piano.partial"))
+                .any(|node| node.type_id == "voice.piano_partial")
         );
         assert!(
             project.node_groups["piano.partial"]
@@ -7091,6 +7092,16 @@ mod buffer_tests {
                 .filter(|node| node.type_id == "audio.resonator")
                 .count(),
             8
+        );
+        let (_, _, plan) = project.tracks[0]
+            .playback_graph(&project.node_groups, &project.audio_groups)
+            .unwrap();
+        assert!(
+            plan.pianos[0]
+                .voice
+                .as_ref()
+                .is_some_and(|voice| voice.nodes.len() < 200),
+            "物理钢琴的展开节点数应保持在线性成本范围"
         );
         assert!(
             project.tracks[0]
