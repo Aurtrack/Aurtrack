@@ -163,6 +163,40 @@ impl VoicePlan {
         }
     }
 
+    #[allow(dead_code)]
+    fn fuse_group_calls(&mut self) {
+        let mut replacements = Vec::new();
+        for (index, node) in self.nodes.iter().enumerate() {
+            let VoiceOp::GroupCall { body, outputs } = &node.op else {
+                continue;
+            };
+            let mut fused = Vec::new();
+            for (result_index, result) in self.nodes.iter().enumerate() {
+                let VoiceOp::GroupResult { source, slot } = result.op else {
+                    continue;
+                };
+                if source != index {
+                    continue;
+                }
+                let Some(output) = outputs.get(slot).copied() else {
+                    continue;
+                };
+                let Some(expr) = build_expression(body, output, 0) else {
+                    fused.clear();
+                    break;
+                };
+                fused.push((result_index, expr, node.inputs.clone()));
+            }
+            if !fused.is_empty() {
+                replacements.extend(fused);
+            }
+        }
+        for (index, expr, inputs) in replacements {
+            self.nodes[index].op = VoiceOp::Expression(expr);
+            self.nodes[index].inputs = inputs;
+        }
+    }
+
     fn simplify_and_fold(&mut self) {
         let mut values: Vec<Option<f64>> = vec![None; self.nodes.len()];
         for index in 0..self.nodes.len() {
@@ -385,6 +419,117 @@ impl VoiceNodePlan {
 }
 
 /// Voice 子图节点操作。
+/// 编译期融合的无状态表达式；音频线程只读，不求值分配。
+#[non_exhaustive]
+#[derive(Debug, Clone)]
+pub enum VoiceExpr {
+    External(usize),
+    Constant(f64),
+    ContextPitch,
+    ContextVelocity,
+    ContextTime,
+    ContextGate,
+    Add(Box<VoiceExpr>, Box<VoiceExpr>),
+    Subtract(Box<VoiceExpr>, Box<VoiceExpr>),
+    Multiply(Box<VoiceExpr>, Box<VoiceExpr>),
+    Divide(Box<VoiceExpr>, Box<VoiceExpr>),
+    Power(Box<VoiceExpr>, Box<VoiceExpr>),
+    Modulo(Box<VoiceExpr>, Box<VoiceExpr>),
+    Floor(Box<VoiceExpr>),
+    Ceil(Box<VoiceExpr>),
+    Round(Box<VoiceExpr>),
+    Exp(Box<VoiceExpr>),
+    Sqrt(Box<VoiceExpr>),
+    Sin(Box<VoiceExpr>),
+    Abs(Box<VoiceExpr>),
+    GreaterThan(Box<VoiceExpr>, Box<VoiceExpr>),
+    LessThan(Box<VoiceExpr>, Box<VoiceExpr>),
+    MapRange(
+        Box<VoiceExpr>,
+        Box<VoiceExpr>,
+        Box<VoiceExpr>,
+        Box<VoiceExpr>,
+        Box<VoiceExpr>,
+    ),
+    Clamp(Box<VoiceExpr>, Box<VoiceExpr>, Box<VoiceExpr>),
+    Sine {
+        frequency: Box<VoiceExpr>,
+        phase: Box<VoiceExpr>,
+        time: Box<VoiceExpr>,
+    },
+}
+
+impl VoiceExpr {
+    fn eval(&self, context: &VoiceContext, source: &dyn Fn(usize) -> f64) -> f64 {
+        match self {
+            Self::External(slot) => source(*slot),
+            Self::Constant(value) => *value,
+            Self::ContextPitch => context.pitch,
+            Self::ContextVelocity => context.velocity,
+            Self::ContextTime => context.local_time,
+            Self::ContextGate => f64::from(u8::from(context.gate)),
+            Self::Add(a, b) => a.eval(context, source) + b.eval(context, source),
+            Self::Subtract(a, b) => a.eval(context, source) - b.eval(context, source),
+            Self::Multiply(a, b) => a.eval(context, source) * b.eval(context, source),
+            Self::Divide(a, b) => {
+                let divisor = b.eval(context, source);
+                if divisor == 0.0 {
+                    0.0
+                } else {
+                    a.eval(context, source) / divisor
+                }
+            },
+            Self::Power(a, b) => a.eval(context, source).powf(b.eval(context, source)),
+            Self::Modulo(a, b) => {
+                let divisor = b.eval(context, source);
+                if divisor == 0.0 {
+                    0.0
+                } else {
+                    a.eval(context, source) % divisor
+                }
+            },
+            Self::Floor(a) => a.eval(context, source).floor(),
+            Self::Ceil(a) => a.eval(context, source).ceil(),
+            Self::Round(a) => a.eval(context, source).round(),
+            Self::Exp(a) => a.eval(context, source).exp(),
+            Self::Sqrt(a) => a.eval(context, source).max(0.0).sqrt(),
+            Self::Sin(a) => a.eval(context, source).sin(),
+            Self::Abs(a) => a.eval(context, source).abs(),
+            Self::GreaterThan(a, b) => {
+                f64::from(u8::from(a.eval(context, source) > b.eval(context, source)))
+            },
+            Self::LessThan(a, b) => {
+                f64::from(u8::from(a.eval(context, source) < b.eval(context, source)))
+            },
+            Self::MapRange(value_expr, in_min, in_max, out_min, out_max) => {
+                let value = value_expr.eval(context, source);
+                let in_min = in_min.eval(context, source);
+                let in_max = in_max.eval(context, source);
+                let out_min = out_min.eval(context, source);
+                let out_max = out_max.eval(context, source);
+                let span = in_max - in_min;
+                if span == 0.0 {
+                    out_min
+                } else {
+                    out_min + (value - in_min) / span * (out_max - out_min)
+                }
+            },
+            Self::Clamp(value_expr, min, max) => value_expr
+                .eval(context, source)
+                .clamp(min.eval(context, source), max.eval(context, source)),
+            Self::Sine {
+                frequency,
+                phase,
+                time,
+            } => (std::f64::consts::TAU
+                * frequency.eval(context, source)
+                * time.eval(context, source)
+                + phase.eval(context, source))
+            .sin(),
+        }
+    }
+}
+
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub enum VoiceOp {
@@ -436,6 +581,7 @@ pub enum VoiceOp {
         source: usize,
         slot: usize,
     },
+    Expression(VoiceExpr),
     OscPartials {
         partials: usize,
         inharmonicity: f64,
@@ -1297,6 +1443,11 @@ impl VoicePlan {
                         .get(base)
                         .map_or(0.0, |value| f64::from_bits(value.load(Ordering::Relaxed)))
                 },
+                VoiceOp::Expression(ref expr) => expr.eval(&context, &|slot| {
+                    node.inputs
+                        .get(slot)
+                        .map_or(0.0, |index| scratch_value(*index))
+                }),
                 VoiceOp::Repeat {
                     ref zone,
                     ref body,
@@ -2180,8 +2331,81 @@ pub fn midi_to_hz(pitch: u8) -> f64 {
     440.0 * 2_f64.powf((f64::from(pitch) - 69.0) / 12.0)
 }
 
-/// 音符内部相对时间到振幅包络，首尾各 5 毫秒线性淡入淡出。
-pub fn eval_constant(op: &VoiceOp, args: &[f64]) -> Option<f64> {
+/// 把无状态子计划构建成融合表达式；失败时保留原计划。
+#[allow(dead_code)]
+fn build_expression(plan: &VoicePlan, index: usize, depth: usize) -> Option<VoiceExpr> {
+    if depth > 64 {
+        return None;
+    }
+    let node = plan.nodes.get(index)?;
+    let input = |slot: usize| -> Option<VoiceExpr> {
+        let child = *node.inputs.get(slot)?;
+        build_expression(plan, child, depth + 1)
+    };
+    let binary = |f: fn(Box<VoiceExpr>, Box<VoiceExpr>) -> VoiceExpr| -> Option<VoiceExpr> {
+        Some(f(Box::new(input(0)?), Box::new(input(1)?)))
+    };
+    let fold = |f: fn(Box<VoiceExpr>, Box<VoiceExpr>) -> VoiceExpr| -> Option<VoiceExpr> {
+        let mut iter = node.inputs.iter();
+        let first = iter.next()?;
+        let mut result = build_expression(plan, *first, depth + 1)?;
+        for child in iter {
+            result = f(
+                Box::new(result),
+                Box::new(build_expression(plan, *child, depth + 1)?),
+            );
+        }
+        Some(result)
+    };
+    match &node.op {
+        VoiceOp::Output => input(0),
+        VoiceOp::Vca => Some(VoiceExpr::Multiply(
+            Box::new(input(0)?),
+            Box::new(input(1).unwrap_or(VoiceExpr::Constant(1.0))),
+        )),
+        VoiceOp::Input(slot) => Some(VoiceExpr::External(*slot)),
+        VoiceOp::Constant(value) => Some(VoiceExpr::Constant(*value)),
+        VoiceOp::Pitch => Some(VoiceExpr::ContextPitch),
+        VoiceOp::Velocity => Some(VoiceExpr::ContextVelocity),
+        VoiceOp::Time => Some(VoiceExpr::ContextTime),
+        VoiceOp::Gate => Some(VoiceExpr::ContextGate),
+        VoiceOp::Add => fold(VoiceExpr::Add),
+        VoiceOp::Multiply => fold(VoiceExpr::Multiply),
+        VoiceOp::Subtract => binary(VoiceExpr::Subtract),
+        VoiceOp::Divide => binary(VoiceExpr::Divide),
+        VoiceOp::Power => binary(VoiceExpr::Power),
+        VoiceOp::Modulo => binary(VoiceExpr::Modulo),
+        VoiceOp::GreaterThan => binary(VoiceExpr::GreaterThan),
+        VoiceOp::LessThan => binary(VoiceExpr::LessThan),
+        VoiceOp::Floor => Some(VoiceExpr::Floor(Box::new(input(0)?))),
+        VoiceOp::Ceil => Some(VoiceExpr::Ceil(Box::new(input(0)?))),
+        VoiceOp::Round | VoiceOp::IntToFloat => Some(VoiceExpr::Round(Box::new(input(0)?))),
+        VoiceOp::Exp => Some(VoiceExpr::Exp(Box::new(input(0)?))),
+        VoiceOp::Sqrt => Some(VoiceExpr::Sqrt(Box::new(input(0)?))),
+        VoiceOp::Sin => Some(VoiceExpr::Sin(Box::new(input(0)?))),
+        VoiceOp::Abs => Some(VoiceExpr::Abs(Box::new(input(0)?))),
+        VoiceOp::Clamp => Some(VoiceExpr::Clamp(
+            Box::new(input(0)?),
+            Box::new(input(1)?),
+            Box::new(input(2)?),
+        )),
+        VoiceOp::MapRange => Some(VoiceExpr::MapRange(
+            Box::new(input(0)?),
+            Box::new(input(1)?),
+            Box::new(input(2)?),
+            Box::new(input(3)?),
+            Box::new(input(4)?),
+        )),
+        VoiceOp::Sine => Some(VoiceExpr::Sine {
+            frequency: Box::new(input(0).unwrap_or(VoiceExpr::Constant(440.0))),
+            phase: Box::new(input(1).unwrap_or(VoiceExpr::Constant(0.0))),
+            time: Box::new(input(2).unwrap_or(VoiceExpr::ContextTime)),
+        }),
+        _ => None,
+    }
+}
+
+fn eval_constant(op: &VoiceOp, args: &[f64]) -> Option<f64> {
     let at = |index: usize| args.get(index).copied();
     match op {
         VoiceOp::Add => Some(args.iter().sum()),
