@@ -941,11 +941,14 @@ fn build_jit_voice(instructions: &[CompiledInstruction], root: usize) -> Result<
             let call = builder.ins().call(reference, args);
             builder.inst_results(call)[0]
         };
+    let mut canonical: Vec<usize> = (0..instructions.len()).collect();
     let mut common_values = std::collections::HashMap::new();
     for (index, instruction) in instructions.iter().enumerate() {
         let operands = instruction.operands;
-        let key = format!("{:?}:{operands:?}", instruction.op);
-        if let Some(existing) = common_values.get(&key).copied() {
+        let canonical_operands: [usize; 5] = std::array::from_fn(|slot| canonical[operands[slot]]);
+        let key = format!("{:?}:{canonical_operands:?}", instruction.op);
+        if let Some((canonical_index, existing)) = common_values.get(&key).copied() {
+            canonical[index] = canonical_index;
             builder.def_var(variables[index], existing);
             continue;
         }
@@ -1059,7 +1062,8 @@ fn build_jit_voice(instructions: &[CompiledInstruction], root: usize) -> Result<
                 call_helper(&mut builder, "aurtrack_jit_sin", &[angle])
             },
         };
-        common_values.insert(key, value);
+        canonical[index] = index;
+        common_values.insert(key, (index, value));
         builder.def_var(variables[index], value);
     }
     let result = builder.use_var(variables[root]);
