@@ -88,7 +88,8 @@ impl VoiceSsa {
         self.output
     }
 
-    /// block 接口；当前逐帧求值，后续替换为原生循环。
+    /// block 接口：按 SSA 值处理整块，而不是逐帧重跑整张图。
+    #[allow(clippy::large_stack_arrays)]
     pub fn process_block(
         &self,
         context: VoiceContext,
@@ -96,10 +97,83 @@ impl VoiceSsa {
         sample_rate: f64,
         output: &mut [f32],
     ) {
-        for (offset, slot) in output.iter_mut().enumerate() {
-            let mut frame = context;
-            frame.local_time = context.local_time + offset as f64 / sample_rate;
-            *slot = self.eval(&frame, inputs) as f32;
+        const BLOCK: usize = 64;
+        const MAX_VALUES: usize = 128;
+        if output.len() > BLOCK || self.values.len() > MAX_VALUES {
+            output.fill(0.0);
+            return;
+        }
+        let frames = output.len();
+        let mut values = [[0.0_f64; BLOCK]; MAX_VALUES];
+        for (index, value) in self.values.iter().enumerate() {
+            for frame in 0..frames {
+                values[index][frame] = match value.op {
+                    SsaOp::Constant => value.constant.unwrap_or(0.0),
+                    SsaOp::External => inputs
+                        .get(value.external.unwrap_or(usize::MAX))
+                        .copied()
+                        .unwrap_or(0.0),
+                    SsaOp::ContextPitch => context.pitch,
+                    SsaOp::ContextVelocity => context.velocity,
+                    SsaOp::ContextTime => context.local_time + frame as f64 / sample_rate,
+                    SsaOp::ContextGate => f64::from(u8::from(context.gate)),
+                    SsaOp::Add => values[value.args[0]][frame] + values[value.args[1]][frame],
+                    SsaOp::Subtract => values[value.args[0]][frame] - values[value.args[1]][frame],
+                    SsaOp::Multiply => values[value.args[0]][frame] * values[value.args[1]][frame],
+                    SsaOp::Divide => {
+                        if values[value.args[1]][frame] == 0.0 {
+                            0.0
+                        } else {
+                            values[value.args[0]][frame] / values[value.args[1]][frame]
+                        }
+                    },
+                    SsaOp::Power => values[value.args[0]][frame].powf(values[value.args[1]][frame]),
+                    SsaOp::Modulo => {
+                        if values[value.args[1]][frame] == 0.0 {
+                            0.0
+                        } else {
+                            values[value.args[0]][frame] % values[value.args[1]][frame]
+                        }
+                    },
+                    SsaOp::Floor => values[value.args[0]][frame].floor(),
+                    SsaOp::Ceil => values[value.args[0]][frame].ceil(),
+                    SsaOp::Round => values[value.args[0]][frame].round(),
+                    SsaOp::Exp => values[value.args[0]][frame].exp(),
+                    SsaOp::Sqrt => values[value.args[0]][frame].max(0.0).sqrt(),
+                    SsaOp::Sin => values[value.args[0]][frame].sin(),
+                    SsaOp::Abs => values[value.args[0]][frame].abs(),
+                    SsaOp::GreaterThan => f64::from(u8::from(
+                        values[value.args[0]][frame] > values[value.args[1]][frame],
+                    )),
+                    SsaOp::LessThan => f64::from(u8::from(
+                        values[value.args[0]][frame] < values[value.args[1]][frame],
+                    )),
+                    SsaOp::MapRange => {
+                        let input = values[value.args[0]][frame];
+                        let in_min = values[value.args[1]][frame];
+                        let in_max = values[value.args[2]][frame];
+                        let out_min = values[value.args[3]][frame];
+                        let out_max = values[value.args[4]][frame];
+                        let span = in_max - in_min;
+                        if span.abs() < 1e-12 {
+                            out_min
+                        } else {
+                            out_min + (input - in_min) / span * (out_max - out_min)
+                        }
+                    },
+                    SsaOp::Clamp => values[value.args[0]][frame]
+                        .clamp(values[value.args[1]][frame], values[value.args[2]][frame]),
+                    SsaOp::Sine => {
+                        let frequency = values[value.args[0]][frame];
+                        let time = values[value.args[1]][frame];
+                        let phase = values[value.args[2]][frame];
+                        (std::f64::consts::TAU * frequency * time + phase).sin()
+                    },
+                };
+            }
+        }
+        for (frame, slot) in output.iter_mut().enumerate() {
+            *slot = values[self.output][frame] as f32;
         }
     }
 
