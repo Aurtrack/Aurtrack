@@ -18,6 +18,10 @@
     clippy::too_many_lines
 )]
 
+mod ssa;
+
+pub use ssa::{SsaOp, VoiceSsa};
+
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU64, AtomicUsize, Ordering};
