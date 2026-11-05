@@ -3327,8 +3327,14 @@ impl Playback {
         }
     }
 
-    /// 由音频回调调用。只做算术，不分配、不加锁。
+    /// 由音频回调调用；外层按固定 block 推进。
     pub fn render(&self, out: &mut [f32]) {
+        for chunk in out.chunks_mut(DEFAULT_BLOCK_SIZE) {
+            self.render_block(chunk);
+        }
+    }
+
+    fn render_block(&self, out: &mut [f32]) {
         if !self.playing.load(Ordering::Acquire) {
             out.fill(0.0);
             return;
@@ -3452,7 +3458,7 @@ impl Playback {
     pub fn render_blocked(&self, out: &mut [f32], block_size: usize) {
         let block_size = block_size.max(1);
         for chunk in out.chunks_mut(block_size) {
-            self.render(chunk);
+            self.render_block(chunk);
         }
     }
 
