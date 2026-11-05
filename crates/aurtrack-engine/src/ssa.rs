@@ -88,6 +88,21 @@ impl VoiceSsa {
         self.output
     }
 
+    /// block 接口；当前逐帧求值，后续替换为原生循环。
+    pub fn process_block(
+        &self,
+        context: VoiceContext,
+        inputs: &[f64],
+        sample_rate: f64,
+        output: &mut [f32],
+    ) {
+        for (offset, slot) in output.iter_mut().enumerate() {
+            let mut frame = context;
+            frame.local_time = context.local_time + offset as f64 / sample_rate;
+            *slot = self.eval(&frame, inputs) as f32;
+        }
+    }
+
     /// 在音频线程求值；固定栈，无分配。
     pub fn eval(&self, context: &VoiceContext, inputs: &[f64]) -> f64 {
         let mut values = [0.0_f64; 256];
@@ -207,6 +222,27 @@ mod tests {
             seed: 0,
             note_index: 0,
             iteration: 0,
+        }
+    }
+
+    #[test]
+    fn block_matches_scalar_eval() {
+        let plan = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Time, Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(2.0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Multiply, vec![0, 1]),
+                VoiceNodePlan::new(VoiceOp::Output, vec![2]),
+            ],
+            3,
+        );
+        let ssa = VoiceSsa::compile(&plan).unwrap();
+        let mut block = [0.0_f32; 64];
+        ssa.process_block(context(), &[], 48_000.0, &mut block);
+        for (offset, value) in block.iter().enumerate() {
+            let mut frame = context();
+            frame.local_time = offset as f64 / 48_000.0;
+            assert!((f64::from(*value) - ssa.eval(&frame, &[])).abs() < 1e-6);
         }
     }
 
