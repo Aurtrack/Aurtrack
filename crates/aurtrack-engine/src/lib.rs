@@ -2372,6 +2372,19 @@ impl PianoPlan {
         }
     }
 
+    /// block 接口：当前逐帧调用 `sample`，下一步替换为声部 block kernel。
+    pub fn sample_block(
+        &self,
+        notes: &[NotePlan],
+        start_time: f64,
+        sample_rate: f64,
+        output: &mut [f32],
+    ) {
+        for (offset, slot) in output.iter_mut().enumerate() {
+            *slot = self.sample(notes, start_time + offset as f64 / sample_rate) as f32;
+        }
+    }
+
     pub fn sample(&self, notes: &[NotePlan], time: f64) -> f64 {
         let mut output = 0.0;
         for (index, note) in notes.iter().enumerate() {
