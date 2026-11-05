@@ -48,6 +48,21 @@ pub(crate) struct SsaValue {
     pub(crate) external: Option<usize>,
 }
 
+/// block 处理的编译期 scratch；由计划持有，音频线程只读写。
+#[derive(Debug)]
+pub struct BlockScratch {
+    values: Vec<[f64; 64]>,
+}
+
+impl BlockScratch {
+    /// 按 SSA 值数量分配，调用点不在音频线程。
+    pub fn new(value_count: usize) -> Self {
+        Self {
+            values: vec![[0.0_f64; 64]; value_count],
+        }
+    }
+}
+
 /// 无状态 VoicePlan 的 SSA 程序。
 #[derive(Debug, Clone)]
 pub struct VoiceSsa {
@@ -89,22 +104,24 @@ impl VoiceSsa {
     }
 
     /// block 接口：按 SSA 值处理整块，而不是逐帧重跑整张图。
-    #[allow(clippy::large_stack_arrays)]
     pub fn process_block(
         &self,
         context: VoiceContext,
         inputs: &[f64],
         sample_rate: f64,
+        scratch: &mut BlockScratch,
         output: &mut [f32],
     ) {
         const BLOCK: usize = 64;
-        const MAX_VALUES: usize = 128;
-        if output.len() > BLOCK || self.values.len() > MAX_VALUES {
+        if output.len() > BLOCK
+            || self.values.len() > scratch.values.len()
+            || self.output >= scratch.values.len()
+        {
             output.fill(0.0);
             return;
         }
         let frames = output.len();
-        let mut values = [[0.0_f64; BLOCK]; MAX_VALUES];
+        let values = &mut scratch.values;
         for (index, value) in self.values.iter().enumerate() {
             for frame in 0..frames {
                 values[index][frame] = match value.op {
@@ -312,7 +329,8 @@ mod tests {
         );
         let ssa = VoiceSsa::compile(&plan).unwrap();
         let mut block = [0.0_f32; 64];
-        ssa.process_block(context(), &[], 48_000.0, &mut block);
+        let mut scratch = BlockScratch::new(ssa.instruction_count());
+        ssa.process_block(context(), &[], 48_000.0, &mut scratch, &mut block);
         for (offset, value) in block.iter().enumerate() {
             let mut frame = context();
             frame.local_time = offset as f64 / 48_000.0;
