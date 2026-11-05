@@ -31,6 +31,9 @@ use arc_swap::ArcSwap;
 /// 音符首尾的去咔嗒微包络长度。
 pub const NOTE_FADE_SECONDS: f64 = 0.005;
 
+/// 默认音频 block 大小；节点按 block 处理，而不是逐采样分派。
+pub const DEFAULT_BLOCK_SIZE: usize = 64;
+
 const DECLICK_FADE_SECONDS: f64 = 0.003;
 const NO_SEEK: u64 = u64::MAX;
 const FADE_IDLE: u8 = 0;
@@ -1266,6 +1269,21 @@ impl VoicePlan {
 
     pub fn sample_with_inputs(&self, context: VoiceContext, inputs: &[f64]) -> f64 {
         self.sample_internal(context, inputs, None).unwrap_or(0.0)
+    }
+
+    /// 兼容 block API：当前仍逐采样求值，调用方传入输出缓冲，不分配。
+    pub fn sample_block(
+        &self,
+        context: VoiceContext,
+        inputs: &[f64],
+        sample_rate: f64,
+        output: &mut [f32],
+    ) {
+        for (offset, slot) in output.iter_mut().enumerate() {
+            let mut frame = context;
+            frame.local_time = context.local_time + offset as f64 / sample_rate;
+            *slot = self.sample_with_inputs(frame, inputs) as f32;
+        }
     }
 
     fn sample_values(&self, context: VoiceContext, inputs: &[f64]) -> Option<()> {
@@ -4489,6 +4507,26 @@ mod tests {
         }
         std::hint::black_box(sink);
         println!("partial bank function-pointer loop: {:?}", start.elapsed());
+    }
+
+    #[test]
+    fn sample_block_matches_sample_by_sample() {
+        let plan = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Time, Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(2.0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Multiply, vec![0, 1]),
+                VoiceNodePlan::new(VoiceOp::Output, vec![2]),
+            ],
+            3,
+        );
+        let mut block = [0.0_f32; DEFAULT_BLOCK_SIZE];
+        plan.sample_block(test_context(0.1), &[], 48_000.0, &mut block);
+        for (offset, value) in block.iter().enumerate() {
+            let mut context = test_context(0.1);
+            context.local_time += offset as f64 / 48_000.0;
+            assert!((f64::from(*value) - plan.sample(context)).abs() < 1e-6);
+        }
     }
 
     #[test]
