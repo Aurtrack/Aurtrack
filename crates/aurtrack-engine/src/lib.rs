@@ -3435,6 +3435,14 @@ impl Playback {
         }
     }
 
+    /// 以固定 block 边界驱动渲染；当前仍是兼容实现，后续替换为节点 block 内核。
+    pub fn render_blocked(&self, out: &mut [f32], block_size: usize) {
+        let block_size = block_size.max(1);
+        for chunk in out.chunks_mut(block_size) {
+            self.render(chunk);
+        }
+    }
+
     /// 分轨块渲染：输出按轨道优先排列，`stems[track * frames + frame]`。
     ///
     /// 音频回调在每轨插件处理后再混音。轨道数超过计划时，多出的槽保持静音。
@@ -4853,6 +4861,24 @@ mod tests {
         playback.render(&mut buffer);
         assert!(buffer.iter().any(|sample| sample.abs() > 0.0));
         assert!(playback.position_seconds() > 0.0);
+    }
+
+    #[test]
+    fn blocked_render_matches_contiguous_render() {
+        let direct = Playback::new(48_000);
+        direct.set_plan(plan());
+        direct.play();
+        let mut expected = [0.0_f32; 128];
+        direct.render(&mut expected);
+
+        let blocked = Playback::new(48_000);
+        blocked.set_plan(plan());
+        blocked.play();
+        let mut actual = [0.0_f32; 128];
+        blocked.render_blocked(&mut actual, 64);
+        for (expected, actual) in expected.iter().zip(actual.iter()) {
+            assert!((expected - actual).abs() < 1e-9);
+        }
     }
 
     #[test]
