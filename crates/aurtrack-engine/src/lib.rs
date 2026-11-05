@@ -195,13 +195,23 @@ impl VoicePlan {
                 let Some(output) = outputs.get(slot).copied() else {
                     continue;
                 };
-                let Some(expr) = build_expression(body, output, 0) else {
-                    fused.clear();
-                    break;
+                let compiled = if output == body.output {
+                    VoiceSsa::compile(body).and_then(|ssa| CompiledVoice::from_ssa(&ssa))
+                } else {
+                    None
                 };
-                let Some(compiled) = CompiledVoice::compile(&expr) else {
-                    fused.clear();
-                    break;
+                let compiled = if let Some(compiled) = compiled {
+                    compiled
+                } else {
+                    let Some(expr) = build_expression(body, output, 0) else {
+                        fused.clear();
+                        break;
+                    };
+                    let Some(compiled) = CompiledVoice::compile(&expr) else {
+                        fused.clear();
+                        break;
+                    };
+                    compiled
                 };
                 fused.push((result_index, compiled, node.inputs.clone()));
             }
@@ -625,6 +635,55 @@ impl std::fmt::Debug for CompiledVoice {
 }
 
 impl CompiledVoice {
+    fn from_ssa(ssa: &VoiceSsa) -> Option<Self> {
+        let mut instructions = Vec::with_capacity(ssa.instruction_count());
+        for value in ssa.values() {
+            let op = match value.op {
+                crate::ssa::SsaOp::Constant => CompiledOp::Constant(value.constant.unwrap_or(0.0)),
+                crate::ssa::SsaOp::External => CompiledOp::External(value.external?),
+                crate::ssa::SsaOp::ContextPitch => CompiledOp::ContextPitch,
+                crate::ssa::SsaOp::ContextVelocity => CompiledOp::ContextVelocity,
+                crate::ssa::SsaOp::ContextTime => CompiledOp::ContextTime,
+                crate::ssa::SsaOp::ContextGate => CompiledOp::ContextGate,
+                crate::ssa::SsaOp::Add => CompiledOp::Add,
+                crate::ssa::SsaOp::Subtract => CompiledOp::Subtract,
+                crate::ssa::SsaOp::Multiply => CompiledOp::Multiply,
+                crate::ssa::SsaOp::Divide => CompiledOp::Divide,
+                crate::ssa::SsaOp::Power => CompiledOp::Power,
+                crate::ssa::SsaOp::Modulo => CompiledOp::Modulo,
+                crate::ssa::SsaOp::Floor => CompiledOp::Floor,
+                crate::ssa::SsaOp::Ceil => CompiledOp::Ceil,
+                crate::ssa::SsaOp::Round => CompiledOp::Round,
+                crate::ssa::SsaOp::Exp => CompiledOp::Exp,
+                crate::ssa::SsaOp::Sqrt => CompiledOp::Sqrt,
+                crate::ssa::SsaOp::Sin => CompiledOp::Sin,
+                crate::ssa::SsaOp::Abs => CompiledOp::Abs,
+                crate::ssa::SsaOp::GreaterThan => CompiledOp::GreaterThan,
+                crate::ssa::SsaOp::LessThan => CompiledOp::LessThan,
+                crate::ssa::SsaOp::MapRange => CompiledOp::MapRange,
+                crate::ssa::SsaOp::Clamp => CompiledOp::Clamp,
+                crate::ssa::SsaOp::Sine => CompiledOp::Sine,
+            };
+            let mut operands = [0; 5];
+            for (slot, argument) in value.args.iter().take(5).enumerate() {
+                operands[slot] = *argument;
+            }
+            instructions.push(CompiledInstruction {
+                op,
+                destination: instructions.len(),
+                operands,
+            });
+        }
+        let jit = build_jit_voice(&instructions, ssa.root())
+            .ok()
+            .map(std::sync::Arc::new);
+        Some(Self {
+            instructions,
+            root: ssa.root(),
+            jit,
+        })
+    }
+
     fn compile(expr: &VoiceExpr) -> Option<Self> {
         let mut instructions = Vec::new();
         let mut registers = 0;

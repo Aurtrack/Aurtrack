@@ -41,11 +41,11 @@ pub enum SsaOp {
 }
 
 #[derive(Debug, Clone)]
-struct SsaValue {
-    op: SsaOp,
-    args: Vec<usize>,
-    constant: Option<f64>,
-    external: Option<usize>,
+pub(crate) struct SsaValue {
+    pub(crate) op: SsaOp,
+    pub(crate) args: Vec<usize>,
+    pub(crate) constant: Option<f64>,
+    pub(crate) external: Option<usize>,
 }
 
 /// 无状态 VoicePlan 的 SSA 程序。
@@ -78,6 +78,14 @@ impl VoiceSsa {
     /// 指令数，用于优化测试和性能诊断。
     pub fn instruction_count(&self) -> usize {
         self.values.len()
+    }
+
+    pub(crate) fn values(&self) -> &[SsaValue] {
+        &self.values
+    }
+
+    pub(crate) fn root(&self) -> usize {
+        self.output
     }
 
     /// 在音频线程求值；固定栈，无分配。
@@ -284,7 +292,7 @@ impl SsaCompiler<'_> {
             VoiceOp::Vca => self.binary(node.inputs.as_slice(), SsaOp::Multiply)?,
             VoiceOp::Clamp => self.nary(node.inputs.as_slice(), SsaOp::Clamp)?,
             VoiceOp::MapRange => self.nary(node.inputs.as_slice(), SsaOp::MapRange)?,
-            VoiceOp::Sine => self.nary(node.inputs.as_slice(), SsaOp::Sine)?,
+            VoiceOp::Sine => self.sine(node.inputs.as_slice())?,
             _ => return None,
         };
         *self.building.get_mut(index)? = false;
@@ -387,6 +395,16 @@ impl SsaCompiler<'_> {
             return self.push_leaf(SsaOp::Constant, Some(folded), None);
         }
         self.push_op(op, vec![left, right])
+    }
+
+    fn sine(&mut self, inputs: &[usize]) -> Option<usize> {
+        if inputs.len() < 3 {
+            return None;
+        }
+        let frequency = self.build(inputs[0])?;
+        let phase = self.build(inputs[1])?;
+        let time = self.build(inputs[2])?;
+        self.push_op(SsaOp::Sine, vec![frequency, time, phase])
     }
 
     fn nary(&mut self, inputs: &[usize], op: SsaOp) -> Option<usize> {
