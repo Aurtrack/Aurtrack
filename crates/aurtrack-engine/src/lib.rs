@@ -4376,6 +4376,59 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "性能原型，手动运行"]
+    fn partial_bank_loop_prototype() {
+        let notes = 8;
+        let samples = 96_000;
+        let start = std::time::Instant::now();
+        let mut sink = 0.0_f64;
+        for note in 0..notes {
+            let pitch = 440.0 * 2_f64.powf(note as f64 / 12.0);
+            for sample in 0..samples {
+                let time = sample as f64 / 48_000.0;
+                for partial in 0..12 {
+                    sink += piano_partial_sample(
+                        pitch,
+                        0.8,
+                        time,
+                        partial as f64,
+                        0.0004,
+                        0.5,
+                        1.2,
+                        0.12,
+                    );
+                }
+            }
+        }
+        std::hint::black_box(sink);
+        println!("partial bank loop: {:?}", start.elapsed());
+
+        let function: fn(f64, f64, f64, f64, f64, f64, f64, f64) -> f64 = piano_partial_sample;
+        let start = std::time::Instant::now();
+        let mut sink = 0.0_f64;
+        for note in 0..notes {
+            let pitch = 440.0 * 2_f64.powf(note as f64 / 12.0);
+            for sample in 0..samples {
+                let time = sample as f64 / 48_000.0;
+                for partial in 0..12 {
+                    sink += std::hint::black_box(function)(
+                        pitch,
+                        0.8,
+                        time,
+                        partial as f64,
+                        0.0004,
+                        0.5,
+                        1.2,
+                        0.12,
+                    );
+                }
+            }
+        }
+        std::hint::black_box(sink);
+        println!("partial bank function-pointer loop: {:?}", start.elapsed());
+    }
+
+    #[test]
     fn optimize_remaps_nested_repeat_outputs() {
         let body = VoicePlan::new(
             vec![
