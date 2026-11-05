@@ -18,8 +18,10 @@
     clippy::too_many_lines
 )]
 
+mod block;
 mod ssa;
 
+pub use block::{BlockContext, BlockKernel, SsaKernel};
 pub use ssa::{SsaOp, VoiceSsa};
 
 use std::collections::{BTreeMap, HashMap};
