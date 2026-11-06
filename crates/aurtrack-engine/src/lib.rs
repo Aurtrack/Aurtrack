@@ -2447,12 +2447,48 @@ impl PianoPlan {
 
     /// block 接口：当前逐帧调用 `sample`，下一步替换为声部 block kernel。
     pub fn sample_block(
-        &self,
+        &mut self,
         notes: &[NotePlan],
         start_time: f64,
         sample_rate: f64,
         output: &mut [f32],
     ) {
+        let voice_ref = self.voice.as_ref();
+        if output.len() <= 64
+            && let Some(voice) = voice_ref
+            && notes.iter().all(|note| {
+                note.start <= start_time && start_time <= note.start + note.duration + 0.5
+            })
+        {
+            output.fill(0.0);
+            let frames = output.len();
+            let mut note_block = [0.0_f32; 64];
+            for (index, note) in notes.iter().enumerate().take(self.states.len()) {
+                let local = start_time - note.start;
+                let context = VoiceContext {
+                    pitch: note.frequency,
+                    velocity: note.velocity,
+                    local_time: local,
+                    gate: local <= note.duration,
+                    seed: note.start.to_bits() ^ note.frequency.to_bits() ^ note.velocity.to_bits(),
+                    note_index: index as u64,
+                    iteration: 0,
+                };
+                if !voice.process_block(
+                    &mut self.states[index],
+                    context,
+                    &[],
+                    sample_rate,
+                    &mut note_block[..frames],
+                ) {
+                    break;
+                }
+                for (slot, value) in output.iter_mut().zip(&note_block[..frames]) {
+                    *slot += *value;
+                }
+            }
+            return;
+        }
         for (offset, slot) in output.iter_mut().enumerate() {
             *slot = self.sample(notes, start_time + offset as f64 / sample_rate) as f32;
         }
