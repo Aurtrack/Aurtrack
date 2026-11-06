@@ -2885,6 +2885,21 @@ pub enum GraphOp {
     Output,
 }
 
+/// GraphPlan 一个 block 的节点值状态。
+#[derive(Debug, Clone)]
+struct GraphState {
+    values: [[f64; 64]; MAX_GRAPH_NODES],
+}
+
+impl GraphState {
+    #[allow(clippy::large_stack_arrays)]
+    fn new() -> Self {
+        Self {
+            values: [[0.0_f64; 64]; MAX_GRAPH_NODES],
+        }
+    }
+}
+
 /// 已排序的 DAG 计划；索引 0 固定是声部。
 #[derive(Debug, Clone)]
 pub struct GraphPlan {
@@ -3033,7 +3048,8 @@ impl GraphPlan {
             return;
         }
         let frames = output.len();
-        let mut values = [[0.0_f64; BLOCK]; MAX_GRAPH_NODES];
+        let mut graph_state = GraphState::new();
+        let values = &mut graph_state.values;
         for (index, node) in self.nodes.iter().enumerate() {
             for frame in 0..frames {
                 let time = start_time + frame as f64 / f64::from(sample_rate);
@@ -3043,8 +3059,8 @@ impl GraphPlan {
                     },
                     GraphOp::Sine => {
                         let frequency =
-                            block_control(node, 0, frame, &values, 440.0).clamp(20.0, 20_000.0);
-                        let phase = block_control(node, 1, frame, &values, 0.0);
+                            block_control(node, 0, frame, values, 440.0).clamp(20.0, 20_000.0);
+                        let phase = block_control(node, 1, frame, &*values, 0.0);
                         (std::f64::consts::TAU * frequency * time + phase).sin() * 0.25
                     },
                     GraphOp::Constant(value) => *value,
@@ -3060,11 +3076,11 @@ impl GraphPlan {
                         .map(|control| values[*control][frame])
                         .product(),
                     GraphOp::MapRange => {
-                        let value = block_control(node, 0, frame, &values, 0.0);
-                        let from_min = block_control(node, 1, frame, &values, 0.0);
-                        let from_max = block_control(node, 2, frame, &values, 1.0);
-                        let to_min = block_control(node, 3, frame, &values, 0.0);
-                        let to_max = block_control(node, 4, frame, &values, 1.0);
+                        let value = block_control(node, 0, frame, &*values, 0.0);
+                        let from_min = block_control(node, 1, frame, &*values, 0.0);
+                        let from_max = block_control(node, 2, frame, &*values, 1.0);
+                        let to_min = block_control(node, 3, frame, &*values, 0.0);
+                        let to_max = block_control(node, 4, frame, &*values, 1.0);
                         let span = from_max - from_min;
                         if span.abs() < 1e-12 {
                             to_min
@@ -3073,10 +3089,10 @@ impl GraphPlan {
                         }
                     },
                     GraphOp::Clamp => {
-                        let value = block_control(node, 0, frame, &values, 0.0);
+                        let value = block_control(node, 0, frame, &*values, 0.0);
                         value.clamp(
-                            block_control(node, 1, frame, &values, 0.0),
-                            block_control(node, 2, frame, &values, 1.0),
+                            block_control(node, 1, frame, &*values, 0.0),
+                            block_control(node, 2, frame, &*values, 1.0),
                         )
                     },
                     GraphOp::Filter(filter) => {
@@ -3087,8 +3103,8 @@ impl GraphPlan {
                         filter.process_with(
                             sample_rate,
                             value,
-                            block_control(node, 0, frame, &values, filter.settings.cutoff),
-                            block_control(node, 1, frame, &values, filter.settings.resonance),
+                            block_control(node, 0, frame, &*values, filter.settings.cutoff),
+                            block_control(node, 1, frame, &*values, filter.settings.resonance),
                         )
                     },
                     GraphOp::Highpass(filter) => {
@@ -3099,8 +3115,8 @@ impl GraphPlan {
                         filter.process_with(
                             sample_rate,
                             value,
-                            block_control(node, 0, frame, &values, filter.cutoff),
-                            block_control(node, 1, frame, &values, filter.resonance),
+                            block_control(node, 0, frame, &*values, filter.cutoff),
+                            block_control(node, 1, frame, &*values, filter.resonance),
                         )
                     },
                     GraphOp::Soundboard(soundboard) => {
@@ -3125,8 +3141,8 @@ impl GraphPlan {
                         delay.process_with(
                             sample_rate,
                             value,
-                            block_control(node, 0, frame, &values, delay.time),
-                            block_control(node, 1, frame, &values, delay.feedback),
+                            block_control(node, 0, frame, &*values, delay.time),
+                            block_control(node, 1, frame, &*values, delay.feedback),
                         )
                     },
                     GraphOp::Gain => {
@@ -3134,14 +3150,14 @@ impl GraphPlan {
                             .inputs
                             .first()
                             .map_or(0.0, |input| values[*input][frame]);
-                        input * block_control(node, 0, frame, &values, 1.0)
+                        input * block_control(node, 0, frame, &*values, 1.0)
                     },
                     GraphOp::Drive => {
                         let input = node
                             .inputs
                             .first()
                             .map_or(0.0, |input| values[*input][frame]);
-                        (input * block_control(node, 0, frame, &values, 1.0).max(1.0)).tanh()
+                        (input * block_control(node, 0, frame, &*values, 1.0).max(1.0)).tanh()
                     },
                     GraphOp::Mix => node.inputs.iter().map(|input| values[*input][frame]).sum(),
                     GraphOp::Plugin => node
