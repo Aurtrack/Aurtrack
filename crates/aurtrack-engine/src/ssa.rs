@@ -61,6 +61,10 @@ impl BlockScratch {
             values: vec![[0.0_f64; 64]; value_count],
         }
     }
+
+    pub fn len(&self) -> usize {
+        self.values.len()
+    }
 }
 
 /// 无状态 VoicePlan 的 SSA 程序。

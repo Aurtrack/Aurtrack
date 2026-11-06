@@ -1309,6 +1309,25 @@ impl VoicePlan {
         self.sample_internal(context, inputs, None).unwrap_or(0.0)
     }
 
+    /// 无状态 VoicePlan 的 block 路径；有状态或空间不足时返回 false。
+    pub fn process_block(
+        &self,
+        state: &mut VoiceState,
+        context: VoiceContext,
+        inputs: &[f64],
+        sample_rate: f64,
+        output: &mut [f32],
+    ) -> bool {
+        let Some(ssa) = VoiceSsa::compile(self) else {
+            return false;
+        };
+        if state.scratch.len() < ssa.instruction_count() {
+            return false;
+        }
+        ssa.process_block(context, inputs, sample_rate, &mut state.scratch, output);
+        true
+    }
+
     /// 兼容 block API：当前仍逐采样求值，调用方传入输出缓冲，不分配。
     pub fn sample_block(
         &self,
@@ -5041,6 +5060,27 @@ mod tests {
         }
         std::hint::black_box(sink);
         println!("partial bank function-pointer loop: {:?}", start.elapsed());
+    }
+
+    #[test]
+    fn voice_process_block_matches_sample() {
+        let plan = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Time, Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(2.0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Multiply, vec![0, 1]),
+                VoiceNodePlan::new(VoiceOp::Output, vec![2]),
+            ],
+            3,
+        );
+        let mut state = VoiceState::new(8);
+        let mut block = [0.0_f32; 64];
+        assert!(plan.process_block(&mut state, test_context(0.1), &[], 48_000.0, &mut block));
+        for (offset, value) in block.iter().enumerate() {
+            let mut context = test_context(0.1);
+            context.local_time += offset as f64 / 48_000.0;
+            assert!((f64::from(*value) - plan.sample(context)).abs() < 1e-6);
+        }
     }
 
     #[test]
