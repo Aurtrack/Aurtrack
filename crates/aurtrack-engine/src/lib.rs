@@ -2705,6 +2705,21 @@ impl ResonatorPlan {
     }
 
     pub fn process(&self, sample_rate: u32, input: f64) -> f64 {
+        let mut state = [
+            f64::from_bits(self.state[0].load(Ordering::Relaxed)),
+            f64::from_bits(self.state[1].load(Ordering::Relaxed)),
+            f64::from_bits(self.state[2].load(Ordering::Relaxed)),
+            f64::from_bits(self.state[3].load(Ordering::Relaxed)),
+        ];
+        let output = self.process_with_state(sample_rate, input, &mut state);
+        self.state[0].store(state[0].to_bits(), Ordering::Relaxed);
+        self.state[1].store(state[1].to_bits(), Ordering::Relaxed);
+        self.state[2].store(state[2].to_bits(), Ordering::Relaxed);
+        self.state[3].store(state[3].to_bits(), Ordering::Relaxed);
+        output
+    }
+
+    pub fn process_with_state(&self, sample_rate: u32, input: f64, state: &mut [f64; 4]) -> f64 {
         let rate = f64::from(sample_rate.max(1));
         let w0 = std::f64::consts::TAU * self.frequency / rate;
         let alpha = w0.sin() / (2.0 * self.q);
@@ -2713,15 +2728,15 @@ impl ResonatorPlan {
         let b2 = -alpha / a0;
         let a1 = -2.0 * w0.cos() / a0;
         let a2 = (1.0 - alpha) / a0;
-        let x1 = f64::from_bits(self.state[0].load(Ordering::Relaxed));
-        let x2 = f64::from_bits(self.state[1].load(Ordering::Relaxed));
-        let y1 = f64::from_bits(self.state[2].load(Ordering::Relaxed));
-        let y2 = f64::from_bits(self.state[3].load(Ordering::Relaxed));
+        let x1 = state[0];
+        let x2 = state[1];
+        let y1 = state[2];
+        let y2 = state[3];
         let y = b0 * input + b2 * x2 - a1 * y1 - a2 * y2;
-        self.state[0].store(input.to_bits(), Ordering::Relaxed);
-        self.state[1].store(x1.to_bits(), Ordering::Relaxed);
-        self.state[2].store(y.to_bits(), Ordering::Relaxed);
-        self.state[3].store(y1.to_bits(), Ordering::Relaxed);
+        state[0] = input;
+        state[1] = x1;
+        state[2] = y;
+        state[3] = y1;
         y * self.gain
     }
 
@@ -2889,6 +2904,7 @@ pub enum GraphOp {
 #[derive(Debug, Clone)]
 struct GraphState {
     values: [[f64; 64]; MAX_GRAPH_NODES],
+    resonators: [[f64; 4]; MAX_GRAPH_NODES],
 }
 
 impl GraphState {
@@ -2896,6 +2912,7 @@ impl GraphState {
     fn new() -> Self {
         Self {
             values: [[0.0_f64; 64]; MAX_GRAPH_NODES],
+            resonators: [[0.0_f64; 4]; MAX_GRAPH_NODES],
         }
     }
 }
@@ -2958,6 +2975,8 @@ impl GraphPlan {
             return 0.0;
         }
         let mut values = [0.0_f64; MAX_GRAPH_NODES];
+        // SAFETY: 音频线程是唯一调用方；控制线程不会并发写 state。
+        let graph_state = unsafe { &mut *self.state.0.get() };
         for (index, node) in self.nodes.iter().enumerate() {
             let value = match &node.op {
                 GraphOp::Voice { index } => voices.get(*index).copied().unwrap_or(0.0),
@@ -3018,7 +3037,11 @@ impl GraphPlan {
                 },
                 GraphOp::Resonator(resonator) => {
                     let value = node.inputs.first().map_or(0.0, |input| values[*input]);
-                    resonator.process(sample_rate, value)
+                    resonator.process_with_state(
+                        sample_rate,
+                        value,
+                        &mut graph_state.resonators[index],
+                    )
                 },
                 GraphOp::Delay(delay) => {
                     let value = node.inputs.first().map_or(0.0, |input| values[*input]);
@@ -3080,7 +3103,10 @@ impl GraphPlan {
         }
         let frames = output.len();
         // SAFETY: 音频线程是唯一调用方；控制线程不会并发写 state。
-        let values = unsafe { &mut (*self.state.0.get()).values };
+        // SAFETY: 音频线程是唯一调用方；控制线程不会并发写 state。
+        let graph_state = unsafe { &mut *self.state.0.get() };
+        let values = &mut graph_state.values;
+        let resonators = &mut graph_state.resonators;
         for (index, node) in self.nodes.iter().enumerate() {
             for frame in 0..frames {
                 let time = start_time + frame as f64 / f64::from(sample_rate);
@@ -3162,7 +3188,7 @@ impl GraphPlan {
                             .inputs
                             .first()
                             .map_or(0.0, |input| values[*input][frame]);
-                        resonator.process(sample_rate, value)
+                        resonator.process_with_state(sample_rate, value, &mut resonators[index])
                     },
                     GraphOp::Delay(delay) => {
                         let value = node
