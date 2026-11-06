@@ -2878,6 +2878,37 @@ impl SoundboardPlan {
         input * 0.72 + wet * 0.065
     }
 
+    pub(crate) fn process_with_state(
+        &self,
+        sample_rate: u32,
+        input: f64,
+        states: &mut [[f64; 4]; 8],
+    ) -> f64 {
+        let rate = f64::from(sample_rate.max(1));
+        let mut wet = 0.0;
+        for (index, mode) in self.modes.iter().enumerate().take(8) {
+            let state = &mut states[index];
+            let w0 = std::f64::consts::TAU * mode.frequency / rate;
+            let alpha = w0.sin() / (2.0 * mode.q);
+            let a0 = 1.0 + alpha;
+            let b0 = alpha / a0;
+            let b2 = -alpha / a0;
+            let a1 = -2.0 * w0.cos() / a0;
+            let a2 = (1.0 - alpha) / a0;
+            let x1 = state[0];
+            let x2 = state[1];
+            let y1 = state[2];
+            let y2 = state[3];
+            let y = b0 * input + b2 * x2 - a1 * y1 - a2 * y2;
+            state[0] = input;
+            state[1] = x1;
+            state[2] = y;
+            state[3] = y1;
+            wet += y * mode.gain;
+        }
+        input * 0.72 + wet * 0.065
+    }
+
     pub fn reset(&self) {
         for mode in &self.modes {
             for slot in mode.state.iter() {
@@ -2976,6 +3007,8 @@ struct GraphState {
     highpass: [f64; MAX_GRAPH_NODES],
     delays: Vec<DelayState>,
     delay_slots: Vec<Option<usize>>,
+    soundboards: Vec<[[f64; 4]; 8]>,
+    soundboard_slots: Vec<Option<usize>>,
 }
 
 impl GraphState {
@@ -2988,6 +3021,8 @@ impl GraphState {
             highpass: [0.0_f64; MAX_GRAPH_NODES],
             delays: Vec::new(),
             delay_slots: vec![None; MAX_GRAPH_NODES],
+            soundboards: Vec::new(),
+            soundboard_slots: vec![None; MAX_GRAPH_NODES],
         }
     }
 
@@ -2997,6 +3032,10 @@ impl GraphState {
             if matches!(node.op, GraphOp::Delay(_)) {
                 state.delay_slots[index] = Some(state.delays.len());
                 state.delays.push(DelayState::new());
+            }
+            if matches!(node.op, GraphOp::Soundboard(_)) {
+                state.soundboard_slots[index] = Some(state.soundboards.len());
+                state.soundboards.push([[0.0_f64; 4]; 8]);
             }
         }
         state
@@ -3125,7 +3164,15 @@ impl GraphPlan {
                 },
                 GraphOp::Soundboard(soundboard) => {
                     let value = node.inputs.first().map_or(0.0, |input| values[*input]);
-                    soundboard.process(sample_rate, value)
+                    if let Some(slot) = graph_state.soundboard_slots[index] {
+                        soundboard.process_with_state(
+                            sample_rate,
+                            value,
+                            &mut graph_state.soundboards[slot],
+                        )
+                    } else {
+                        soundboard.process(sample_rate, value)
+                    }
                 },
                 GraphOp::Resonator(resonator) => {
                     let value = node.inputs.first().map_or(0.0, |input| values[*input]);
@@ -3146,7 +3193,12 @@ impl GraphPlan {
                             &mut graph_state.delays[slot],
                         )
                     } else {
-                        0.0
+                        delay.process_with(
+                            sample_rate,
+                            value,
+                            control_value(node, 0, &values, delay.time),
+                            control_value(node, 1, &values, delay.feedback),
+                        )
                     }
                 },
                 GraphOp::Gain => {
@@ -3208,6 +3260,8 @@ impl GraphPlan {
         let highpass = &mut graph_state.highpass;
         let delays = &mut graph_state.delays;
         let delay_slots = &graph_state.delay_slots;
+        let soundboards = &mut graph_state.soundboards;
+        let soundboard_slots = &graph_state.soundboard_slots;
         for (index, node) in self.nodes.iter().enumerate() {
             for frame in 0..frames {
                 let time = start_time + frame as f64 / f64::from(sample_rate);
@@ -3284,7 +3338,15 @@ impl GraphPlan {
                             .inputs
                             .first()
                             .map_or(0.0, |input| values[*input][frame]);
-                        soundboard.process(sample_rate, value)
+                        if let Some(slot) = soundboard_slots[index] {
+                            soundboard.process_with_state(
+                                sample_rate,
+                                value,
+                                &mut soundboards[slot],
+                            )
+                        } else {
+                            0.0
+                        }
                     },
                     GraphOp::Resonator(resonator) => {
                         let value = node
