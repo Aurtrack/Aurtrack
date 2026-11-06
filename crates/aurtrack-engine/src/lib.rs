@@ -2670,6 +2670,21 @@ impl HighpassPlan {
     }
 }
 
+#[derive(Debug, Clone)]
+pub(crate) struct DelayState {
+    buffer: Box<[f64]>,
+    write: usize,
+}
+
+impl DelayState {
+    fn new() -> Self {
+        Self {
+            buffer: vec![0.0; DELAY_SLOTS].into_boxed_slice(),
+            write: 0,
+        }
+    }
+}
+
 /// 无锁延迟线；缓冲区在构建计划时分配，实时线程只读写原子槽。
 #[derive(Debug, Clone)]
 pub struct DelayPlan {
@@ -2706,6 +2721,26 @@ impl DelayPlan {
         );
         self.write
             .store((write + 1) % DELAY_SLOTS, Ordering::Relaxed);
+        delayed
+    }
+
+    #[allow(clippy::unused_self)]
+    pub(crate) fn process_with_state(
+        &self,
+        sample_rate: u32,
+        input: f64,
+        time: f64,
+        feedback: f64,
+        state: &mut DelayState,
+    ) -> f64 {
+        let rate = f64::from(sample_rate.max(1));
+        let delay = (time.clamp(0.001, 2.0) * rate).round() as usize;
+        let delay = delay.clamp(1, DELAY_SLOTS - 1);
+        let write = state.write % DELAY_SLOTS;
+        let read = (write + DELAY_SLOTS - delay) % DELAY_SLOTS;
+        let delayed = state.buffer[read];
+        state.buffer[write] = input + delayed * feedback.clamp(0.0, 0.95);
+        state.write = (write + 1) % DELAY_SLOTS;
         delayed
     }
 
@@ -2939,6 +2974,8 @@ struct GraphState {
     resonators: [[f64; 4]; MAX_GRAPH_NODES],
     filters: [[f64; 2]; MAX_GRAPH_NODES],
     highpass: [f64; MAX_GRAPH_NODES],
+    delays: Vec<DelayState>,
+    delay_slots: Vec<Option<usize>>,
 }
 
 impl GraphState {
@@ -2949,7 +2986,20 @@ impl GraphState {
             resonators: [[0.0_f64; 4]; MAX_GRAPH_NODES],
             filters: [[0.0_f64; 2]; MAX_GRAPH_NODES],
             highpass: [0.0_f64; MAX_GRAPH_NODES],
+            delays: Vec::new(),
+            delay_slots: vec![None; MAX_GRAPH_NODES],
         }
+    }
+
+    fn from_nodes(nodes: &[GraphNodePlan]) -> Self {
+        let mut state = Self::new();
+        for (index, node) in nodes.iter().enumerate().take(MAX_GRAPH_NODES) {
+            if matches!(node.op, GraphOp::Delay(_)) {
+                state.delay_slots[index] = Some(state.delays.len());
+                state.delays.push(DelayState::new());
+            }
+        }
+        state
     }
 }
 
@@ -2962,6 +3012,10 @@ unsafe impl Sync for GraphStateCell {}
 impl GraphStateCell {
     pub fn new() -> Self {
         Self(std::cell::UnsafeCell::new(GraphState::new()))
+    }
+
+    pub fn from_nodes(nodes: &[GraphNodePlan]) -> Self {
+        Self(std::cell::UnsafeCell::new(GraphState::from_nodes(nodes)))
     }
 }
 
@@ -3083,12 +3137,17 @@ impl GraphPlan {
                 },
                 GraphOp::Delay(delay) => {
                     let value = node.inputs.first().map_or(0.0, |input| values[*input]);
-                    delay.process_with(
-                        sample_rate,
-                        value,
-                        control_value(node, 0, &values, delay.time),
-                        control_value(node, 1, &values, delay.feedback),
-                    )
+                    if let Some(slot) = graph_state.delay_slots[index] {
+                        delay.process_with_state(
+                            sample_rate,
+                            value,
+                            control_value(node, 0, &values, delay.time),
+                            control_value(node, 1, &values, delay.feedback),
+                            &mut graph_state.delays[slot],
+                        )
+                    } else {
+                        0.0
+                    }
                 },
                 GraphOp::Gain => {
                     let input = node.inputs.first().map_or(0.0, |input| values[*input]);
@@ -3147,6 +3206,8 @@ impl GraphPlan {
         let resonators = &mut graph_state.resonators;
         let filters = &mut graph_state.filters;
         let highpass = &mut graph_state.highpass;
+        let delays = &mut graph_state.delays;
+        let delay_slots = &graph_state.delay_slots;
         for (index, node) in self.nodes.iter().enumerate() {
             for frame in 0..frames {
                 let time = start_time + frame as f64 / f64::from(sample_rate);
@@ -3237,12 +3298,17 @@ impl GraphPlan {
                             .inputs
                             .first()
                             .map_or(0.0, |input| values[*input][frame]);
-                        delay.process_with(
-                            sample_rate,
-                            value,
-                            block_control(node, 0, frame, &*values, delay.time),
-                            block_control(node, 1, frame, &*values, delay.feedback),
-                        )
+                        if let Some(slot) = delay_slots[index] {
+                            delay.process_with_state(
+                                sample_rate,
+                                value,
+                                block_control(node, 0, frame, &*values, delay.time),
+                                block_control(node, 1, frame, &*values, delay.feedback),
+                                &mut delays[slot],
+                            )
+                        } else {
+                            0.0
+                        }
                     },
                     GraphOp::Gain => {
                         let input = node

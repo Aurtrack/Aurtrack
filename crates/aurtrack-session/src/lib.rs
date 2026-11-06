@@ -858,6 +858,7 @@ impl Track {
         if nodes.len() > aurtrack_engine::MAX_GRAPH_NODES {
             return Err(GraphError::TooManyNodes(nodes.len()));
         }
+        let state = GraphStateCell::from_nodes(&nodes);
         Ok((
             source_frequency,
             adsr,
@@ -867,7 +868,7 @@ impl Track {
                 plugin: plugin.map(|plugin| PluginPlan::new(plugin.path, plugin.id, plugin.state)),
                 pianos,
                 fallback_sine: source_frequency,
-                state: GraphStateCell::new(),
+                state,
             },
         ))
     }
