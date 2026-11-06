@@ -2963,6 +2963,161 @@ impl GraphPlan {
         }
         values[self.output]
     }
+
+    /// 节点主序的 block 渲染；状态节点仍按帧推进，但外层只做一次分派。
+    #[allow(clippy::large_stack_arrays)]
+    pub fn process_block(
+        &self,
+        voices: &[f64],
+        sample_rate: u32,
+        start_time: f64,
+        output: &mut [f32],
+    ) {
+        const BLOCK: usize = 64;
+        if self.nodes.len() > MAX_GRAPH_NODES
+            || self.output >= self.nodes.len()
+            || output.len() > BLOCK
+        {
+            output.fill(0.0);
+            return;
+        }
+        let frames = output.len();
+        let mut values = [[0.0_f64; BLOCK]; MAX_GRAPH_NODES];
+        for (index, node) in self.nodes.iter().enumerate() {
+            for frame in 0..frames {
+                let time = start_time + frame as f64 / f64::from(sample_rate);
+                values[index][frame] = match &node.op {
+                    GraphOp::Voice { index } => voices.get(*index).copied().unwrap_or(0.0),
+                    GraphOp::Sine => {
+                        let frequency =
+                            block_control(node, 0, frame, &values, 440.0).clamp(20.0, 20_000.0);
+                        let phase = block_control(node, 1, frame, &values, 0.0);
+                        (std::f64::consts::TAU * frequency * time + phase).sin() * 0.25
+                    },
+                    GraphOp::Constant(value) => *value,
+                    GraphOp::Lfo(lfo) => lfo.at(time),
+                    GraphOp::Add => node
+                        .controls
+                        .iter()
+                        .map(|control| values[*control][frame])
+                        .sum(),
+                    GraphOp::Multiply => node
+                        .controls
+                        .iter()
+                        .map(|control| values[*control][frame])
+                        .product(),
+                    GraphOp::MapRange => {
+                        let value = block_control(node, 0, frame, &values, 0.0);
+                        let from_min = block_control(node, 1, frame, &values, 0.0);
+                        let from_max = block_control(node, 2, frame, &values, 1.0);
+                        let to_min = block_control(node, 3, frame, &values, 0.0);
+                        let to_max = block_control(node, 4, frame, &values, 1.0);
+                        let span = from_max - from_min;
+                        if span.abs() < 1e-12 {
+                            to_min
+                        } else {
+                            to_min + (value - from_min) / span * (to_max - to_min)
+                        }
+                    },
+                    GraphOp::Clamp => {
+                        let value = block_control(node, 0, frame, &values, 0.0);
+                        value.clamp(
+                            block_control(node, 1, frame, &values, 0.0),
+                            block_control(node, 2, frame, &values, 1.0),
+                        )
+                    },
+                    GraphOp::Filter(filter) => {
+                        let value = node
+                            .inputs
+                            .first()
+                            .map_or(0.0, |input| values[*input][frame]);
+                        filter.process_with(
+                            sample_rate,
+                            value,
+                            block_control(node, 0, frame, &values, filter.settings.cutoff),
+                            block_control(node, 1, frame, &values, filter.settings.resonance),
+                        )
+                    },
+                    GraphOp::Highpass(filter) => {
+                        let value = node
+                            .inputs
+                            .first()
+                            .map_or(0.0, |input| values[*input][frame]);
+                        filter.process_with(
+                            sample_rate,
+                            value,
+                            block_control(node, 0, frame, &values, filter.cutoff),
+                            block_control(node, 1, frame, &values, filter.resonance),
+                        )
+                    },
+                    GraphOp::Soundboard(soundboard) => {
+                        let value = node
+                            .inputs
+                            .first()
+                            .map_or(0.0, |input| values[*input][frame]);
+                        soundboard.process(sample_rate, value)
+                    },
+                    GraphOp::Resonator(resonator) => {
+                        let value = node
+                            .inputs
+                            .first()
+                            .map_or(0.0, |input| values[*input][frame]);
+                        resonator.process(sample_rate, value)
+                    },
+                    GraphOp::Delay(delay) => {
+                        let value = node
+                            .inputs
+                            .first()
+                            .map_or(0.0, |input| values[*input][frame]);
+                        delay.process_with(
+                            sample_rate,
+                            value,
+                            block_control(node, 0, frame, &values, delay.time),
+                            block_control(node, 1, frame, &values, delay.feedback),
+                        )
+                    },
+                    GraphOp::Gain => {
+                        let input = node
+                            .inputs
+                            .first()
+                            .map_or(0.0, |input| values[*input][frame]);
+                        input * block_control(node, 0, frame, &values, 1.0)
+                    },
+                    GraphOp::Drive => {
+                        let input = node
+                            .inputs
+                            .first()
+                            .map_or(0.0, |input| values[*input][frame]);
+                        (input * block_control(node, 0, frame, &values, 1.0).max(1.0)).tanh()
+                    },
+                    GraphOp::Mix => node.inputs.iter().map(|input| values[*input][frame]).sum(),
+                    GraphOp::Plugin => node
+                        .inputs
+                        .first()
+                        .map_or(0.0, |input| values[*input][frame]),
+                    GraphOp::Output => node
+                        .inputs
+                        .first()
+                        .map_or(0.0, |input| values[*input][frame]),
+                };
+            }
+        }
+        for (frame, slot) in output.iter_mut().enumerate() {
+            *slot = values[self.output][frame] as f32;
+        }
+    }
+}
+
+fn block_control(
+    node: &GraphNodePlan,
+    slot: usize,
+    frame: usize,
+    values: &[[f64; 64]],
+    default: f64,
+) -> f64 {
+    node.controls
+        .get(slot)
+        .map_or(default, |control| values[*control][frame])
 }
 
 /// 每个音符可用的 ADSR 包络参数，时间单位秒。
@@ -4880,6 +5035,44 @@ mod tests {
         playback.render(&mut buffer);
         assert!(buffer.iter().any(|sample| sample.abs() > 0.0));
         assert!(playback.position_seconds() > 0.0);
+    }
+
+    #[test]
+    fn graph_block_matches_scalar_sample() {
+        let plan = GraphPlan {
+            nodes: vec![
+                GraphNodePlan {
+                    op: GraphOp::Constant(440.0),
+                    inputs: Vec::new(),
+                    controls: Vec::new(),
+                },
+                GraphNodePlan {
+                    op: GraphOp::Constant(0.0),
+                    inputs: Vec::new(),
+                    controls: Vec::new(),
+                },
+                GraphNodePlan {
+                    op: GraphOp::Sine,
+                    inputs: Vec::new(),
+                    controls: vec![0, 1],
+                },
+                GraphNodePlan {
+                    op: GraphOp::Output,
+                    inputs: vec![2],
+                    controls: Vec::new(),
+                },
+            ],
+            output: 3,
+            plugin: None,
+            pianos: Vec::new(),
+            fallback_sine: None,
+        };
+        let mut block = [0.0_f32; 64];
+        plan.process_block(&[], 48_000, 0.0, &mut block);
+        for (frame, value) in block.iter().enumerate() {
+            let time = frame as f64 / 48_000.0;
+            assert!((f64::from(*value) - plan.sample(&[], 48_000, time)).abs() < 1e-6);
+        }
     }
 
     #[test]
