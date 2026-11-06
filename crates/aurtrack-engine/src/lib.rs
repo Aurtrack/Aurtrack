@@ -2585,14 +2585,33 @@ impl FilterPlan {
     }
 
     pub fn process_with(&self, sample_rate: u32, input: f64, cutoff: f64, resonance: f64) -> f64 {
-        let mut state = FilterState {
-            z1: f64::from_bits(self.state.z1.load(Ordering::Relaxed)),
-            z2: f64::from_bits(self.state.z2.load(Ordering::Relaxed)),
+        let mut state = [
+            f64::from_bits(self.state.z1.load(Ordering::Relaxed)),
+            f64::from_bits(self.state.z2.load(Ordering::Relaxed)),
+        ];
+        let output = self.process_with_state(sample_rate, input, cutoff, resonance, &mut state);
+        self.state.z1.store(state[0].to_bits(), Ordering::Relaxed);
+        self.state.z2.store(state[1].to_bits(), Ordering::Relaxed);
+        output
+    }
+
+    #[allow(clippy::unused_self)]
+    pub fn process_with_state(
+        &self,
+        sample_rate: u32,
+        input: f64,
+        cutoff: f64,
+        resonance: f64,
+        state: &mut [f64; 2],
+    ) -> f64 {
+        let mut filter_state = FilterState {
+            z1: state[0],
+            z2: state[1],
         };
         let settings = FilterSettings::new(cutoff, resonance);
-        let output = settings.process(sample_rate, &mut state, input);
-        self.state.z1.store(state.z1.to_bits(), Ordering::Relaxed);
-        self.state.z2.store(state.z2.to_bits(), Ordering::Relaxed);
+        let output = settings.process(sample_rate, &mut filter_state, input);
+        state[0] = filter_state.z1;
+        state[1] = filter_state.z2;
         output
     }
 
@@ -2905,6 +2924,7 @@ pub enum GraphOp {
 struct GraphState {
     values: [[f64; 64]; MAX_GRAPH_NODES],
     resonators: [[f64; 4]; MAX_GRAPH_NODES],
+    filters: [[f64; 2]; MAX_GRAPH_NODES],
 }
 
 impl GraphState {
@@ -2913,6 +2933,7 @@ impl GraphState {
         Self {
             values: [[0.0_f64; 64]; MAX_GRAPH_NODES],
             resonators: [[0.0_f64; 4]; MAX_GRAPH_NODES],
+            filters: [[0.0_f64; 2]; MAX_GRAPH_NODES],
         }
     }
 }
@@ -3015,11 +3036,12 @@ impl GraphPlan {
                 },
                 GraphOp::Filter(filter) => {
                     let value = node.inputs.first().map_or(0.0, |input| values[*input]);
-                    filter.process_with(
+                    filter.process_with_state(
                         sample_rate,
                         value,
                         control_value(node, 0, &values, filter.settings.cutoff),
                         control_value(node, 1, &values, filter.settings.resonance),
+                        &mut graph_state.filters[index],
                     )
                 },
                 GraphOp::Highpass(filter) => {
@@ -3107,6 +3129,7 @@ impl GraphPlan {
         let graph_state = unsafe { &mut *self.state.0.get() };
         let values = &mut graph_state.values;
         let resonators = &mut graph_state.resonators;
+        let filters = &mut graph_state.filters;
         for (index, node) in self.nodes.iter().enumerate() {
             for frame in 0..frames {
                 let time = start_time + frame as f64 / f64::from(sample_rate);
@@ -3157,11 +3180,12 @@ impl GraphPlan {
                             .inputs
                             .first()
                             .map_or(0.0, |input| values[*input][frame]);
-                        filter.process_with(
+                        filter.process_with_state(
                             sample_rate,
                             value,
                             block_control(node, 0, frame, &*values, filter.settings.cutoff),
                             block_control(node, 1, frame, &*values, filter.settings.resonance),
+                            &mut filters[index],
                         )
                     },
                     GraphOp::Highpass(filter) => {
