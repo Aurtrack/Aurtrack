@@ -2422,7 +2422,7 @@ impl PianoPlan {
             brightness,
             hammer,
             voice: None,
-            states: Vec::new(),
+            states: (0..MAX_VOICES).map(|_| VoiceState::new(0)).collect(),
         }
     }
 
