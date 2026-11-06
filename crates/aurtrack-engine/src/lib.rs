@@ -2538,6 +2538,9 @@ impl PianoPlan {
                     *slot += *value;
                 }
             }
+            for slot in output.iter_mut() {
+                *slot *= 0.18;
+            }
             return;
         }
         for (offset, slot) in output.iter_mut().enumerate() {
@@ -5167,6 +5170,42 @@ mod tests {
             let mut context = test_context(0.1);
             context.local_time += offset as f64 / 48_000.0;
             assert!((f64::from(*value) - plan.sample(context)).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn piano_block_runs_voice_block() {
+        let voice = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Time, Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(2.0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Multiply, vec![0, 1]),
+                VoiceNodePlan::new(VoiceOp::Output, vec![2]),
+            ],
+            3,
+        );
+        let mut piano = PianoPlan::new(4, 1.0, 0.5, 0.2);
+        piano.voice = Some(voice);
+        piano.set_states(
+            (0..piano.state_count())
+                .map(|_| VoiceState::new(64))
+                .collect(),
+        );
+        let notes = [NotePlan {
+            start: 0.0,
+            duration: 1.0,
+            frequency: 220.0,
+            velocity: 0.8,
+        }];
+        let mut block = [0.0_f32; 64];
+        piano.sample_block(&notes, 0.1, 48_000.0, &mut block);
+        assert!(block.iter().any(|value| value.abs() > 1e-9));
+        for (offset, value) in block.iter().enumerate() {
+            let expected = piano.sample(&notes, 0.1 + offset as f64 / 48_000.0);
+            assert!(
+                (f64::from(*value) - expected).abs() < 1e-4,
+                "offset {offset}: block {value} expected {expected}"
+            );
         }
     }
 
