@@ -44,6 +44,10 @@ const FADE_IN: u8 = 2;
 
 /// 一条轨道的播放参数。
 impl TrackPlan {
+    pub fn supports_block(&self) -> bool {
+        self.graph.is_some()
+    }
+
     /// 轨道级 block 渲染；只有 graph 轨道走节点主序，其余由调用方 fallback。
     pub fn process_block(
         &self,
@@ -3533,8 +3537,14 @@ impl Playback {
 
     /// 由音频回调调用；外层按固定 block 推进。
     pub fn render(&self, out: &mut [f32]) {
-        for chunk in out.chunks_mut(DEFAULT_BLOCK_SIZE) {
-            self.render_block(chunk);
+        if self.seek_stage.load(Ordering::Acquire) == FADE_IDLE
+            && self.seek_target.load(Ordering::Acquire) == NO_SEEK
+        {
+            for chunk in out.chunks_mut(DEFAULT_BLOCK_SIZE) {
+                self.render_block(chunk);
+            }
+        } else {
+            self.render_block(out);
         }
     }
 
@@ -3584,6 +3594,35 @@ impl Playback {
         } else if stage == FADE_OUT && target == NO_SEEK {
             stage = FADE_IDLE;
             elapsed = 0;
+        }
+
+        if stage == FADE_IDLE
+            && target == NO_SEEK
+            && !stop_requested
+            && loop_fade == 0
+            && loop_end_frames == 0
+            && out.len() <= DEFAULT_BLOCK_SIZE
+            && plan.tracks.iter().all(TrackPlan::supports_block)
+        {
+            let frames = out.len();
+            out.fill(0.0);
+            let mut track_block = [0.0_f32; DEFAULT_BLOCK_SIZE];
+            for track in &plan.tracks {
+                if !track.process_block(&plan, position, &mut track_block[..frames]) {
+                    break;
+                }
+                for (slot, value) in out.iter_mut().zip(&track_block[..frames]) {
+                    *slot += *value;
+                }
+            }
+            for slot in out.iter_mut() {
+                *slot = (f64::from(*slot) * master_gain * gain).clamp(-1.0, 1.0) as f32;
+            }
+            for _ in 0..frames {
+                position = advance(position, loop_end_frames, loop_advance_start);
+            }
+            self.position.store(position, Ordering::Release);
+            return;
         }
 
         for (index, slot) in out.iter_mut().enumerate() {
