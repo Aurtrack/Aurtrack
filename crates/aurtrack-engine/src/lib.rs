@@ -2387,6 +2387,22 @@ fn osc_partials(
 }
 
 /// 加法钢琴音色。
+/// 每个音符独立的声部状态。
+#[non_exhaustive]
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub struct VoiceState {
+    pub(crate) scratch: crate::ssa::BlockScratch,
+}
+
+impl VoiceState {
+    pub fn new(value_count: usize) -> Self {
+        Self {
+            scratch: crate::ssa::BlockScratch::new(value_count),
+        }
+    }
+}
+
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct PianoPlan {
@@ -2395,6 +2411,7 @@ pub struct PianoPlan {
     pub brightness: f64,
     pub hammer: f64,
     pub voice: Option<VoicePlan>,
+    pub states: Vec<VoiceState>,
 }
 
 impl PianoPlan {
@@ -2405,6 +2422,7 @@ impl PianoPlan {
             brightness,
             hammer,
             voice: None,
+            states: Vec::new(),
         }
     }
 

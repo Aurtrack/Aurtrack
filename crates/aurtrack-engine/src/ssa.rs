@@ -49,7 +49,7 @@ pub(crate) struct SsaValue {
 }
 
 /// block 处理的编译期 scratch；由计划持有，音频线程只读写。
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct BlockScratch {
     values: Vec<[f64; 64]>,
 }
