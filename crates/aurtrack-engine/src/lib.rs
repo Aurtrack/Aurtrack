@@ -2643,13 +2643,26 @@ impl HighpassPlan {
     }
 
     pub fn process_with(&self, sample_rate: u32, input: f64, cutoff: f64, resonance: f64) -> f64 {
+        let mut state = f64::from_bits(self.state.load(Ordering::Relaxed));
+        let output = self.process_with_state(sample_rate, input, cutoff, resonance, &mut state);
+        self.state.store(state.to_bits(), Ordering::Relaxed);
+        output
+    }
+
+    #[allow(clippy::unused_self)]
+    pub fn process_with_state(
+        &self,
+        sample_rate: u32,
+        input: f64,
+        cutoff: f64,
+        resonance: f64,
+        state: &mut f64,
+    ) -> f64 {
         let rate = f64::from(sample_rate.max(1));
         let cutoff = cutoff.clamp(20.0, 20_000.0);
         let alpha = (1.0 - (-std::f64::consts::TAU * cutoff / rate).exp()).clamp(0.0, 1.0);
-        let low = f64::from_bits(self.state.load(Ordering::Relaxed));
-        let low = low + alpha * (input - low);
-        self.state.store(low.to_bits(), Ordering::Relaxed);
-        (input - low) * (1.0 + resonance.clamp(0.0, 0.95))
+        *state += alpha * (input - *state);
+        (input - *state) * (1.0 + resonance.clamp(0.0, 0.95))
     }
 
     pub fn reset(&self) {
@@ -2925,6 +2938,7 @@ struct GraphState {
     values: [[f64; 64]; MAX_GRAPH_NODES],
     resonators: [[f64; 4]; MAX_GRAPH_NODES],
     filters: [[f64; 2]; MAX_GRAPH_NODES],
+    highpass: [f64; MAX_GRAPH_NODES],
 }
 
 impl GraphState {
@@ -2934,6 +2948,7 @@ impl GraphState {
             values: [[0.0_f64; 64]; MAX_GRAPH_NODES],
             resonators: [[0.0_f64; 4]; MAX_GRAPH_NODES],
             filters: [[0.0_f64; 2]; MAX_GRAPH_NODES],
+            highpass: [0.0_f64; MAX_GRAPH_NODES],
         }
     }
 }
@@ -3046,11 +3061,12 @@ impl GraphPlan {
                 },
                 GraphOp::Highpass(filter) => {
                     let value = node.inputs.first().map_or(0.0, |input| values[*input]);
-                    filter.process_with(
+                    filter.process_with_state(
                         sample_rate,
                         value,
                         control_value(node, 0, &values, filter.cutoff),
                         control_value(node, 1, &values, filter.resonance),
+                        &mut graph_state.highpass[index],
                     )
                 },
                 GraphOp::Soundboard(soundboard) => {
@@ -3130,6 +3146,7 @@ impl GraphPlan {
         let values = &mut graph_state.values;
         let resonators = &mut graph_state.resonators;
         let filters = &mut graph_state.filters;
+        let highpass = &mut graph_state.highpass;
         for (index, node) in self.nodes.iter().enumerate() {
             for frame in 0..frames {
                 let time = start_time + frame as f64 / f64::from(sample_rate);
@@ -3193,11 +3210,12 @@ impl GraphPlan {
                             .inputs
                             .first()
                             .map_or(0.0, |input| values[*input][frame]);
-                        filter.process_with(
+                        filter.process_with_state(
                             sample_rate,
                             value,
                             block_control(node, 0, frame, &*values, filter.cutoff),
                             block_control(node, 1, frame, &*values, filter.resonance),
+                            &mut highpass[index],
                         )
                     },
                     GraphOp::Soundboard(soundboard) => {
