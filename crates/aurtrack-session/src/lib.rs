@@ -832,9 +832,11 @@ impl Track {
                 let voice = compile_voice(&group.graph, &group.interface, groups, buffers)?;
                 let scratch_values =
                     VoiceSsa::compile(&voice).map_or(0, |ssa| ssa.instruction_count());
-                piano.states = (0..piano.states.len())
-                    .map(|_| VoiceState::new(scratch_values))
-                    .collect();
+                piano.set_states(
+                    (0..piano.state_count())
+                        .map(|_| VoiceState::new(scratch_values))
+                        .collect(),
+                );
                 piano.voice = Some(voice);
                 voice_sources.insert(node.id().clone(), pianos.len());
                 pianos.push(piano);

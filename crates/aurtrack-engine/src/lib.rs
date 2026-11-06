@@ -59,22 +59,28 @@ impl TrackPlan {
             return false;
         };
         let sample_rate = f64::from(plan.sample_rate).max(1.0);
+        let start_time = start_position as f64 / sample_rate;
+        let frames = output.len();
         let mut voices = [[0.0_f64; 64]; MAX_VOICES];
-        for frame in 0..output.len() {
-            let time = (start_position + frame as u64) as f64 / sample_rate;
-            for (index, piano) in graph.pianos.iter().enumerate().take(MAX_VOICES) {
-                voices[index][frame] = piano.sample(&self.notes, time);
+        let mut piano_block = [0.0_f32; 64];
+        for (index, piano) in graph.pianos.iter().enumerate().take(MAX_VOICES) {
+            piano.sample_block(
+                &self.notes,
+                start_time,
+                sample_rate,
+                &mut piano_block[..frames],
+            );
+            for (frame, value) in piano_block[..frames].iter().enumerate() {
+                voices[index][frame] = f64::from(*value);
             }
-            if let Some(frequency) = graph.fallback_sine {
+        }
+        if let Some(frequency) = graph.fallback_sine {
+            for frame in 0..frames {
+                let time = start_time + frame as f64 / sample_rate;
                 voices[0][frame] += (std::f64::consts::TAU * frequency * time).sin() * 0.25;
             }
         }
-        graph.process_block_voices(
-            &voices,
-            plan.sample_rate,
-            start_position as f64 / sample_rate,
-            output,
-        );
+        graph.process_block_voices(&voices, plan.sample_rate, start_time, output);
         true
     }
 }
@@ -2422,6 +2428,44 @@ impl VoiceState {
     }
 }
 
+#[derive(Debug)]
+pub struct VoiceStateStore(std::cell::UnsafeCell<Vec<VoiceState>>);
+
+// SAFETY: 音频线程是唯一写入者；控制线程只替换整个计划。
+unsafe impl Sync for VoiceStateStore {}
+
+impl VoiceStateStore {
+    pub fn len(&self) -> usize {
+        // SAFETY: 只读取长度，不暴露内部引用。
+        unsafe { (*self.0.get()).len() }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    fn replace(&mut self, states: Vec<VoiceState>) {
+        self.0 = std::cell::UnsafeCell::new(states);
+    }
+
+    /// SAFETY: 调用方必须是唯一音频渲染线程，且 index 小于 len。
+    #[allow(clippy::mut_from_ref)]
+    unsafe fn get_mut(&self, index: usize) -> &mut VoiceState {
+        // SAFETY: 由调用方保证唯一写者和索引有效。
+        let states = unsafe { &mut *self.0.get() };
+        &mut states[index]
+    }
+}
+
+impl Clone for VoiceStateStore {
+    fn clone(&self) -> Self {
+        // SAFETY: 克隆发生在控制线程，不并发写。
+        Self(std::cell::UnsafeCell::new(unsafe {
+            (*self.0.get()).clone()
+        }))
+    }
+}
+
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct PianoPlan {
@@ -2430,7 +2474,7 @@ pub struct PianoPlan {
     pub brightness: f64,
     pub hammer: f64,
     pub voice: Option<VoicePlan>,
-    pub states: Vec<VoiceState>,
+    states: VoiceStateStore,
 }
 
 impl PianoPlan {
@@ -2441,13 +2485,23 @@ impl PianoPlan {
             brightness,
             hammer,
             voice: None,
-            states: (0..MAX_VOICES).map(|_| VoiceState::new(0)).collect(),
+            states: VoiceStateStore(std::cell::UnsafeCell::new(
+                (0..MAX_VOICES).map(|_| VoiceState::new(0)).collect(),
+            )),
         }
+    }
+
+    pub fn state_count(&self) -> usize {
+        self.states.len()
+    }
+
+    pub fn set_states(&mut self, states: Vec<VoiceState>) {
+        self.states.replace(states);
     }
 
     /// block 接口：当前逐帧调用 `sample`，下一步替换为声部 block kernel。
     pub fn sample_block(
-        &mut self,
+        &self,
         notes: &[NotePlan],
         start_time: f64,
         sample_rate: f64,
@@ -2474,13 +2528,10 @@ impl PianoPlan {
                     note_index: index as u64,
                     iteration: 0,
                 };
-                if !voice.process_block(
-                    &mut self.states[index],
-                    context,
-                    &[],
-                    sample_rate,
-                    &mut note_block[..frames],
-                ) {
+                // SAFETY: 音频线程是唯一写入者；index 小于 states 长度。
+                let state = unsafe { self.states.get_mut(index) };
+                if !voice.process_block(state, context, &[], sample_rate, &mut note_block[..frames])
+                {
                     break;
                 }
                 for (slot, value) in output.iter_mut().zip(&note_block[..frames]) {
