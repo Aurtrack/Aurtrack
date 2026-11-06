@@ -32,7 +32,7 @@ use aurtrack_command::{CommandError, CommandRequest, CommandResponse, registry};
 use aurtrack_engine::{
     DelayPlan, FilterPlan, FilterSettings, GraphNodePlan, GraphOp, GraphPlan, GraphStateCell,
     HighpassPlan, LfoPlan, MAX_GRAPH_NODES, NotePlan, PluginPlan, ResonatorPlan,
-    VOICE_DELAY_SAMPLES, VoiceNodePlan, VoiceOp, VoicePlan, midi_to_hz,
+    VOICE_DELAY_SAMPLES, VoiceNodePlan, VoiceOp, VoicePlan, VoiceSsa, VoiceState, midi_to_hz,
 };
 use aurtrack_graph::{
     AudioConnection, AudioGraph, AudioGroup, AudioNode, GraphError, NodeGroup, NodeGroupInterface,
@@ -829,12 +829,13 @@ impl Track {
                     .ok_or_else(|| GraphError::GroupMissing(group_id.to_string()))?;
                 group.validate_with_groups(groups)?;
                 let mut piano = aurtrack_engine::PianoPlan::new(10, 1.2, 0.5, 0.2);
-                piano.voice = Some(compile_voice(
-                    &group.graph,
-                    &group.interface,
-                    groups,
-                    buffers,
-                )?);
+                let voice = compile_voice(&group.graph, &group.interface, groups, buffers)?;
+                let scratch_values =
+                    VoiceSsa::compile(&voice).map_or(0, |ssa| ssa.instruction_count());
+                piano.states = (0..piano.states.len())
+                    .map(|_| VoiceState::new(scratch_values))
+                    .collect();
+                piano.voice = Some(voice);
                 voice_sources.insert(node.id().clone(), pianos.len());
                 pianos.push(piano);
                 if group_id == "sine.voice" && !node.muted {
