@@ -30,9 +30,9 @@ use std::sync::Arc;
 
 use aurtrack_command::{CommandError, CommandRequest, CommandResponse, registry};
 use aurtrack_engine::{
-    DelayPlan, FilterPlan, FilterSettings, GraphNodePlan, GraphOp, GraphPlan, HighpassPlan,
-    LfoPlan, MAX_GRAPH_NODES, NotePlan, PluginPlan, ResonatorPlan, VOICE_DELAY_SAMPLES,
-    VoiceNodePlan, VoiceOp, VoicePlan, midi_to_hz,
+    DelayPlan, FilterPlan, FilterSettings, GraphNodePlan, GraphOp, GraphPlan, GraphStateCell,
+    HighpassPlan, LfoPlan, MAX_GRAPH_NODES, NotePlan, PluginPlan, ResonatorPlan,
+    VOICE_DELAY_SAMPLES, VoiceNodePlan, VoiceOp, VoicePlan, midi_to_hz,
 };
 use aurtrack_graph::{
     AudioConnection, AudioGraph, AudioGroup, AudioNode, GraphError, NodeGroup, NodeGroupInterface,
@@ -867,6 +867,7 @@ impl Track {
                 plugin: plugin.map(|plugin| PluginPlan::new(plugin.path, plugin.id, plugin.state)),
                 pianos,
                 fallback_sine: source_frequency,
+                state: GraphStateCell::new(),
             },
         ))
     }

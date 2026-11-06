@@ -2900,6 +2900,36 @@ impl GraphState {
     }
 }
 
+/// GraphPlan 持有的 block 状态；音频线程是唯一写入者。
+pub struct GraphStateCell(std::cell::UnsafeCell<GraphState>);
+
+// SAFETY: 计划只允许一个音频渲染线程写入 GraphState；控制线程只替换整个计划。
+unsafe impl Sync for GraphStateCell {}
+
+impl GraphStateCell {
+    pub fn new() -> Self {
+        Self(std::cell::UnsafeCell::new(GraphState::new()))
+    }
+}
+
+impl Default for GraphStateCell {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Clone for GraphStateCell {
+    fn clone(&self) -> Self {
+        Self::new()
+    }
+}
+
+impl std::fmt::Debug for GraphStateCell {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("GraphStateCell")
+    }
+}
+
 /// 已排序的 DAG 计划；索引 0 固定是声部。
 #[derive(Debug, Clone)]
 pub struct GraphPlan {
@@ -2908,6 +2938,7 @@ pub struct GraphPlan {
     pub plugin: Option<PluginPlan>,
     pub pianos: Vec<PianoPlan>,
     pub fallback_sine: Option<f64>,
+    pub state: GraphStateCell,
 }
 
 fn control_value(
@@ -3048,8 +3079,8 @@ impl GraphPlan {
             return;
         }
         let frames = output.len();
-        let mut graph_state = GraphState::new();
-        let values = &mut graph_state.values;
+        // SAFETY: 音频线程是唯一调用方；控制线程不会并发写 state。
+        let values = unsafe { &mut (*self.state.0.get()).values };
         for (index, node) in self.nodes.iter().enumerate() {
             for frame in 0..frames {
                 let time = start_time + frame as f64 / f64::from(sample_rate);
@@ -4059,6 +4090,7 @@ mod tests {
             plugin: None,
             pianos: Vec::new(),
             fallback_sine: None,
+            state: GraphStateCell::new(),
         };
         assert!((plan.sample(&[0.0], 48_000, 0.0) - 0.25).abs() < 1e-9);
     }
@@ -4947,6 +4979,7 @@ mod tests {
             plugin: None,
             pianos: Vec::new(),
             fallback_sine: None,
+            state: GraphStateCell::new(),
         };
         assert!((plan.sample(&[0.25, 0.5], 48_000, 0.0) - 0.75).abs() < 1e-9);
     }
@@ -4975,6 +5008,7 @@ mod tests {
             plugin: None,
             pianos: Vec::new(),
             fallback_sine: None,
+            state: GraphStateCell::new(),
         };
         let mut tail = 0.0;
         for index in 0..480 {
@@ -5012,6 +5046,7 @@ mod tests {
             plugin: None,
             pianos: Vec::new(),
             fallback_sine: None,
+            state: GraphStateCell::new(),
         };
         for index in 0..500 {
             let _ = plan.sample(&[1.0], 48_000, index as f64 / 48_000.0);
@@ -5170,6 +5205,7 @@ mod tests {
             plugin: None,
             pianos: Vec::new(),
             fallback_sine: None,
+            state: GraphStateCell::new(),
         };
         let mut block = [0.0_f32; 64];
         plan.process_block(&[], 48_000, 0.0, &mut block);
