@@ -2973,6 +2973,21 @@ impl GraphPlan {
         start_time: f64,
         output: &mut [f32],
     ) {
+        let mut block = [[0.0_f64; 64]; MAX_VOICES];
+        for (index, voice) in voices.iter().take(MAX_VOICES).enumerate() {
+            block[index].fill(*voice);
+        }
+        self.process_block_voices(&block, sample_rate, start_time, output);
+    }
+
+    #[allow(clippy::large_stack_arrays)]
+    pub fn process_block_voices(
+        &self,
+        voices: &[[f64; 64]],
+        sample_rate: u32,
+        start_time: f64,
+        output: &mut [f32],
+    ) {
         const BLOCK: usize = 64;
         if self.nodes.len() > MAX_GRAPH_NODES
             || self.output >= self.nodes.len()
@@ -2987,7 +3002,9 @@ impl GraphPlan {
             for frame in 0..frames {
                 let time = start_time + frame as f64 / f64::from(sample_rate);
                 values[index][frame] = match &node.op {
-                    GraphOp::Voice { index } => voices.get(*index).copied().unwrap_or(0.0),
+                    GraphOp::Voice { index } => {
+                        voices.get(*index).map_or(0.0, |voice| voice[frame])
+                    },
                     GraphOp::Sine => {
                         let frequency =
                             block_control(node, 0, frame, &values, 440.0).clamp(20.0, 20_000.0);
