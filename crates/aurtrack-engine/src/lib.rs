@@ -43,6 +43,38 @@ const FADE_OUT: u8 = 1;
 const FADE_IN: u8 = 2;
 
 /// 一条轨道的播放参数。
+impl TrackPlan {
+    /// 轨道级 block 渲染；只有 graph 轨道走节点主序，其余由调用方 fallback。
+    pub fn process_block(
+        &self,
+        plan: &PlaybackPlan,
+        start_position: u64,
+        output: &mut [f32],
+    ) -> bool {
+        let Some(graph) = &self.graph else {
+            return false;
+        };
+        let sample_rate = f64::from(plan.sample_rate).max(1.0);
+        let mut voices = [[0.0_f64; 64]; MAX_VOICES];
+        for frame in 0..output.len() {
+            let time = (start_position + frame as u64) as f64 / sample_rate;
+            for (index, piano) in graph.pianos.iter().enumerate().take(MAX_VOICES) {
+                voices[index][frame] = piano.sample(&self.notes, time);
+            }
+            if let Some(frequency) = graph.fallback_sine {
+                voices[0][frame] += (std::f64::consts::TAU * frequency * time).sin() * 0.25;
+            }
+        }
+        graph.process_block_voices(
+            &voices,
+            plan.sample_rate,
+            start_position as f64 / sample_rate,
+            output,
+        );
+        true
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TrackPlan {
     /// `None` 表示静音轨道。
