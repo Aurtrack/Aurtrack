@@ -1441,6 +1441,102 @@ impl VoicePlan {
                 }
                 true
             },
+            VoiceOp::PianoPartial => {
+                let mut args = [[0.0_f32; 64]; 8];
+                for (slot, values) in args.iter_mut().enumerate() {
+                    if let Some(input) = node.inputs.get(slot) {
+                        if !self.eval_top_block(
+                            *input,
+                            state,
+                            context,
+                            inputs,
+                            frames,
+                            &mut values[..frames],
+                        ) {
+                            return false;
+                        }
+                    } else {
+                        let default = match slot {
+                            0 => context.pitch,
+                            1 => context.velocity,
+                            2 => context.local_time,
+                            3 => 0.0,
+                            4 => 0.0004,
+                            5 => 0.5,
+                            6 => 1.2,
+                            _ => 0.12,
+                        };
+                        values[..frames].fill(default as f32);
+                    }
+                }
+                for (frame, slot) in output.iter_mut().enumerate() {
+                    *slot = piano_partial_sample(
+                        f64::from(args[0][frame]),
+                        f64::from(args[1][frame]),
+                        f64::from(args[2][frame]),
+                        f64::from(args[3][frame]),
+                        f64::from(args[4][frame]),
+                        f64::from(args[5][frame]),
+                        f64::from(args[6][frame]),
+                        f64::from(args[7][frame]),
+                    ) as f32;
+                }
+                true
+            },
+            VoiceOp::Damper => {
+                let Some(input) = node.inputs.first() else {
+                    return false;
+                };
+                if !self.eval_top_block(*input, state, context, inputs, frames, output) {
+                    return false;
+                }
+                let mut gate = [0.0_f32; 64];
+                let mut pedal = [0.0_f32; 64];
+                let mut damping = [0.01_f32; 64];
+                for (slot, buffers) in [&mut gate, &mut pedal, &mut damping]
+                    .into_iter()
+                    .enumerate()
+                {
+                    if let Some(input) = node.inputs.get(slot + 1) {
+                        if !self.eval_top_block(
+                            *input,
+                            state,
+                            context,
+                            inputs,
+                            frames,
+                            &mut buffers[..frames],
+                        ) {
+                            return false;
+                        }
+                    } else {
+                        let default = match slot {
+                            0 => 1.0,
+                            1 => 0.0,
+                            _ => 0.01,
+                        };
+                        buffers[..frames].fill(default);
+                    }
+                }
+                for frame in 0..frames {
+                    let target = if gate[frame] > 0.5 {
+                        1.0
+                    } else {
+                        f64::from(pedal[frame].clamp(0.0, 1.0))
+                    };
+                    let damping = f64::from(damping[frame].clamp(0.0001, 0.2));
+                    let stored = state.damper_level;
+                    let level = if stored.is_nan() {
+                        target
+                    } else if target > 0.001 {
+                        stored + (target - stored) * 0.01
+                    } else {
+                        (stored - damping).max(0.0)
+                    };
+                    state.damper_level = level;
+                    output[frame] *= level as f32;
+                }
+                true
+            },
             VoiceOp::RepeatResult { source, slot } => {
                 let Some(repeat) = self.nodes.get(*source) else {
                     return false;
@@ -2774,12 +2870,14 @@ impl<'a> VoiceBlockInputs<'a> {
 #[allow(dead_code)]
 pub struct VoiceState {
     pub(crate) scratch: crate::ssa::BlockScratch,
+    damper_level: f64,
 }
 
 impl VoiceState {
     pub fn new(value_count: usize) -> Self {
         Self {
             scratch: crate::ssa::BlockScratch::new(value_count),
+            damper_level: f64::NAN,
         }
     }
 }
