@@ -2505,6 +2505,32 @@ fn osc_partials(
 }
 
 /// 加法钢琴音色。
+/// VoicePlan block ABI v2 的逐帧输入。
+#[derive(Debug)]
+pub struct VoiceBlockInputs<'a> {
+    values: &'a [[f64; 64]],
+    frames: usize,
+}
+
+impl<'a> VoiceBlockInputs<'a> {
+    pub fn new(values: &'a [[f64; 64]], frames: usize) -> Self {
+        Self {
+            values,
+            frames: frames.min(64),
+        }
+    }
+
+    pub fn frames(&self) -> usize {
+        self.frames
+    }
+
+    pub fn frame(&self, input: usize, frame: usize) -> f64 {
+        self.values.get(input).map_or(0.0, |values| {
+            values[frame.min(self.frames.saturating_sub(1))]
+        })
+    }
+}
+
 /// 每个音符独立的声部状态。
 #[non_exhaustive]
 #[derive(Debug, Clone)]
@@ -5264,6 +5290,20 @@ mod tests {
             context.local_time += offset as f64 / 48_000.0;
             assert!((f64::from(*value) - plan.sample(context)).abs() < 1e-6);
         }
+    }
+
+    #[test]
+    fn voice_block_inputs_reads_per_frame() {
+        let mut values = [[0.0_f64; 64]; 2];
+        for frame in 0..4 {
+            values[0][frame] = frame as f64;
+            values[1][frame] = 10.0 + frame as f64;
+        }
+        let inputs = VoiceBlockInputs::new(&values, 4);
+        assert_eq!(inputs.frames(), 4);
+        assert!((inputs.frame(0, 2) - 2.0).abs() < f64::EPSILON);
+        assert!((inputs.frame(1, 3) - 13.0).abs() < f64::EPSILON);
+        assert!(inputs.frame(9, 1).abs() < f64::EPSILON);
     }
 
     #[test]
