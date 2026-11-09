@@ -1355,7 +1355,17 @@ impl VoicePlan {
         if !count.is_finite() {
             return None;
         }
-        Some((body, count.round().clamp(0.0, 64.0) as usize))
+        let mut target = body.as_ref();
+        if let Some(group) = target.nodes.get(target.output)
+            && let VoiceOp::GroupCall {
+                body: inner,
+                outputs,
+            } = &group.op
+            && outputs == &[inner.output]
+        {
+            target = inner;
+        }
+        Some((target, count.round().clamp(0.0, 64.0) as usize))
     }
 
     /// 无状态 VoicePlan 的 block 路径；有状态或空间不足时返回 false。
