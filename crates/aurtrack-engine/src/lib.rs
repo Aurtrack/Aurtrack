@@ -1618,7 +1618,10 @@ impl VoicePlan {
                 }
                 true
             },
-            _ => false,
+            _ => {
+                state.last_fail = Some(index);
+                false
+            },
         }
     }
 
@@ -2871,6 +2874,13 @@ impl<'a> VoiceBlockInputs<'a> {
 pub struct VoiceState {
     pub(crate) scratch: crate::ssa::BlockScratch,
     damper_level: f64,
+    last_fail: Option<usize>,
+}
+
+impl VoiceState {
+    pub fn last_fail(&self) -> Option<usize> {
+        self.last_fail
+    }
 }
 
 impl VoiceState {
@@ -2878,6 +2888,7 @@ impl VoiceState {
         Self {
             scratch: crate::ssa::BlockScratch::new(value_count),
             damper_level: f64::NAN,
+            last_fail: None,
         }
     }
 }
