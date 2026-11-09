@@ -1389,6 +1389,58 @@ impl VoicePlan {
         Some((target, count.round().clamp(0.0, 64.0) as usize))
     }
 
+    fn repeat_body_with_carried(&self) -> Option<(&VoicePlan, usize, usize)> {
+        let mut source = self.output;
+        let mut slot = None;
+        if let Some(node) = self.nodes.get(source) {
+            if let VoiceOp::Output = node.op {
+                source = *node.inputs.first()?;
+            }
+            if let Some(node) = self.nodes.get(source)
+                && let VoiceOp::RepeatResult {
+                    source: repeat,
+                    slot: output_slot,
+                } = node.op
+            {
+                source = repeat;
+                slot = Some(output_slot);
+            }
+        }
+        let node = self.nodes.get(source)?;
+        let VoiceOp::Repeat {
+            body,
+            outputs,
+            carried,
+            ..
+        } = &node.op
+        else {
+            return None;
+        };
+        let output = if let Some(slot) = slot {
+            *outputs.get(slot)?
+        } else {
+            body.output
+        };
+        if body.output != output {
+            return None;
+        }
+        let count = self.constant_input(*node.inputs.first()?)?;
+        if !count.is_finite() {
+            return None;
+        }
+        let mut target = body.as_ref();
+        if let Some(group) = target.nodes.get(target.output)
+            && let VoiceOp::GroupCall {
+                body: inner,
+                outputs,
+            } = &group.op
+            && outputs == &[inner.output]
+        {
+            target = inner;
+        }
+        Some((target, count.round().clamp(0.0, 64.0) as usize, *carried))
+    }
+
     /// 无状态 VoicePlan 的 block 路径；有状态或空间不足时返回 false。
     pub fn process_block(
         &self,
@@ -1435,6 +1487,33 @@ impl VoicePlan {
         sample_rate: f64,
         output: &mut [f32],
     ) -> bool {
+        if let Some((body, count, carried)) = self.repeat_body_with_carried() {
+            let frames = output.len();
+            let mut carried_block = [[0.0_f64; 64]; 8];
+            let mut body_inputs = [[0.0_f64; 64]; 8];
+            let carried_count = carried.min(8);
+            for iteration in 0..count {
+                body_inputs[..carried_count].copy_from_slice(&carried_block[..carried_count]);
+                let body_values = VoiceBlockInputs::new(&body_inputs, frames);
+                let mut loop_context = context;
+                loop_context.iteration = iteration as u64;
+                if !body.process_block_inputs(
+                    state,
+                    loop_context,
+                    &body_values,
+                    sample_rate,
+                    output,
+                ) {
+                    return false;
+                }
+                for slot in &mut carried_block[..carried_count] {
+                    for (value, sample) in slot.iter_mut().zip(output.iter()) {
+                        *value = f64::from(*sample);
+                    }
+                }
+            }
+            return true;
+        }
         let Some(ssa) = VoiceSsa::compile(self) else {
             return false;
         };
@@ -5350,6 +5429,46 @@ mod tests {
         for (frame, value) in block.iter().enumerate() {
             assert!((f64::from(*value) - frame as f64).abs() < 1e-6);
         }
+    }
+
+    #[test]
+    fn repeat_block_carries_between_iterations() {
+        let body = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Input(0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(1.0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Add, vec![0, 1]),
+                VoiceNodePlan::new(VoiceOp::Output, vec![2]),
+            ],
+            3,
+        );
+        let plan = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Constant(2.0), Vec::new()),
+                VoiceNodePlan::new(
+                    VoiceOp::Repeat {
+                        zone: "partial".to_string(),
+                        body: Box::new(body),
+                        outputs: vec![3],
+                        carried: 1,
+                    },
+                    vec![0],
+                ),
+            ],
+            1,
+        );
+        let mut state = VoiceState::new(16);
+        let mut block = [0.0_f32; 64];
+        let empty = [[0.0_f64; 64]; 0];
+        let inputs = VoiceBlockInputs::new(&empty, 64);
+        assert!(plan.process_block_inputs(
+            &mut state,
+            test_context(0.0),
+            &inputs,
+            48_000.0,
+            &mut block
+        ));
+        assert!(block.iter().all(|value| (*value - 2.0).abs() < 1e-6));
     }
 
     #[test]
