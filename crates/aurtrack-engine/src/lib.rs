@@ -1338,7 +1338,23 @@ impl VoicePlan {
     }
 
     fn repeat_body(&self) -> Option<(&VoicePlan, usize)> {
-        let node = self.nodes.get(self.output)?;
+        let mut source = self.output;
+        let mut slot = None;
+        if let Some(node) = self.nodes.get(source) {
+            if let VoiceOp::Output = node.op {
+                source = *node.inputs.first()?;
+            }
+            if let Some(node) = self.nodes.get(source)
+                && let VoiceOp::RepeatResult {
+                    source: repeat,
+                    slot: output_slot,
+                } = node.op
+            {
+                source = repeat;
+                slot = Some(output_slot);
+            }
+        }
+        let node = self.nodes.get(source)?;
         let VoiceOp::Repeat {
             body,
             outputs,
@@ -1348,7 +1364,12 @@ impl VoicePlan {
         else {
             return None;
         };
-        if outputs != &[body.output] {
+        let output = if let Some(slot) = slot {
+            *outputs.get(slot)?
+        } else {
+            body.output
+        };
+        if body.output != output {
             return None;
         }
         let count = self.constant_input(*node.inputs.first()?)?;
