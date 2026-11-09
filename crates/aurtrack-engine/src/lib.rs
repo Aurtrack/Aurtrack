@@ -1441,6 +1441,56 @@ impl VoicePlan {
                 }
                 true
             },
+            VoiceOp::RepeatResult { source, slot } => {
+                let Some(repeat) = self.nodes.get(*source) else {
+                    return false;
+                };
+                let VoiceOp::Repeat {
+                    body,
+                    outputs,
+                    carried,
+                    ..
+                } = &repeat.op
+                else {
+                    return false;
+                };
+                if outputs.get(*slot) != Some(&body.output) {
+                    return false;
+                }
+                let Some(count) = repeat
+                    .inputs
+                    .first()
+                    .and_then(|input| self.constant_input(*input))
+                else {
+                    return false;
+                };
+                let count = count.round().clamp(0.0, 64.0) as usize;
+                let carried = (*carried).min(8);
+                let mut carried_block = [[0.0_f64; 64]; 8];
+                let mut body_inputs = [[0.0_f64; 64]; 8];
+                for iteration in 0..count {
+                    body_inputs[..carried].copy_from_slice(&carried_block[..carried]);
+                    let body_values = VoiceBlockInputs::new(&body_inputs, frames);
+                    let mut loop_context = context;
+                    loop_context.iteration = iteration as u64;
+                    if !body.eval_top_block(
+                        body.output,
+                        state,
+                        loop_context,
+                        &body_values,
+                        frames,
+                        output,
+                    ) {
+                        return false;
+                    }
+                    for slot in &mut carried_block[..carried] {
+                        for (value, sample) in slot.iter_mut().zip(output.iter()) {
+                            *value = f64::from(*sample);
+                        }
+                    }
+                }
+                true
+            },
             VoiceOp::GroupCall { body, outputs } => {
                 if outputs != &[body.output] {
                     return false;
