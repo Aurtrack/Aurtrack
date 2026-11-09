@@ -1315,6 +1315,49 @@ impl VoicePlan {
         self.sample_internal(context, inputs, None).unwrap_or(0.0)
     }
 
+    fn constant_input(&self, index: usize) -> Option<f64> {
+        let node = self.nodes.get(index)?;
+        match node.op {
+            VoiceOp::Constant(value) => Some(value),
+            VoiceOp::Add => {
+                let mut total = 0.0;
+                for input in &node.inputs {
+                    total += self.constant_input(*input)?;
+                }
+                Some(total)
+            },
+            VoiceOp::Multiply => {
+                let mut total = 1.0;
+                for input in &node.inputs {
+                    total *= self.constant_input(*input)?;
+                }
+                Some(total)
+            },
+            _ => None,
+        }
+    }
+
+    fn repeat_body(&self) -> Option<(&VoicePlan, usize)> {
+        let node = self.nodes.get(self.output)?;
+        let VoiceOp::Repeat {
+            body,
+            outputs,
+            carried: 0,
+            ..
+        } = &node.op
+        else {
+            return None;
+        };
+        if outputs != &[body.output] {
+            return None;
+        }
+        let count = self.constant_input(*node.inputs.first()?)?;
+        if !count.is_finite() {
+            return None;
+        }
+        Some((body, count.round().clamp(0.0, 64.0) as usize))
+    }
+
     /// 无状态 VoicePlan 的 block 路径；有状态或空间不足时返回 false。
     pub fn process_block(
         &self,
@@ -1324,6 +1367,25 @@ impl VoicePlan {
         sample_rate: f64,
         output: &mut [f32],
     ) -> bool {
+        if let Some((body, count)) = self.repeat_body() {
+            let mut block = [0.0_f32; 64];
+            let frames = output.len();
+            for iteration in 0..count {
+                let mut loop_context = context;
+                loop_context.iteration = iteration as u64;
+                if !body.process_block(
+                    state,
+                    loop_context,
+                    inputs,
+                    sample_rate,
+                    &mut block[..frames],
+                ) {
+                    return false;
+                }
+            }
+            output.copy_from_slice(&block[..frames]);
+            return true;
+        }
         let Some(ssa) = VoiceSsa::compile(self) else {
             return false;
         };
@@ -5171,6 +5233,36 @@ mod tests {
             context.local_time += offset as f64 / 48_000.0;
             assert!((f64::from(*value) - plan.sample(context)).abs() < 1e-6);
         }
+    }
+
+    #[test]
+    fn repeat_block_matches_last_iteration() {
+        let body = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Constant(1.0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Output, vec![0]),
+            ],
+            1,
+        );
+        let plan = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Constant(2.0), Vec::new()),
+                VoiceNodePlan::new(
+                    VoiceOp::Repeat {
+                        zone: "partial".to_string(),
+                        body: Box::new(body),
+                        outputs: vec![1],
+                        carried: 0,
+                    },
+                    vec![0],
+                ),
+            ],
+            1,
+        );
+        let mut state = VoiceState::new(8);
+        let mut block = [0.0_f32; 64];
+        assert!(plan.process_block(&mut state, test_context(0.0), &[], 48_000.0, &mut block));
+        assert!(block.iter().all(|value| (*value - 1.0).abs() < 1e-6));
     }
 
     #[test]
