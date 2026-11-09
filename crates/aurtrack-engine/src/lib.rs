@@ -1389,6 +1389,20 @@ impl VoicePlan {
         Some((target, count.round().clamp(0.0, 64.0) as usize))
     }
 
+    pub fn op_at(&self, plan: usize, index: usize) -> Option<&VoiceOp> {
+        if std::ptr::from_ref(self) as usize == plan {
+            return self.nodes.get(index).map(|node| &node.op);
+        }
+        for node in &self.nodes {
+            if let VoiceOp::Repeat { body, .. } | VoiceOp::GroupCall { body, .. } = &node.op
+                && let Some(op) = body.op_at(plan, index)
+            {
+                return Some(op);
+            }
+        }
+        None
+    }
+
     #[allow(clippy::only_used_in_recursion)]
     fn eval_top_block(
         &self,
@@ -1413,7 +1427,7 @@ impl VoicePlan {
                 }
                 true
             },
-            VoiceOp::Output => node.inputs.first().is_some_and(|input| {
+            VoiceOp::Output | VoiceOp::IntToFloat => node.inputs.first().is_some_and(|input| {
                 self.eval_top_block(*input, state, context, inputs, frames, output)
             }),
             VoiceOp::Vca => {
@@ -1438,6 +1452,39 @@ impl VoicePlan {
                 }
                 for (value, gain) in output.iter_mut().zip(gain.iter()) {
                     *value *= *gain;
+                }
+                true
+            },
+            VoiceOp::Sine => {
+                let mut args = [[0.0_f32; 64]; 3];
+                for (slot, values) in args.iter_mut().enumerate() {
+                    if let Some(input) = node.inputs.get(slot) {
+                        if !self.eval_top_block(
+                            *input,
+                            state,
+                            context,
+                            inputs,
+                            frames,
+                            &mut values[..frames],
+                        ) {
+                            return false;
+                        }
+                    } else {
+                        for value in &mut values[..frames] {
+                            *value = match slot {
+                                0 => 440.0,
+                                2 => context.local_time as f32,
+                                _ => 0.0,
+                            };
+                        }
+                    }
+                }
+                for (frame, slot) in output.iter_mut().enumerate() {
+                    *slot = (std::f64::consts::TAU
+                        * f64::from(args[0][frame])
+                        * f64::from(args[2][frame])
+                        + f64::from(args[1][frame]))
+                    .sin() as f32;
                 }
                 true
             },
@@ -1550,9 +1597,9 @@ impl VoicePlan {
                 else {
                     return false;
                 };
-                if outputs.get(*slot) != Some(&body.output) {
+                let Some(body_output) = outputs.get(*slot).copied() else {
                     return false;
-                }
+                };
                 let Some(count) = repeat
                     .inputs
                     .first()
@@ -1570,7 +1617,7 @@ impl VoicePlan {
                     let mut loop_context = context;
                     loop_context.iteration = iteration as u64;
                     if !body.eval_top_block(
-                        body.output,
+                        body_output,
                         state,
                         loop_context,
                         &body_values,
@@ -1586,6 +1633,18 @@ impl VoicePlan {
                     }
                 }
                 true
+            },
+            VoiceOp::GroupResult { source, slot } => {
+                let Some(group) = self.nodes.get(*source) else {
+                    return false;
+                };
+                let VoiceOp::GroupCall { body, outputs } = &group.op else {
+                    return false;
+                };
+                let Some(body_output) = outputs.get(*slot).copied() else {
+                    return false;
+                };
+                body.eval_top_block(body_output, state, context, inputs, frames, output)
             },
             VoiceOp::GroupCall { body, outputs } => {
                 if outputs != &[body.output] {
@@ -1618,8 +1677,151 @@ impl VoicePlan {
                 }
                 true
             },
+            VoiceOp::Clamp => {
+                let mut low = [0.0_f32; 64];
+                let mut high = [1.0_f32; 64];
+                let Some(input) = node.inputs.first() else {
+                    return false;
+                };
+                if !self.eval_top_block(*input, state, context, inputs, frames, output) {
+                    return false;
+                }
+                if let Some(input) = node.inputs.get(1)
+                    && !self.eval_top_block(
+                        *input,
+                        state,
+                        context,
+                        inputs,
+                        frames,
+                        &mut low[..frames],
+                    )
+                {
+                    return false;
+                }
+                if let Some(input) = node.inputs.get(2)
+                    && !self.eval_top_block(
+                        *input,
+                        state,
+                        context,
+                        inputs,
+                        frames,
+                        &mut high[..frames],
+                    )
+                {
+                    return false;
+                }
+                for (frame, value) in output.iter_mut().enumerate() {
+                    *value = value.clamp(low[frame], high[frame]);
+                }
+                true
+            },
+            VoiceOp::GreaterThan | VoiceOp::LessThan => {
+                let Some(right) = node.inputs.get(1) else {
+                    return false;
+                };
+                let Some(left) = node.inputs.first() else {
+                    return false;
+                };
+                let mut rhs = [0.0_f32; 64];
+                if !self.eval_top_block(*left, state, context, inputs, frames, output)
+                    || !self.eval_top_block(
+                        *right,
+                        state,
+                        context,
+                        inputs,
+                        frames,
+                        &mut rhs[..frames],
+                    )
+                {
+                    return false;
+                }
+                for (value, right) in output.iter_mut().zip(rhs.iter()) {
+                    *value = f32::from(u8::from(if matches!(node.op, VoiceOp::GreaterThan) {
+                        *value > *right
+                    } else {
+                        *value < *right
+                    }));
+                }
+                true
+            },
+            VoiceOp::Sqrt
+            | VoiceOp::Abs
+            | VoiceOp::Sin
+            | VoiceOp::Exp
+            | VoiceOp::Floor
+            | VoiceOp::Ceil
+            | VoiceOp::Round => {
+                let Some(input) = node.inputs.first() else {
+                    return false;
+                };
+                if !self.eval_top_block(*input, state, context, inputs, frames, output) {
+                    return false;
+                }
+                for value in output.iter_mut() {
+                    let value64 = f64::from(*value);
+                    *value = match node.op {
+                        VoiceOp::Sqrt => value64.max(0.0).sqrt(),
+                        VoiceOp::Abs => value64.abs(),
+                        VoiceOp::Sin => value64.sin(),
+                        VoiceOp::Exp => value64.exp(),
+                        VoiceOp::Floor => value64.floor(),
+                        VoiceOp::Ceil => value64.ceil(),
+                        VoiceOp::Round => value64.round(),
+                        _ => value64,
+                    } as f32;
+                }
+                true
+            },
+            VoiceOp::Subtract | VoiceOp::Divide | VoiceOp::Power | VoiceOp::Modulo => {
+                let Some(left) = node.inputs.first() else {
+                    return false;
+                };
+                let Some(right) = node.inputs.get(1) else {
+                    return false;
+                };
+                let mut rhs = [0.0_f32; 64];
+                if !self.eval_top_block(*left, state, context, inputs, frames, output)
+                    || !self.eval_top_block(
+                        *right,
+                        state,
+                        context,
+                        inputs,
+                        frames,
+                        &mut rhs[..frames],
+                    )
+                {
+                    return false;
+                }
+                for (value, right) in output.iter_mut().zip(rhs.iter()) {
+                    let a = f64::from(*value);
+                    let b = f64::from(*right);
+                    *value = match node.op {
+                        VoiceOp::Subtract => a - b,
+                        VoiceOp::Divide => {
+                            if b == 0.0 {
+                                0.0
+                            } else {
+                                a / b
+                            }
+                        },
+                        VoiceOp::Power => a.powf(b),
+                        VoiceOp::Modulo => {
+                            if b == 0.0 {
+                                0.0
+                            } else {
+                                a % b
+                            }
+                        },
+                        _ => a,
+                    } as f32;
+                }
+                true
+            },
             _ => {
-                state.last_fail = Some(index);
+                state.last_fail = Some(BlockFail {
+                    plan: std::ptr::from_ref(self) as usize,
+                    index,
+                });
                 false
             },
         }
@@ -2874,11 +3076,17 @@ impl<'a> VoiceBlockInputs<'a> {
 pub struct VoiceState {
     pub(crate) scratch: crate::ssa::BlockScratch,
     damper_level: f64,
-    last_fail: Option<usize>,
+    last_fail: Option<BlockFail>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct BlockFail {
+    pub plan: usize,
+    pub index: usize,
 }
 
 impl VoiceState {
-    pub fn last_fail(&self) -> Option<usize> {
+    pub fn last_fail(&self) -> Option<BlockFail> {
         self.last_fail
     }
 }
