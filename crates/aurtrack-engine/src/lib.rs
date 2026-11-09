@@ -1428,6 +1428,62 @@ impl VoicePlan {
         })
     }
 
+    #[allow(clippy::too_many_arguments)]
+    fn fused_partial_block(
+        &self,
+        spec: &PartialSpec,
+        count: usize,
+        state: &mut VoiceState,
+        context: VoiceContext,
+        inputs: &VoiceBlockInputs<'_>,
+        frames: usize,
+        output: &mut [f32],
+    ) -> bool {
+        let mut params = [[0.0_f32; 64]; 7];
+        for (slot, values) in params.iter_mut().enumerate() {
+            let source = spec.params[slot];
+            if source == usize::MAX {
+                let default = match slot {
+                    0 => context.pitch,
+                    1 => context.velocity,
+                    2 => context.local_time,
+                    3 => 0.0004,
+                    4 => 0.5,
+                    5 => 1.2,
+                    _ => 0.12,
+                };
+                values[..frames].fill(default as f32);
+            } else if !self.eval_top_block(
+                source,
+                state,
+                context,
+                inputs,
+                frames,
+                &mut values[..frames],
+            ) {
+                return false;
+            }
+        }
+        output.fill(0.0);
+        for partial in 0..count {
+            let index = partial as f64;
+            for (frame, slot) in output.iter_mut().enumerate() {
+                *slot += piano_partial_sample(
+                    f64::from(params[0][frame]),
+                    f64::from(params[1][frame]),
+                    f64::from(params[2][frame]),
+                    index,
+                    f64::from(params[3][frame]),
+                    f64::from(params[4][frame]),
+                    f64::from(params[5][frame]),
+                    f64::from(params[6][frame]),
+                ) as f32;
+            }
+        }
+        let _ = spec.node;
+        true
+    }
+
     #[allow(clippy::only_used_in_recursion)]
     fn eval_top_block(
         &self,
@@ -1633,6 +1689,12 @@ impl VoicePlan {
                     return false;
                 };
                 let count = count.round().clamp(0.0, 64.0) as usize;
+                if let Some(spec) = body.partial_spec()
+                    && body
+                        .fused_partial_block(&spec, count, state, context, inputs, frames, output)
+                {
+                    return true;
+                }
                 let carried = (*carried).min(8);
                 let mut carried_block = [[0.0_f64; 64]; 8];
                 let mut body_inputs = [[0.0_f64; 64]; 8];
