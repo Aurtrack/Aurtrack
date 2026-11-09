@@ -1677,6 +1677,62 @@ impl VoicePlan {
                 }
                 true
             },
+            VoiceOp::Hammer => {
+                let mut velocity = [0.0_f32; 64];
+                let mut hardness = [0.5_f32; 64];
+                if let Some(input) = node.inputs.first()
+                    && !self.eval_top_block(
+                        *input,
+                        state,
+                        context,
+                        inputs,
+                        frames,
+                        &mut velocity[..frames],
+                    )
+                {
+                    return false;
+                }
+                if let Some(input) = node.inputs.get(1)
+                    && !self.eval_top_block(
+                        *input,
+                        state,
+                        context,
+                        inputs,
+                        frames,
+                        &mut hardness[..frames],
+                    )
+                {
+                    return false;
+                }
+                for (frame, slot) in output.iter_mut().enumerate() {
+                    let velocity = if node.inputs.is_empty() {
+                        context.velocity
+                    } else {
+                        f64::from(velocity[frame])
+                    }
+                    .clamp(0.0, 1.0);
+                    let hardness = if node.inputs.len() < 2 {
+                        0.5
+                    } else {
+                        f64::from(hardness[frame])
+                    }
+                    .clamp(0.0, 1.0);
+                    let time = context.local_time.max(0.0);
+                    let contact = 0.0012 + (1.0 - velocity) * 0.0025;
+                    let envelope = (-time / contact).exp();
+                    let noise = (hash64(context.seed ^ time.to_bits().rotate_left(17) ^ 0x51ed_2701)
+                        as f64
+                        / u64::MAX as f64)
+                        * 2.0
+                        - 1.0;
+                    let thump = (std::f64::consts::TAU * 92.0 * time).sin();
+                    *slot = ((noise * (0.65 + hardness * 0.35) + thump * 0.2)
+                        * envelope
+                        * velocity
+                        * 0.55) as f32;
+                }
+                true
+            },
             VoiceOp::Clamp => {
                 let mut low = [0.0_f32; 64];
                 let mut high = [1.0_f32; 64];
