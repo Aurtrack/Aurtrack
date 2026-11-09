@@ -1677,6 +1677,25 @@ impl VoicePlan {
                 }
                 true
             },
+            VoiceOp::Pitch
+            | VoiceOp::Velocity
+            | VoiceOp::Gate
+            | VoiceOp::Time
+            | VoiceOp::Iteration
+            | VoiceOp::NoteIndex => {
+                for (frame, slot) in output.iter_mut().enumerate() {
+                    *slot = match node.op {
+                        VoiceOp::Pitch => context.pitch,
+                        VoiceOp::Velocity => context.velocity,
+                        VoiceOp::Gate => f64::from(u8::from(context.gate)),
+                        VoiceOp::Time => context.local_time + frame as f64 / 48_000.0,
+                        VoiceOp::Iteration => context.iteration as f64,
+                        VoiceOp::NoteIndex => context.note_index as f64,
+                        _ => 0.0,
+                    } as f32;
+                }
+                true
+            },
             VoiceOp::Hammer => {
                 let mut velocity = [0.0_f32; 64];
                 let mut hardness = [0.5_f32; 64];
