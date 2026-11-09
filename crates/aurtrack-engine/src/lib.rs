@@ -1389,6 +1389,87 @@ impl VoicePlan {
         Some((target, count.round().clamp(0.0, 64.0) as usize))
     }
 
+    #[allow(clippy::only_used_in_recursion)]
+    fn eval_top_block(
+        &self,
+        index: usize,
+        state: &mut VoiceState,
+        context: VoiceContext,
+        inputs: &VoiceBlockInputs<'_>,
+        frames: usize,
+        output: &mut [f32],
+    ) -> bool {
+        let Some(node) = self.nodes.get(index) else {
+            return false;
+        };
+        match &node.op {
+            VoiceOp::Constant(value) => {
+                output.fill(*value as f32);
+                true
+            },
+            VoiceOp::Input(slot) => {
+                for (frame, value) in output.iter_mut().enumerate() {
+                    *value = inputs.frame(*slot, frame) as f32;
+                }
+                true
+            },
+            VoiceOp::Output => node.inputs.first().is_some_and(|input| {
+                self.eval_top_block(*input, state, context, inputs, frames, output)
+            }),
+            VoiceOp::Vca => {
+                let Some(input) = node.inputs.first() else {
+                    return false;
+                };
+                if !self.eval_top_block(*input, state, context, inputs, frames, output) {
+                    return false;
+                }
+                let mut gain = [1.0_f32; 64];
+                if let Some(input) = node.inputs.get(1) {
+                    if !self.eval_top_block(
+                        *input,
+                        state,
+                        context,
+                        inputs,
+                        frames,
+                        &mut gain[..frames],
+                    ) {
+                        return false;
+                    }
+                }
+                for (value, gain) in output.iter_mut().zip(gain.iter()) {
+                    *value *= *gain;
+                }
+                true
+            },
+            VoiceOp::Add | VoiceOp::Multiply => {
+                let multiply = matches!(node.op, VoiceOp::Multiply);
+                output.fill(if multiply { 1.0 } else { 0.0 });
+                let mut term = [0.0_f32; 64];
+                for input in &node.inputs {
+                    if !self.eval_top_block(
+                        *input,
+                        state,
+                        context,
+                        inputs,
+                        frames,
+                        &mut term[..frames],
+                    ) {
+                        return false;
+                    }
+                    for (value, term) in output.iter_mut().zip(term.iter()) {
+                        if multiply {
+                            *value *= *term;
+                        } else {
+                            *value += *term;
+                        }
+                    }
+                }
+                true
+            },
+            _ => false,
+        }
+    }
+
     fn repeat_body_with_carried(&self) -> Option<(&VoicePlan, usize, usize)> {
         let mut source = self.output;
         let mut slot = None;
@@ -1487,6 +1568,9 @@ impl VoicePlan {
         sample_rate: f64,
         output: &mut [f32],
     ) -> bool {
+        if self.eval_top_block(self.output, state, context, inputs, output.len(), output) {
+            return true;
+        }
         if let Some((body, count, carried)) = self.repeat_body_with_carried() {
             let frames = output.len();
             let mut carried_block = [[0.0_f64; 64]; 8];
@@ -5428,6 +5512,38 @@ mod tests {
         ));
         for (frame, value) in block.iter().enumerate() {
             assert!((f64::from(*value) - frame as f64).abs() < 1e-6);
+        }
+    }
+
+    #[test]
+    fn top_block_evaluates_vca_and_add() {
+        let plan = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Input(0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(2.0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Vca, vec![0, 1]),
+                VoiceNodePlan::new(VoiceOp::Constant(1.0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Add, vec![2, 3]),
+                VoiceNodePlan::new(VoiceOp::Output, vec![4]),
+            ],
+            5,
+        );
+        let mut values = [[0.0_f64; 64]; 1];
+        for frame in 0..64 {
+            values[0][frame] = frame as f64;
+        }
+        let inputs = VoiceBlockInputs::new(&values, 64);
+        let mut state = VoiceState::new(8);
+        let mut block = [0.0_f32; 64];
+        assert!(plan.process_block_inputs(
+            &mut state,
+            test_context(0.0),
+            &inputs,
+            48_000.0,
+            &mut block
+        ));
+        for (frame, value) in block.iter().enumerate() {
+            assert!((f64::from(*value) - (frame as f64 * 2.0 + 1.0)).abs() < 1e-6);
         }
     }
 
