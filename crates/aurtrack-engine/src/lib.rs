@@ -1403,6 +1403,31 @@ impl VoicePlan {
         None
     }
 
+    #[allow(dead_code)]
+    fn partial_spec(&self) -> Option<PartialSpec> {
+        let mut found = None;
+        for (index, node) in self.nodes.iter().enumerate() {
+            if matches!(node.op, VoiceOp::PianoPartial) {
+                if found.is_some() {
+                    return None;
+                }
+                found = Some((index, node));
+            }
+        }
+        let (index, node) = found?;
+        let index_input = node.inputs.get(3).copied()?;
+        let mut params = [usize::MAX; 7];
+        for (slot, input) in params.iter_mut().enumerate() {
+            let source = if slot < 3 { slot } else { slot + 1 };
+            *input = node.inputs.get(source).copied().unwrap_or(usize::MAX);
+        }
+        Some(PartialSpec {
+            node: index,
+            index_input,
+            params,
+        })
+    }
+
     #[allow(clippy::only_used_in_recursion)]
     fn eval_top_block(
         &self,
@@ -3118,6 +3143,14 @@ fn osc_partials(
 }
 
 /// 加法钢琴音色。
+#[derive(Debug)]
+#[allow(dead_code)]
+struct PartialSpec {
+    node: usize,
+    index_input: usize,
+    params: [usize; 7],
+}
+
 /// VoicePlan block ABI v2 的逐帧输入。
 #[derive(Debug)]
 pub struct VoiceBlockInputs<'a> {
@@ -5961,6 +5994,31 @@ mod tests {
         for (frame, value) in block.iter().enumerate() {
             assert!((f64::from(*value) - frame as f64).abs() < 1e-6);
         }
+    }
+
+    #[test]
+    fn partial_spec_finds_piano_partial() {
+        let plan = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Constant(220.0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(0.8), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(0.1), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Iteration, Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(0.0004), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(0.5), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(1.2), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(0.12), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::PianoPartial, vec![0, 1, 2, 3, 4, 5, 6, 7]),
+                VoiceNodePlan::new(VoiceOp::Output, vec![8]),
+            ],
+            9,
+        );
+        let Some(spec) = plan.partial_spec() else {
+            panic!("应找到 PianoPartial");
+        };
+        assert_eq!(spec.node, 8);
+        assert_eq!(spec.index_input, 3);
+        assert_eq!(spec.params, [0, 1, 2, 4, 5, 6, 7]);
     }
 
     #[test]
