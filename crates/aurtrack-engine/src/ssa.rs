@@ -116,6 +116,40 @@ impl VoiceSsa {
         scratch: &mut BlockScratch,
         output: &mut [f32],
     ) {
+        self.process_block_with(
+            context,
+            |input, _| inputs.get(input).copied().unwrap_or(0.0),
+            sample_rate,
+            scratch,
+            output,
+        );
+    }
+
+    pub fn process_block_inputs(
+        &self,
+        context: VoiceContext,
+        inputs: &crate::VoiceBlockInputs<'_>,
+        sample_rate: f64,
+        scratch: &mut BlockScratch,
+        output: &mut [f32],
+    ) {
+        self.process_block_with(
+            context,
+            |input, frame| inputs.frame(input, frame),
+            sample_rate,
+            scratch,
+            output,
+        );
+    }
+
+    fn process_block_with<F: Fn(usize, usize) -> f64>(
+        &self,
+        context: VoiceContext,
+        read_input: F,
+        sample_rate: f64,
+        scratch: &mut BlockScratch,
+        output: &mut [f32],
+    ) {
         const BLOCK: usize = 64;
         if output.len() > BLOCK
             || self.values.len() > scratch.values.len()
@@ -130,10 +164,7 @@ impl VoiceSsa {
             for frame in 0..frames {
                 values[index][frame] = match value.op {
                     SsaOp::Constant => value.constant.unwrap_or(0.0),
-                    SsaOp::External => inputs
-                        .get(value.external.unwrap_or(usize::MAX))
-                        .copied()
-                        .unwrap_or(0.0),
+                    SsaOp::External => read_input(value.external.unwrap_or(usize::MAX), frame),
                     SsaOp::ContextPitch => context.pitch,
                     SsaOp::ContextVelocity => context.velocity,
                     SsaOp::ContextTime => context.local_time + frame as f64 / sample_rate,

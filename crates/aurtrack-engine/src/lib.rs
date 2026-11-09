@@ -1427,6 +1427,24 @@ impl VoicePlan {
         true
     }
 
+    pub fn process_block_inputs(
+        &self,
+        state: &mut VoiceState,
+        context: VoiceContext,
+        inputs: &VoiceBlockInputs<'_>,
+        sample_rate: f64,
+        output: &mut [f32],
+    ) -> bool {
+        let Some(ssa) = VoiceSsa::compile(self) else {
+            return false;
+        };
+        if state.scratch.len() < ssa.instruction_count() || output.len() > inputs.frames() {
+            return false;
+        }
+        ssa.process_block_inputs(context, inputs, sample_rate, &mut state.scratch, output);
+        true
+    }
+
     /// 兼容 block API：当前仍逐采样求值，调用方传入输出缓冲，不分配。
     pub fn sample_block(
         &self,
@@ -5304,6 +5322,34 @@ mod tests {
         assert!((inputs.frame(0, 2) - 2.0).abs() < f64::EPSILON);
         assert!((inputs.frame(1, 3) - 13.0).abs() < f64::EPSILON);
         assert!(inputs.frame(9, 1).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn voice_block_inputs_flow_through_ssa() {
+        let plan = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Input(0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Output, vec![0]),
+            ],
+            1,
+        );
+        let mut values = [[0.0_f64; 64]; 1];
+        for frame in 0..64 {
+            values[0][frame] = frame as f64;
+        }
+        let inputs = VoiceBlockInputs::new(&values, 64);
+        let mut state = VoiceState::new(8);
+        let mut block = [0.0_f32; 64];
+        assert!(plan.process_block_inputs(
+            &mut state,
+            test_context(0.0),
+            &inputs,
+            48_000.0,
+            &mut block
+        ));
+        for (frame, value) in block.iter().enumerate() {
+            assert!((f64::from(*value) - frame as f64).abs() < 1e-6);
+        }
     }
 
     #[test]
