@@ -1441,6 +1441,12 @@ impl VoicePlan {
                 }
                 true
             },
+            VoiceOp::GroupCall { body, outputs } => {
+                if outputs != &[body.output] {
+                    return false;
+                }
+                body.eval_top_block(body.output, state, context, inputs, frames, output)
+            },
             VoiceOp::Add | VoiceOp::Multiply => {
                 let multiply = matches!(node.op, VoiceOp::Multiply);
                 output.fill(if multiply { 1.0 } else { 0.0 });
@@ -5513,6 +5519,42 @@ mod tests {
         for (frame, value) in block.iter().enumerate() {
             assert!((f64::from(*value) - frame as f64).abs() < 1e-6);
         }
+    }
+
+    #[test]
+    fn top_block_inlines_group_call() {
+        let body = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Constant(3.0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Output, vec![0]),
+            ],
+            1,
+        );
+        let plan = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(
+                    VoiceOp::GroupCall {
+                        body: Box::new(body),
+                        outputs: vec![1],
+                    },
+                    Vec::new(),
+                ),
+                VoiceNodePlan::new(VoiceOp::Output, vec![0]),
+            ],
+            1,
+        );
+        let mut state = VoiceState::new(8);
+        let mut block = [0.0_f32; 64];
+        let empty = [[0.0_f64; 64]; 0];
+        let inputs = VoiceBlockInputs::new(&empty, 64);
+        assert!(plan.process_block_inputs(
+            &mut state,
+            test_context(0.0),
+            &inputs,
+            48_000.0,
+            &mut block
+        ));
+        assert!(block.iter().all(|value| (*value - 3.0).abs() < 1e-6));
     }
 
     #[test]
