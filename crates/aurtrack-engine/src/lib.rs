@@ -43,6 +43,7 @@ static BLOCK_CALLS: AtomicU64 = AtomicU64::new(0);
 static REPEAT_ITERATIONS: AtomicU64 = AtomicU64::new(0);
 static GROUP_CALLS: AtomicU64 = AtomicU64::new(0);
 static PARTIAL_LOOPS: AtomicU64 = AtomicU64::new(0);
+static TRACK_BLOCKS: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy, Default)]
 pub struct BlockStats {
@@ -50,6 +51,7 @@ pub struct BlockStats {
     pub repeat_iterations: u64,
     pub group_calls: u64,
     pub partial_loops: u64,
+    pub track_blocks: u64,
 }
 
 pub fn block_stats() -> BlockStats {
@@ -58,6 +60,7 @@ pub fn block_stats() -> BlockStats {
         repeat_iterations: REPEAT_ITERATIONS.load(Ordering::Relaxed),
         group_calls: GROUP_CALLS.load(Ordering::Relaxed),
         partial_loops: PARTIAL_LOOPS.load(Ordering::Relaxed),
+        track_blocks: TRACK_BLOCKS.load(Ordering::Relaxed),
     }
 }
 
@@ -84,6 +87,7 @@ impl TrackPlan {
         start_position: u64,
         output: &mut [f32],
     ) -> bool {
+        TRACK_BLOCKS.fetch_add(1, Ordering::Relaxed);
         let Some(graph) = &self.graph else {
             return false;
         };
@@ -3451,8 +3455,15 @@ impl PianoPlan {
                 };
                 // SAFETY: 音频线程是唯一写入者；index 小于 states 长度。
                 let state = unsafe { self.states.get_mut(index) };
-                if !voice.process_block(state, context, &[], sample_rate, &mut note_block[..frames])
-                {
+                let empty = [[0.0_f64; 64]; 0];
+                let inputs = VoiceBlockInputs::new(&empty, frames);
+                if !voice.process_block_inputs(
+                    state,
+                    context,
+                    &inputs,
+                    sample_rate,
+                    &mut note_block[..frames],
+                ) {
                     break;
                 }
                 for (slot, value) in output.iter_mut().zip(&note_block[..frames]) {
