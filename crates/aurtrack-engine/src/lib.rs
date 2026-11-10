@@ -1465,19 +1465,64 @@ impl VoicePlan {
             }
         }
         output.fill(0.0);
+        let constant = [0, 1, 3, 4, 5, 6].iter().all(|slot| {
+            params[*slot][..frames]
+                .windows(2)
+                .all(|pair| (pair[0] - pair[1]).abs() < f32::EPSILON)
+        });
         for partial in 0..count {
             let index = partial as f64;
-            for (frame, slot) in output.iter_mut().enumerate() {
-                *slot += piano_partial_sample(
-                    f64::from(params[0][frame]),
-                    f64::from(params[1][frame]),
-                    f64::from(params[2][frame]),
-                    index,
-                    f64::from(params[3][frame]),
-                    f64::from(params[4][frame]),
-                    f64::from(params[5][frame]),
-                    f64::from(params[6][frame]),
-                ) as f32;
+            if constant {
+                let harmonic = index.max(0.0).round() + 1.0;
+                let pitch = f64::from(params[0][0]);
+                let velocity = f64::from(params[1][0]);
+                let inharmonicity = f64::from(params[3][0]).clamp(0.0, 0.01);
+                let brightness = f64::from(params[4][0]).clamp(0.0, 1.0);
+                let decay = f64::from(params[5][0]).clamp(0.05, 8.0) / (1.0 + harmonic * 0.06);
+                let position = f64::from(params[6][0]);
+                let frequency =
+                    pitch * harmonic * (1.0 + inharmonicity * harmonic * harmonic).sqrt();
+                if frequency >= 20_000.0 {
+                    continue;
+                }
+                let velocity = velocity.clamp(0.0, 1.0).powf(0.55 + brightness * 0.7);
+                let position_amplitude =
+                    (std::f64::consts::PI * harmonic * position.clamp(0.0, 1.0))
+                        .sin()
+                        .abs()
+                        .max(0.08);
+                let amplitude =
+                    velocity * position_amplitude / harmonic.powf(0.55 + brightness * 0.7);
+                let low = frequency * 0.99975;
+                let high = frequency * 1.00025;
+                for (frame, slot) in output.iter_mut().enumerate() {
+                    let time = f64::from(params[2][frame]);
+                    if time < 0.0 {
+                        continue;
+                    }
+                    let prompt = (-time / 0.08).exp();
+                    let sustain = (-time / decay).exp();
+                    let envelope =
+                        (0.35 * prompt + 0.65 * sustain) * (1.0 - (-time / 0.0025).exp());
+                    let strings = ((std::f64::consts::TAU * frequency * time).sin()
+                        + (std::f64::consts::TAU * low * time).sin()
+                        + (std::f64::consts::TAU * high * time).sin())
+                        / 3.0;
+                    *slot += (strings * envelope * amplitude * 0.18) as f32;
+                }
+            } else {
+                for (frame, slot) in output.iter_mut().enumerate() {
+                    *slot += piano_partial_sample(
+                        f64::from(params[0][frame]),
+                        f64::from(params[1][frame]),
+                        f64::from(params[2][frame]),
+                        index,
+                        f64::from(params[3][frame]),
+                        f64::from(params[4][frame]),
+                        f64::from(params[5][frame]),
+                        f64::from(params[6][frame]),
+                    ) as f32;
+                }
             }
         }
         let _ = spec.node;
