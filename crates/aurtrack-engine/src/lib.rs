@@ -1669,6 +1669,46 @@ impl VoicePlan {
                 }
                 true
             },
+            VoiceOp::Partial => {
+                let mut args = [[0.0_f32; 64]; 7];
+                for (slot, values) in args.iter_mut().enumerate() {
+                    if let Some(input) = node.inputs.get(slot) {
+                        if !self.eval_top_block(
+                            *input,
+                            state,
+                            context,
+                            inputs,
+                            frames,
+                            &mut values[..frames],
+                        ) {
+                            return false;
+                        }
+                    } else {
+                        let default = match slot {
+                            0 => context.pitch,
+                            1 => context.velocity,
+                            2 => context.local_time,
+                            3 => 0.0,
+                            4 => 0.0004,
+                            5 => 0.5,
+                            _ => 1.2,
+                        };
+                        values[..frames].fill(default as f32);
+                    }
+                }
+                for (frame, slot) in output.iter_mut().enumerate() {
+                    *slot = partial_sample(
+                        f64::from(args[0][frame]),
+                        f64::from(args[1][frame]),
+                        f64::from(args[2][frame]),
+                        f64::from(args[3][frame]),
+                        f64::from(args[4][frame]),
+                        f64::from(args[5][frame]),
+                        f64::from(args[6][frame]),
+                    ) as f32;
+                }
+                true
+            },
             VoiceOp::PianoPartial => {
                 let mut args = [[0.0_f32; 64]; 8];
                 for (slot, values) in args.iter_mut().enumerate() {
@@ -1859,7 +1899,28 @@ impl VoicePlan {
                 if outputs != &[body.output] {
                     return false;
                 }
-                body.eval_top_block(body.output, state, context, inputs, frames, output)
+                let mut group_inputs = [[0.0_f64; 64]; 8];
+                for (slot, slot_values) in group_inputs.iter_mut().enumerate() {
+                    let Some(input) = node.inputs.get(slot) else {
+                        break;
+                    };
+                    let mut values = [0.0_f32; 64];
+                    if !self.eval_top_block(
+                        *input,
+                        state,
+                        context,
+                        inputs,
+                        frames,
+                        &mut values[..frames],
+                    ) {
+                        return false;
+                    }
+                    for (frame, value) in values[..frames].iter().enumerate() {
+                        slot_values[frame] = f64::from(*value);
+                    }
+                }
+                let group_values = VoiceBlockInputs::new(&group_inputs, frames);
+                body.eval_top_block(body.output, state, context, &group_values, frames, output)
             },
             VoiceOp::Add | VoiceOp::Multiply => {
                 let multiply = matches!(node.op, VoiceOp::Multiply);
