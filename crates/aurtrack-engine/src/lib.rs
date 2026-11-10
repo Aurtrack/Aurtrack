@@ -3558,8 +3558,13 @@ impl PianoPlan {
                 };
                 // SAFETY: 音频线程是唯一写入者；index 小于 states 长度。
                 let state = unsafe { self.states.get_mut(index) };
-                let empty = [[0.0_f64; 64]; 0];
-                let inputs = VoiceBlockInputs::new(&empty, frames);
+                let mut voice_inputs = [[0.0_f64; 64]; 3];
+                for frame in 0..frames {
+                    voice_inputs[0][frame] = note.frequency;
+                    voice_inputs[1][frame] = note.velocity;
+                    voice_inputs[2][frame] = local + frame as f64 / sample_rate;
+                }
+                let inputs = VoiceBlockInputs::new(&voice_inputs, frames);
                 if !voice.process_block_inputs(
                     state,
                     context,
