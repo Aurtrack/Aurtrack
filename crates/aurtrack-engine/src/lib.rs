@@ -1818,6 +1818,7 @@ impl VoicePlan {
                         slot_values[frame] = f64::from(*value);
                     }
                 }
+                carried_block[..carried].copy_from_slice(&body_inputs[..carried]);
                 for iteration in 0..count {
                     body_inputs[..carried].copy_from_slice(&carried_block[..carried]);
                     let body_values = VoiceBlockInputs::new(&body_inputs, frames);
