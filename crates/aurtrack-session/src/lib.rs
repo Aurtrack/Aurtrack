@@ -7141,6 +7141,87 @@ mod buffer_tests {
     }
 
     #[test]
+    #[ignore = "性能基准"]
+    fn playback_block_benchmark() {
+        let mut session = Session::default();
+        for request in [
+            json!({ "cmd": "project.create", "args": { "name": "bench" } }),
+            json!({ "cmd": "track.create", "args": { "name": "piano", "source": "physical" } }),
+            json!({ "cmd": "clip.create", "args": { "track_id": "track-1", "start": 0, "duration": 2 } }),
+        ] {
+            let request: CommandRequest = serde_json::from_value(request).unwrap();
+            session.execute(&request).unwrap();
+        }
+        let note_count = std::env::var("AURTRACK_BENCH_NOTES")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .unwrap_or(8);
+        for index in 0..note_count {
+            session
+                .execute(&CommandRequest {
+                    cmd: "note.add".to_string(),
+                    args: json!({
+                        "path": "/tracks/track-1/clips/clip-1",
+                        "pitch": 60 + index,
+                        "start": 0,
+                        "duration": 1,
+                        "velocity": 0.8,
+                    }),
+                })
+                .unwrap();
+        }
+        let project = session.project().unwrap().clone();
+        let track = &project.tracks[0];
+        let (frequency, adsr, graph) = track
+            .playback_graph_with_buffers(
+                &project.node_groups,
+                &project.audio_groups,
+                &project.buffers,
+            )
+            .unwrap();
+        let notes = track
+            .clips
+            .iter()
+            .flat_map(|clip| {
+                clip.notes.iter().map(|note| aurtrack_engine::NotePlan {
+                    start: project.ticks_to_seconds(clip.start_tick + note.start_tick),
+                    duration: project.ticks_to_seconds(note.duration_tick),
+                    frequency: aurtrack_engine::midi_to_hz(note.pitch),
+                    velocity: note.velocity,
+                })
+            })
+            .collect();
+        let plan = aurtrack_engine::PlaybackPlan {
+            sample_rate: project.sample_rate,
+            loop_start_seconds: 0.0,
+            loop_seconds: 0.0,
+            length_seconds: 2.0,
+            tracks: vec![aurtrack_engine::TrackPlan {
+                frequency,
+                gain: 1.0,
+                adsr: adsr.map(|settings| aurtrack_engine::AdsrPlan {
+                    attack: settings.attack,
+                    decay: settings.decay,
+                    sustain: settings.sustain,
+                    release: settings.release,
+                }),
+                filters: Vec::new(),
+                graph: Some(graph),
+                notes,
+                plugin: None,
+                piano: None,
+            }],
+        };
+        let playback = aurtrack_engine::Playback::new(project.sample_rate);
+        playback.set_plan(plan);
+        playback.play();
+        let mut output = vec![0.0_f32; project.sample_rate as usize * 2];
+        let started = std::time::Instant::now();
+        playback.render(&mut output);
+        println!("elapsed={:?}", started.elapsed());
+    }
+
+    #[test]
     #[ignore = "已知融合后计划输出不一致，待定位"]
     fn fusion_matches_expanded_piano() {
         use aurtrack_engine::VoiceContext;
