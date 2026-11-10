@@ -1470,6 +1470,14 @@ impl VoicePlan {
         }
         let (index, node) = found?;
         let index_input = node.inputs.get(3).copied()?;
+        // NOTE: 融合循环直接用部分序号代替 Index，索引输入必须是 Iteration；
+        // 否则 body 的 Index 可能来自别的关系，必须退回逐帧求值。
+        if !matches!(
+            self.nodes.get(index_input).map(|node| &node.op),
+            Some(VoiceOp::Iteration)
+        ) {
+            return None;
+        }
         let mut params = [usize::MAX; 7];
         for (slot, input) in params.iter_mut().enumerate() {
             let source = if slot < 3 { slot } else { slot + 1 };
@@ -1581,6 +1589,39 @@ impl VoicePlan {
             }
         }
         let _ = spec.node;
+        true
+    }
+
+    /// 把 GroupCall 节点的输入块映射到 body 的输入槽。
+    #[allow(clippy::too_many_arguments)]
+    fn eval_group_inputs(
+        &self,
+        call: &VoiceNodePlan,
+        state: &mut VoiceState,
+        context: VoiceContext,
+        inputs: &VoiceBlockInputs<'_>,
+        frames: usize,
+        destination: &mut [[f64; 64]; 8],
+    ) -> bool {
+        for (slot, slot_values) in destination.iter_mut().enumerate() {
+            let Some(input) = call.inputs.get(slot) else {
+                break;
+            };
+            let mut values = [0.0_f32; 64];
+            if !self.eval_top_block(
+                *input,
+                state,
+                context,
+                inputs,
+                frames,
+                &mut values[..frames],
+            ) {
+                return false;
+            }
+            for (frame, value) in values[..frames].iter().enumerate() {
+                slot_values[frame] = f64::from(*value);
+            }
+        }
         true
     }
 
@@ -1830,12 +1871,6 @@ impl VoicePlan {
                 };
                 let count = count.round().clamp(0.0, 64.0) as usize;
                 REPEAT_ITERATIONS.fetch_add(count as u64, Ordering::Relaxed);
-                if let Some(spec) = body.partial_spec()
-                    && body
-                        .fused_partial_block(&spec, count, state, context, inputs, frames, output)
-                {
-                    return true;
-                }
                 let carried = (*carried).min(8);
                 let mut carried_block = [[0.0_f64; 64]; 8];
                 let mut body_inputs = [[0.0_f64; 64]; 8];
@@ -1859,6 +1894,22 @@ impl VoicePlan {
                     }
                 }
                 carried_block[..carried].copy_from_slice(&body_inputs[..carried]);
+                if let Some(spec) = body.partial_spec() {
+                    // NOTE: 融合 kernel 读取的是 body 输入槽，必须传入 Repeat 自己
+                    // 解析出的块值，不能把外层声部输入直接透传进 body。
+                    let body_values = VoiceBlockInputs::new(&body_inputs, frames);
+                    if body.fused_partial_block(
+                        &spec,
+                        count,
+                        state,
+                        context,
+                        &body_values,
+                        frames,
+                        output,
+                    ) {
+                        return true;
+                    }
+                }
                 for iteration in 0..count {
                     body_inputs[..carried].copy_from_slice(&carried_block[..carried]);
                     let body_values = VoiceBlockInputs::new(&body_inputs, frames);
@@ -1892,7 +1943,15 @@ impl VoicePlan {
                 let Some(body_output) = outputs.get(*slot).copied() else {
                     return false;
                 };
-                body.eval_top_block(body_output, state, context, inputs, frames, output)
+                // NOTE: GroupResult 绕过 GroupCall 节点直接求值 body，
+                // 必须先把 GroupCall 的输入映射成 body 槽位，不能透传外层 inputs。
+                let mut group_inputs = [[0.0_f64; 64]; 8];
+                if !self.eval_group_inputs(group, state, context, inputs, frames, &mut group_inputs)
+                {
+                    return false;
+                }
+                let group_values = VoiceBlockInputs::new(&group_inputs, frames);
+                body.eval_top_block(body_output, state, context, &group_values, frames, output)
             },
             VoiceOp::GroupCall { body, outputs } => {
                 GROUP_CALLS.fetch_add(1, Ordering::Relaxed);
@@ -1900,24 +1959,9 @@ impl VoicePlan {
                     return false;
                 }
                 let mut group_inputs = [[0.0_f64; 64]; 8];
-                for (slot, slot_values) in group_inputs.iter_mut().enumerate() {
-                    let Some(input) = node.inputs.get(slot) else {
-                        break;
-                    };
-                    let mut values = [0.0_f32; 64];
-                    if !self.eval_top_block(
-                        *input,
-                        state,
-                        context,
-                        inputs,
-                        frames,
-                        &mut values[..frames],
-                    ) {
-                        return false;
-                    }
-                    for (frame, value) in values[..frames].iter().enumerate() {
-                        slot_values[frame] = f64::from(*value);
-                    }
+                if !self.eval_group_inputs(node, state, context, inputs, frames, &mut group_inputs)
+                {
+                    return false;
                 }
                 let group_values = VoiceBlockInputs::new(&group_inputs, frames);
                 body.eval_top_block(body.output, state, context, &group_values, frames, output)
@@ -6398,6 +6442,145 @@ mod tests {
             &mut block
         ));
         assert!(block.iter().all(|value| (*value - 3.0).abs() < 1e-6));
+    }
+
+    fn input_body() -> VoicePlan {
+        VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Input(0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Input(1), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Add, vec![0, 1]),
+                VoiceNodePlan::new(VoiceOp::Output, vec![2]),
+            ],
+            3,
+        )
+    }
+
+    #[test]
+    fn group_call_maps_node_inputs_into_body() {
+        let plan = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Constant(2.0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(5.0), Vec::new()),
+                VoiceNodePlan::new(
+                    VoiceOp::GroupCall {
+                        body: Box::new(input_body()),
+                        outputs: vec![3],
+                    },
+                    vec![0, 1],
+                ),
+                VoiceNodePlan::new(VoiceOp::Output, vec![2]),
+            ],
+            3,
+        );
+        let mut state = VoiceState::new(8);
+        let mut block = [0.0_f32; 64];
+        let empty = [[0.0_f64; 64]; 0];
+        let inputs = VoiceBlockInputs::new(&empty, 64);
+        assert!(plan.process_block_inputs(
+            &mut state,
+            test_context(0.0),
+            &inputs,
+            48_000.0,
+            &mut block
+        ));
+        assert!(block.iter().all(|value| (*value - 7.0).abs() < 1e-6));
+    }
+
+    #[test]
+    fn group_result_maps_call_inputs_into_body() {
+        // NOTE: GroupResult 直接求值 body，必须走 GroupCall 的输入映射。
+        let plan = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Constant(2.0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(5.0), Vec::new()),
+                VoiceNodePlan::new(
+                    VoiceOp::GroupCall {
+                        body: Box::new(input_body()),
+                        outputs: vec![3],
+                    },
+                    vec![0, 1],
+                ),
+                VoiceNodePlan::new(VoiceOp::GroupResult { source: 2, slot: 0 }, Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Output, vec![3]),
+            ],
+            4,
+        );
+        let mut state = VoiceState::new(8);
+        let mut block = [0.0_f32; 64];
+        let empty = [[0.0_f64; 64]; 0];
+        let inputs = VoiceBlockInputs::new(&empty, 64);
+        assert!(plan.process_block_inputs(
+            &mut state,
+            test_context(0.0),
+            &inputs,
+            48_000.0,
+            &mut block
+        ));
+        assert!(block.iter().all(|value| (*value - 7.0).abs() < 1e-6));
+    }
+
+    #[test]
+    fn fused_repeat_reads_body_inputs() {
+        let body = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Input(0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Input(1), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Input(2), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Input(3), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Input(4), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Input(5), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Input(6), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Iteration, Vec::new()),
+                VoiceNodePlan::new(VoiceOp::PianoPartial, vec![1, 2, 3, 7, 4, 5, 6]),
+                VoiceNodePlan::new(VoiceOp::Add, vec![0, 8]),
+                VoiceNodePlan::new(VoiceOp::Output, vec![9]),
+            ],
+            10,
+        );
+        let plan = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Constant(4.0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(0.0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(220.0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(0.8), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(0.05), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(0.0004), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(0.5), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(1.2), Vec::new()),
+                VoiceNodePlan::new(
+                    VoiceOp::Repeat {
+                        zone: "partials".to_string(),
+                        body: Box::new(body),
+                        outputs: vec![10],
+                        carried: 1,
+                    },
+                    vec![0, 1, 2, 3, 4, 5, 6, 7],
+                ),
+                VoiceNodePlan::new(VoiceOp::RepeatResult { source: 8, slot: 0 }, Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Output, vec![9]),
+            ],
+            10,
+        );
+        let mut state = VoiceState::new(64);
+        let mut block = [0.0_f32; 64];
+        let empty = [[0.0_f64; 64]; 0];
+        let inputs = VoiceBlockInputs::new(&empty, 64);
+        assert!(plan.process_block_inputs(
+            &mut state,
+            test_context(0.05),
+            &inputs,
+            48_000.0,
+            &mut block
+        ));
+        let expected = plan.sample(test_context(0.05));
+        assert!(expected.abs() > 1e-9, "融合路径必须发声");
+        for value in &block {
+            assert!(
+                (f64::from(*value) - expected).abs() < 1e-6,
+                "block={value} scalar={expected}"
+            );
+        }
     }
 
     #[test]

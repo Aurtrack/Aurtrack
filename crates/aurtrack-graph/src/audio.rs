@@ -830,6 +830,7 @@ impl AudioGroup {
             name: name.into(),
             interface,
             graph,
+            kernel: None,
         }
     }
 }

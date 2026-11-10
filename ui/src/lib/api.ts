@@ -153,6 +153,8 @@ export type NodeGroup = {
   name: string;
   interface: NodeGroupInterface;
   graph: VoiceGraph;
+  // 显式内核声明；缺省时按组图展开编译。
+  kernel?: string;
 };
 
 export type AudioGroup = {
