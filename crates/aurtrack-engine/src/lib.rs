@@ -39,6 +39,35 @@ pub const DEFAULT_BLOCK_SIZE: usize = 64;
 const DECLICK_FADE_SECONDS: f64 = 0.003;
 const NO_SEEK: u64 = u64::MAX;
 const FADE_IDLE: u8 = 0;
+static BLOCK_CALLS: AtomicU64 = AtomicU64::new(0);
+static REPEAT_ITERATIONS: AtomicU64 = AtomicU64::new(0);
+static GROUP_CALLS: AtomicU64 = AtomicU64::new(0);
+static PARTIAL_LOOPS: AtomicU64 = AtomicU64::new(0);
+
+#[derive(Debug, Clone, Copy, Default)]
+pub struct BlockStats {
+    pub block_calls: u64,
+    pub repeat_iterations: u64,
+    pub group_calls: u64,
+    pub partial_loops: u64,
+}
+
+pub fn block_stats() -> BlockStats {
+    BlockStats {
+        block_calls: BLOCK_CALLS.load(Ordering::Relaxed),
+        repeat_iterations: REPEAT_ITERATIONS.load(Ordering::Relaxed),
+        group_calls: GROUP_CALLS.load(Ordering::Relaxed),
+        partial_loops: PARTIAL_LOOPS.load(Ordering::Relaxed),
+    }
+}
+
+pub fn reset_block_stats() {
+    BLOCK_CALLS.store(0, Ordering::Relaxed);
+    REPEAT_ITERATIONS.store(0, Ordering::Relaxed);
+    GROUP_CALLS.store(0, Ordering::Relaxed);
+    PARTIAL_LOOPS.store(0, Ordering::Relaxed);
+}
+
 const FADE_OUT: u8 = 1;
 const FADE_IN: u8 = 2;
 
@@ -1464,6 +1493,7 @@ impl VoicePlan {
                 return false;
             }
         }
+        PARTIAL_LOOPS.fetch_add(1, Ordering::Relaxed);
         output.fill(0.0);
         let constant = [0, 1, 3, 4, 5, 6].iter().all(|slot| {
             params[*slot][..frames]
@@ -1734,6 +1764,7 @@ impl VoicePlan {
                     return false;
                 };
                 let count = count.round().clamp(0.0, 64.0) as usize;
+                REPEAT_ITERATIONS.fetch_add(count as u64, Ordering::Relaxed);
                 if let Some(spec) = body.partial_spec()
                     && body
                         .fused_partial_block(&spec, count, state, context, inputs, frames, output)
@@ -1779,6 +1810,7 @@ impl VoicePlan {
                 body.eval_top_block(body_output, state, context, inputs, frames, output)
             },
             VoiceOp::GroupCall { body, outputs } => {
+                GROUP_CALLS.fetch_add(1, Ordering::Relaxed);
                 if outputs != &[body.output] {
                     return false;
                 }
@@ -2132,6 +2164,7 @@ impl VoicePlan {
         sample_rate: f64,
         output: &mut [f32],
     ) -> bool {
+        BLOCK_CALLS.fetch_add(1, Ordering::Relaxed);
         if self.eval_top_block(self.output, state, context, inputs, output.len(), output) {
             return true;
         }
