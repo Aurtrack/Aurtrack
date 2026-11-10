@@ -3442,6 +3442,7 @@ impl PianoPlan {
             output.fill(0.0);
             let frames = output.len();
             let mut note_block = [0.0_f32; 64];
+            let mut block_ok = true;
             for (index, note) in notes.iter().enumerate().take(self.states.len()) {
                 let local = start_time - note.start;
                 let context = VoiceContext {
@@ -3464,16 +3465,19 @@ impl PianoPlan {
                     sample_rate,
                     &mut note_block[..frames],
                 ) {
+                    block_ok = false;
                     break;
                 }
                 for (slot, value) in output.iter_mut().zip(&note_block[..frames]) {
                     *slot += *value;
                 }
             }
-            for slot in output.iter_mut() {
-                *slot *= 0.18;
+            if block_ok {
+                for slot in output.iter_mut() {
+                    *slot *= 0.18;
+                }
+                return;
             }
-            return;
         }
         for (offset, slot) in output.iter_mut().enumerate() {
             *slot = self.sample(notes, start_time + offset as f64 / sample_rate) as f32;
