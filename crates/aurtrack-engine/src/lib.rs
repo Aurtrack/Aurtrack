@@ -1799,6 +1799,25 @@ impl VoicePlan {
                 let carried = (*carried).min(8);
                 let mut carried_block = [[0.0_f64; 64]; 8];
                 let mut body_inputs = [[0.0_f64; 64]; 8];
+                for (slot, slot_values) in body_inputs.iter_mut().enumerate() {
+                    let Some(input) = repeat.inputs.get(slot + 1) else {
+                        break;
+                    };
+                    let mut values = [0.0_f32; 64];
+                    if !self.eval_top_block(
+                        *input,
+                        state,
+                        context,
+                        inputs,
+                        frames,
+                        &mut values[..frames],
+                    ) {
+                        return false;
+                    }
+                    for (frame, value) in values[..frames].iter().enumerate() {
+                        slot_values[frame] = f64::from(*value);
+                    }
+                }
                 for iteration in 0..count {
                     body_inputs[..carried].copy_from_slice(&carried_block[..carried]);
                     let body_values = VoiceBlockInputs::new(&body_inputs, frames);
