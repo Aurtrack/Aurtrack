@@ -1422,6 +1422,27 @@ impl VoicePlan {
         Some((target, count.round().clamp(0.0, 64.0) as usize))
     }
 
+    #[doc(hidden)]
+    pub fn debug_node_peaks(&self, context: VoiceContext, frames: usize) -> Vec<f32> {
+        let mut state = VoiceState::new(512);
+        let empty = [[0.0_f64; 64]; 0];
+        let inputs = VoiceBlockInputs::new(&empty, frames.min(64));
+        self.nodes
+            .iter()
+            .enumerate()
+            .map(|(index, _)| {
+                let mut block = [0.0_f32; 64];
+                if self.eval_top_block(index, &mut state, context, &inputs, frames, &mut block) {
+                    block[..frames]
+                        .iter()
+                        .fold(0.0_f32, |peak, value| peak.max(value.abs()))
+                } else {
+                    -1.0
+                }
+            })
+            .collect()
+    }
+
     pub fn op_at(&self, plan: usize, index: usize) -> Option<&VoiceOp> {
         if std::ptr::from_ref(self) as usize == plan {
             return self.nodes.get(index).map(|node| &node.op);
