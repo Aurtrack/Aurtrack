@@ -6152,6 +6152,87 @@ mod tests {
     }
 
     #[test]
+    fn piano_partial_block_is_audible() {
+        let plan = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Constant(220.0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(0.8), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(0.1), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(0.0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(0.0004), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(0.5), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(1.2), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(0.12), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::PianoPartial, vec![0, 1, 2, 3, 4, 5, 6, 7]),
+                VoiceNodePlan::new(VoiceOp::Output, vec![8]),
+            ],
+            9,
+        );
+        let mut state = VoiceState::new(32);
+        let empty = [[0.0_f64; 64]; 0];
+        let inputs = VoiceBlockInputs::new(&empty, 64);
+        let mut block = [0.0_f32; 64];
+        assert!(plan.process_block_inputs(
+            &mut state,
+            test_context(0.1),
+            &inputs,
+            48_000.0,
+            &mut block
+        ));
+        assert!(block.iter().any(|value| value.abs() > 1e-9));
+    }
+
+    #[test]
+    fn repeat_result_and_damper_are_audible() {
+        let body = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Constant(220.0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(0.8), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(0.1), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(0.0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(0.0004), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(0.5), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(1.2), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(0.12), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::PianoPartial, vec![0, 1, 2, 3, 4, 5, 6, 7]),
+                VoiceNodePlan::new(VoiceOp::Output, vec![8]),
+            ],
+            9,
+        );
+        let plan = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Constant(1.0), Vec::new()),
+                VoiceNodePlan::new(
+                    VoiceOp::Repeat {
+                        zone: "partial".to_string(),
+                        body: Box::new(body),
+                        outputs: vec![9],
+                        carried: 0,
+                    },
+                    vec![0],
+                ),
+                VoiceNodePlan::new(VoiceOp::RepeatResult { source: 1, slot: 0 }, Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(1.0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Damper, vec![2, 3]),
+                VoiceNodePlan::new(VoiceOp::Output, vec![4]),
+            ],
+            5,
+        );
+        let mut state = VoiceState::new(64);
+        let empty = [[0.0_f64; 64]; 0];
+        let inputs = VoiceBlockInputs::new(&empty, 64);
+        let mut block = [0.0_f32; 64];
+        assert!(plan.process_block_inputs(
+            &mut state,
+            test_context(0.1),
+            &inputs,
+            48_000.0,
+            &mut block
+        ));
+        assert!(block.iter().any(|value| value.abs() > 1e-9));
+    }
+
+    #[test]
     fn partial_spec_finds_piano_partial() {
         let plan = VoicePlan::new(
             vec![
