@@ -178,8 +178,8 @@ fn block_render_does_not_allocate() {
         playback.play();
         reset_allocations();
         let mut block = [0.0_f32; aurtrack_engine::DEFAULT_BLOCK_SIZE];
-        // NOTE: 894–1125 是静音保护触发的尾音区；跑过这一段才能同时覆盖
-        // block 内核和整块回退两条路径。
+        // NOTE: 1000 个 block 约 1.33 秒，覆盖制音器尾音和整块静音段；
+        // 修复后尾段应直接走 block 内核，不再触发逐采样回退。
         for _ in 0..1_000 {
             playback.render(&mut block);
         }
@@ -199,12 +199,13 @@ fn block_render_does_not_allocate() {
             "PianoPlan block 内核不应回退"
         );
         assert_eq!(
-            stats.playback_block_fallbacks, stats.silent_block_fallbacks,
-            "只允许静音保护触发整块回退"
+            stats.playback_block_fallbacks, 0,
+            "尾音已静音，不应再整块回退"
         );
+        assert_eq!(stats.silent_block_fallbacks, 0);
         assert!(
-            stats.silent_block_fallbacks > 0,
-            "分配审计必须覆盖静音回退尾段"
+            playback.position_seconds() > 1.2,
+            "渲染窗口必须覆盖制音器尾音段"
         );
     }
 }
@@ -264,7 +265,10 @@ fn block_deadline_report() {
         let mut non_fallback_sorted = non_fallback;
         non_fallback_sorted.sort_by(f64::total_cmp);
         let non_fallback_max = non_fallback_sorted.last().copied().unwrap_or(0.0);
-        let non_fallback_p99 = non_fallback_sorted[(non_fallback_sorted.len() * 99) / 100];
+        let non_fallback_p99 = non_fallback_sorted
+            .get((non_fallback_sorted.len() * 99) / 100)
+            .copied()
+            .unwrap_or(0.0);
         let budget_us = 64.0 / f64::from(sample_rate) * 1_000_000.0;
         println!(
             "notes={note_count} rounds={ROUNDS} blocks={} total_ms={:.1} budget_us={budget_us:.1} \
@@ -276,11 +280,19 @@ fn block_deadline_report() {
             total / 1_000.0,
         );
         if cfg!(not(debug_assertions)) {
-            // NOTE: block 内核必须守住 1.333ms。静音保护尾段是已知超支项，
-            // 只打印实测值，不把已知问题伪装成通过。
+            // NOTE: 制音器尾音已被静音保护识别，整条回调路径必须守住 1.333ms；
+            // 这里不再给已知超支开例外。
             assert!(
-                non_fallback_max <= budget_us,
-                "block 内核最大耗时 {non_fallback_max:.1}us 超过预算 {budget_us:.1}us"
+                fallback_count == 0,
+                "物理钢琴尾段仍有 {fallback_count} 个整块回退 block"
+            );
+            assert!(
+                p99 <= budget_us,
+                "整体 P99 {p99:.1}us 超过预算 {budget_us:.1}us"
+            );
+            assert!(
+                max <= budget_us,
+                "整体最大 block {max:.1}us 超过预算 {budget_us:.1}us"
             );
         }
     }

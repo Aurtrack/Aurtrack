@@ -43,6 +43,11 @@ const MAX_SCALAR_INPUTS: usize = 8;
 const DECLICK_FADE_SECONDS: f64 = 0.003;
 /// block 混音低于该峰值且存在活跃音符时视为异常静音。
 const BLOCK_SILENCE_EPS: f32 = 1.0e-6;
+/// 无法从计划证明尾音归零时的保守音符尾窗。
+///
+/// 与 `PianoPlan::sample` 的截断窗口一致；只有制音器这类能证明输出必然
+/// 归零的声部才收紧窗口，避免把仍在发声的源误判为静音。
+const DEFAULT_NOTE_TAIL_SECONDS: f64 = 0.5;
 const NO_SEEK: u64 = u64::MAX;
 const FADE_IDLE: u8 = 0;
 static BLOCK_CALLS: AtomicU64 = AtomicU64::new(0);
@@ -94,6 +99,17 @@ pub fn reset_block_stats() {
 const FADE_OUT: u8 = 1;
 const FADE_IN: u8 = 2;
 
+/// block 混音在静音保护下的分类。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BlockOutput {
+    /// 有可听信号，正常输出。
+    Audio,
+    /// 所有源都已过真实尾音，输出零并正常推进。
+    SilentTail,
+    /// 仍在活跃窗口内却整块静音，必须回退逐采样。
+    SuspectSilence,
+}
+
 /// 一条轨道的播放参数。
 impl TrackPlan {
     pub fn supports_block(&self) -> bool {
@@ -111,6 +127,32 @@ impl TrackPlan {
         if let Some(graph) = &self.graph {
             graph.reset_state();
         }
+    }
+
+    /// 音符 gate 关闭后仍可能发声的最长时长（秒）。
+    ///
+    /// 只有能证明声部输出会在有限时间归零时才收紧尾窗；任何无法证明的
+    /// 声部都退回 `DEFAULT_NOTE_TAIL_SECONDS`，宁可多回退也不吞掉尾音。
+    fn note_tail_seconds(&self, sample_rate: f64) -> f64 {
+        let fallback = self.adsr.map_or(DEFAULT_NOTE_TAIL_SECONDS, |adsr| {
+            adsr.release.max(MIN_ENVELOPE_SECONDS)
+        });
+        let Some(graph) = &self.graph else {
+            return fallback;
+        };
+        if graph.pianos.is_empty() {
+            return fallback;
+        }
+        let mut tail = 0.0_f64;
+        for piano in &graph.pianos {
+            let Some(value) = piano.damper_tail_seconds(sample_rate) else {
+                return DEFAULT_NOTE_TAIL_SECONDS;
+            };
+            tail = tail.max(value);
+        }
+        // NOTE: `PianoPlan` 的逐采样与 block 路径都在音符结束 0.5 秒后截断，
+        // 更长的包络上界不会产生声音，只会多一次无意义的回退。
+        tail.min(DEFAULT_NOTE_TAIL_SECONDS)
     }
 
     /// 轨道级 block 渲染；只有 graph 轨道走节点主序，其余由调用方 fallback。
@@ -3460,6 +3502,45 @@ impl PianoPlan {
         }
     }
 
+    /// 制音器声部在 gate 关闭后仍可能发声的时长上界。
+    ///
+    /// 只有同时满足以下条件才能证明输出必然归零：声部输出就是
+    /// `Damper`、gate 直接来自上下文、pedal 常量为零、damping 为正常量。
+    /// 制音器电平每采样减 `damping`，上限为 1，因此 `1 / damping` 个
+    /// 采样后输出精确为零。任何一项不满足都返回 `None`，由调用方保留
+    /// 保守尾窗，避免把仍在发声的声部误判为静音。
+    fn damper_tail_seconds(&self, sample_rate: f64) -> Option<f64> {
+        let voice = self.voice.as_ref()?;
+        let mut node = voice.nodes.get(voice.output)?;
+        // NOTE: `Output` 和类型转换是纯直通；跟随它们才能覆盖两种常见的
+        // 声部写法，同时保证最终值仍由制音器决定。
+        for _ in 0..=voice.nodes.len() {
+            if !matches!(&node.op, VoiceOp::Output | VoiceOp::IntToFloat) {
+                break;
+            }
+            node = voice.nodes.get(*node.inputs.first()?)?;
+        }
+        if !matches!(&node.op, VoiceOp::Damper) {
+            return None;
+        }
+        let gate = voice.nodes.get(*node.inputs.get(1)?)?;
+        if !matches!(&gate.op, VoiceOp::Gate) {
+            return None;
+        }
+        let pedal = voice.nodes.get(*node.inputs.get(2)?)?;
+        if !matches!(&pedal.op, VoiceOp::Constant(value) if value.abs() <= 0.001) {
+            return None;
+        }
+        let damping = voice.nodes.get(*node.inputs.get(3)?)?;
+        let VoiceOp::Constant(damping) = &damping.op else {
+            return None;
+        };
+        if !(damping.is_finite() && *damping > 0.0) {
+            return None;
+        }
+        Some(1.0 / damping.clamp(0.0001, 0.2) / sample_rate.max(1.0))
+    }
+
     /// block 接口：按每个音符的起始帧切段，段内仍走声部 block kernel。
     ///
     /// 音符尚未开始时不能进入 kernel，否则 `Time` 为负、状态提前推进；已开始
@@ -5183,9 +5264,18 @@ impl Playback {
                     *slot += *value;
                 }
             }
-            if block_ok && Self::block_output_needs_fallback(&plan, position, &mixed[..frames]) {
-                SILENT_BLOCK_FALLBACKS.fetch_add(1, Ordering::Relaxed);
-                block_ok = false;
+            if block_ok {
+                let output = Self::classify_block_output(&plan, position, &mixed[..frames]);
+                match output {
+                    BlockOutput::Audio => {},
+                    BlockOutput::SilentTail => {
+                        mixed[..frames].fill(0.0);
+                    },
+                    BlockOutput::SuspectSilence => {
+                        SILENT_BLOCK_FALLBACKS.fetch_add(1, Ordering::Relaxed);
+                        block_ok = false;
+                    },
+                }
             }
             if block_ok {
                 // NOTE: 起音增益也按帧推进，否则 block 路径会吞掉 `play`
@@ -5291,12 +5381,24 @@ impl Playback {
         }
     }
 
-    /// block 混音接近静音但计划里仍有活跃音符时，必须回退逐采样。
-    fn block_output_needs_fallback(plan: &PlaybackPlan, position: u64, block: &[f32]) -> bool {
-        let peak = block
-            .iter()
-            .fold(0.0_f32, |peak, value| peak.max(value.abs()));
-        peak <= BLOCK_SILENCE_EPS && Self::tracks_expect_audio(plan, position, block.len())
+    /// 区分静音尾段和异常的整块静音。
+    fn classify_block_output(plan: &PlaybackPlan, position: u64, block: &[f32]) -> BlockOutput {
+        let peak = block.iter().fold(0.0_f32, |peak, value| {
+            if value.is_finite() {
+                peak.max(value.abs())
+            } else {
+                // NOTE: NaN/Inf 说明内核出错，必须继续走正常输出，不能当成
+                // 静音尾段被清零。
+                f32::INFINITY
+            }
+        });
+        if peak > BLOCK_SILENCE_EPS {
+            BlockOutput::Audio
+        } else if Self::tracks_expect_audio(plan, position, block.len()) {
+            BlockOutput::SuspectSilence
+        } else {
+            BlockOutput::SilentTail
+        }
     }
 
     /// 判断该 block 内是否存在理论上应当发声的源。
@@ -5315,9 +5417,7 @@ impl Playback {
             if track.graph.is_none() && track.frequency.is_some() {
                 return true;
             }
-            let tail = track
-                .adsr
-                .map_or(0.5, |adsr| adsr.release.max(MIN_ENVELOPE_SECONDS));
+            let tail = track.note_tail_seconds(sample_rate);
             track.notes.iter().any(|note| {
                 note.velocity > 0.0
                     && note.start <= end
@@ -5646,6 +5746,42 @@ mod tests {
                 .collect(),
         );
         piano
+    }
+
+    #[test]
+    fn damper_tail_only_covers_provable_envelopes() {
+        let piano = damper_piano();
+        let tail = piano.damper_tail_seconds(48_000.0);
+        assert!(tail.is_some(), "应能推导制音器尾音");
+        assert!((tail.unwrap_or_default() - 1.0 / 0.0001 / 48_000.0).abs() < 1.0e-12);
+
+        let mut sustained = damper_piano();
+        if let Some(voice) = sustained.voice.as_mut() {
+            voice.nodes[2].op = VoiceOp::Constant(0.5);
+        }
+        assert!(
+            sustained.damper_tail_seconds(48_000.0).is_none(),
+            "非零 pedal 必须保留保守尾窗"
+        );
+
+        let mut always_open = damper_piano();
+        if let Some(voice) = always_open.voice.as_mut() {
+            voice.nodes[1].op = VoiceOp::Constant(1.0);
+        }
+        assert!(
+            always_open.damper_tail_seconds(48_000.0).is_none(),
+            "常开门控必须保留保守尾窗"
+        );
+
+        let mut unknown = damper_piano();
+        unknown.voice = Some(VoicePlan::new(
+            vec![VoiceNodePlan::new(VoiceOp::Constant(0.0), Vec::new())],
+            0,
+        ));
+        assert!(
+            unknown.damper_tail_seconds(48_000.0).is_none(),
+            "无包络声部必须保留保守尾窗"
+        );
     }
 
     #[test]
