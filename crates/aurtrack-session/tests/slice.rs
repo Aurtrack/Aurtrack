@@ -2982,3 +2982,35 @@ fn zone_external_input_connects_to_boundary() {
         .playback_graph(&project.node_groups, &project.audio_groups)
         .unwrap();
 }
+
+#[test]
+fn project_open_ignores_removed_group_kernel_field() {
+    let mut session = Session::default();
+    run(
+        &mut session,
+        "project.create",
+        json!({ "name": "legacy-kernel" }),
+    );
+    let path = project_temp_path("legacy-kernel");
+    run(&mut session, "project.save", json!({ "path": path }));
+
+    let text = std::fs::read_to_string(&path).unwrap();
+    let mut value: Value = serde_json::from_str(&text).unwrap();
+    value["project"]["node_groups"]["piano.partial"]
+        .as_object_mut()
+        .unwrap()
+        .insert("kernel".to_string(), json!("piano_partial"));
+    std::fs::write(&path, serde_json::to_string(&value).unwrap()).unwrap();
+
+    let mut opened = Session::default();
+    let response = run(&mut opened, "project.open", json!({ "path": path }));
+    assert_eq!(response["declared_kernels"], 0);
+    let state = run(&mut opened, "project.state", json!({}));
+    assert!(
+        state["project"]["node_groups"]["piano.partial"]
+            .get("kernel")
+            .is_none(),
+        "旧工程的内核字段应被忽略，不再写回"
+    );
+    let _ = std::fs::remove_file(path);
+}

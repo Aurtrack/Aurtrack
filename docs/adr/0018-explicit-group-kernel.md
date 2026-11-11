@@ -2,7 +2,7 @@
 
 ## 状态
 
-已接受。
+部分被 ADR 0020 取代：组内核已删除，Repeat body 累加器接管性能路径。
 
 ## 背景
 
@@ -82,3 +82,8 @@ body_inputs.push(Input(slot))
 - block 调度已由 ADR 0019 修复；本 ADR 只保留组内核与 Repeat 槽位决策。
 - `PianoPartial` 内核仍然是 partial 的专用语义，通用展开路径性能更低；后续若实现
   Repeat 原生 partial 循环，可以再删除该内核。
+
+## 后续
+
+ADR 0020 已删除 `GroupKernel` 和 `PianoPartial` 融合路径，改用通用 Repeat
+累加器；本 ADR 的内核端口与迁移规则不再适用。

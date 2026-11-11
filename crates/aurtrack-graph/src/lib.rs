@@ -296,51 +296,6 @@ pub struct Node {
     group: Option<String>,
 }
 
-/// 节点组的编译期内核声明。
-///
-/// 声明后编译器直接按接口端口生成对应的 `VoiceOp`，不再展开组图；
-/// 未声明或组图被替换的组照常展开，节点仍然可编辑。
-#[non_exhaustive]
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum GroupKernel {
-    /// 钢琴泛音银行：每个组实例编译成一个 `VoiceOp::PianoPartial`。
-    PianoPartial,
-}
-
-impl GroupKernel {
-    /// 内核按固定顺序要求的输入端口。
-    ///
-    /// 编译器按这些 ID 从组接口取值，不依赖接口声明顺序。
-    pub const fn input_ports(self) -> &'static [&'static str] {
-        match self {
-            Self::PianoPartial => &[
-                "pitch",
-                "velocity",
-                "time",
-                "index",
-                "inharmonicity",
-                "brightness",
-                "decay",
-            ],
-        }
-    }
-
-    /// 内核识别但不强制的输入端口。
-    pub const fn optional_input_ports(self) -> &'static [&'static str] {
-        match self {
-            Self::PianoPartial => &["position"],
-        }
-    }
-
-    /// 内核要求的音频输出端口。
-    pub const fn output_port(self) -> &'static str {
-        match self {
-            Self::PianoPartial => "audio",
-        }
-    }
-}
-
 /// 通用节点组数据块。具体域只替换 `graph` 的类型。
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -349,8 +304,6 @@ pub struct NodeGroupData<G> {
     pub name: String,
     pub interface: NodeGroupInterface,
     pub graph: G,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub kernel: Option<GroupKernel>,
 }
 
 impl<G> NodeGroupData<G> {
@@ -365,15 +318,7 @@ impl<G> NodeGroupData<G> {
             name: name.into(),
             interface,
             graph,
-            kernel: None,
         }
-    }
-
-    /// 声明编译期内核；只对 Voice 组有意义。
-    #[must_use]
-    pub fn with_kernel(mut self, kernel: GroupKernel) -> Self {
-        self.kernel = Some(kernel);
-        self
     }
 }
 
@@ -387,7 +332,6 @@ impl NodeGroup {
             name: "Piano Voice".to_string(),
             interface: NodeGroupInterface::piano(),
             graph: VoiceGraph::piano_open(),
-            kernel: None,
         }
     }
 
@@ -397,7 +341,6 @@ impl NodeGroup {
             name: "Sine Voice".to_string(),
             interface: NodeGroupInterface::sine_voice(),
             graph: VoiceGraph::sine_default(),
-            kernel: None,
         }
     }
 
@@ -407,7 +350,6 @@ impl NodeGroup {
             name: "Physical Piano Voice".to_string(),
             interface: NodeGroupInterface::physical_voice(),
             graph: VoiceGraph::physical_partial_default(),
-            kernel: None,
         }
     }
 
@@ -417,7 +359,6 @@ impl NodeGroup {
             name: format!("Sampler {buffer_id}"),
             interface: NodeGroupInterface::sampler_voice(),
             graph: VoiceGraph::sampler_default(buffer_id, looped),
-            kernel: None,
         }
     }
 
@@ -427,7 +368,6 @@ impl NodeGroup {
             name: "Piano Partial".to_string(),
             interface: NodeGroupInterface::partial(),
             graph: VoiceGraph::partial_default(),
-            kernel: Some(GroupKernel::PianoPartial),
         }
     }
 
@@ -438,7 +378,6 @@ impl NodeGroup {
             name: name.into(),
             graph: VoiceGraph::shell(&interface),
             interface,
-            kernel: None,
         }
     }
 
@@ -467,46 +406,6 @@ impl NodeGroup {
             .all(|socket| socket.ty != NodeGroupSocketType::Audio)
         {
             return Err(GraphError::GroupAudioOutput);
-        }
-        if let Some(kernel) = self.kernel {
-            let ports: BTreeSet<&str> = self
-                .interface
-                .inputs
-                .iter()
-                .map(|socket| socket.id.as_str())
-                .collect();
-            if let Some(missing) = kernel
-                .input_ports()
-                .iter()
-                .find(|port| !ports.contains(**port))
-            {
-                return Err(GraphError::InvalidGroupSocket {
-                    socket: (*missing).to_string(),
-                    reason: "内核缺少必需的输入端口".to_string(),
-                });
-            }
-            if let Some(note) = self
-                .interface
-                .inputs
-                .iter()
-                .find(|socket| socket.ty == NodeGroupSocketType::Note)
-            {
-                return Err(GraphError::InvalidGroupSocket {
-                    socket: note.id.clone(),
-                    reason: "内核组不接受 Note 输入".to_string(),
-                });
-            }
-            if !self
-                .interface
-                .outputs
-                .iter()
-                .any(|socket| socket.id == kernel.output_port())
-            {
-                return Err(GraphError::InvalidGroupSocket {
-                    socket: kernel.output_port().to_string(),
-                    reason: "内核缺少必需的输出端口".to_string(),
-                });
-            }
         }
         self.graph.validate_with_groups(&self.interface, groups)
     }
@@ -5053,54 +4952,13 @@ mod tests {
     }
 
     #[test]
-    fn partial_group_declares_piano_kernel() {
+    fn partial_group_serializes_without_kernel() {
         let group = NodeGroup::partial_default();
-        let Some(kernel) = group.kernel else {
-            panic!("内置 partial 组应声明内核");
-        };
-        assert_eq!(kernel, GroupKernel::PianoPartial);
-        let ports: Vec<&str> = group
-            .interface
-            .inputs
-            .iter()
-            .map(|socket| socket.id.as_str())
-            .collect();
-        for port in kernel.input_ports() {
-            assert!(ports.contains(port), "内核端口 {port} 必须在接口里");
-        }
-        assert!(
-            kernel
-                .optional_input_ports()
-                .iter()
-                .all(|port| !ports.contains(port)),
-            "position 是可选端口，内置接口不声明"
-        );
+        group.validate().unwrap();
         let json = serde_json::to_value(&group).unwrap();
-        assert_eq!(json["kernel"], serde_json::json!("piano_partial"));
+        assert!(json.get("kernel").is_none(), "组数据不应再序列化内核");
         let restored: NodeGroup = serde_json::from_value(json).unwrap();
-        assert_eq!(restored.kernel, Some(GroupKernel::PianoPartial));
-        let plain = serde_json::to_value(NodeGroup::piano_default()).unwrap();
-        assert!(plain.get("kernel").is_none(), "未声明内核时不应序列化");
-    }
-
-    #[test]
-    fn kernel_group_rejects_missing_ports() {
-        let mut group = NodeGroup::partial_default();
-        group.interface.inputs.retain(|socket| socket.id != "time");
-        assert!(matches!(
-            group.validate(),
-            Err(GraphError::InvalidGroupSocket { .. })
-        ));
-        let mut group = NodeGroup::partial_default();
-        group.interface.inputs.push(NodeGroupSocket::new(
-            "note",
-            "Note",
-            NodeGroupSocketType::Note,
-        ));
-        assert!(matches!(
-            group.validate(),
-            Err(GraphError::InvalidGroupSocket { .. })
-        ));
+        assert_eq!(restored, group);
     }
 
     #[test]

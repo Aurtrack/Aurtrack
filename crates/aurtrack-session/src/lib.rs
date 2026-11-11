@@ -35,9 +35,9 @@ use aurtrack_engine::{
     VOICE_DELAY_SAMPLES, VoiceNodePlan, VoiceOp, VoicePlan, VoiceSsa, VoiceState, midi_to_hz,
 };
 use aurtrack_graph::{
-    AudioConnection, AudioGraph, AudioGroup, AudioNode, GraphError, GroupKernel, NodeGroup,
-    NodeGroupInterface, NodeGroupSocket, NodeGroupSocketType, NodeId, PortRef, VoiceConnection,
-    VoiceFrame, VoiceGraph, VoiceNode, audio_node_type, node_inputs, node_outputs,
+    AudioConnection, AudioGraph, AudioGroup, AudioNode, GraphError, NodeGroup, NodeGroupInterface,
+    NodeGroupSocket, NodeGroupSocketType, NodeId, PortRef, VoiceConnection, VoiceFrame, VoiceGraph,
+    VoiceNode, audio_node_type, node_inputs, node_outputs,
 };
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -1312,42 +1312,6 @@ fn compile_voice_inner(
             let group = groups
                 .get(group_id)
                 .ok_or_else(|| GraphError::GroupMissing(group_id.to_string()))?;
-            if let Some(kernel) = group.kernel {
-                let mut resolved = BTreeMap::new();
-                for (port, input) in input_ports.iter().zip(&inputs) {
-                    resolved.insert(port.id.as_str(), *input);
-                }
-                let mut op_inputs = Vec::with_capacity(8);
-                for port in kernel.input_ports() {
-                    let Some(input) = resolved.get(port) else {
-                        return Err(GraphError::InvalidGroupSocket {
-                            socket: (*port).to_string(),
-                            reason: "内核缺少必需的输入端口".to_string(),
-                        });
-                    };
-                    op_inputs.push(*input);
-                }
-                // NOTE: 可选端口只能连续追加，否则会占用后续端口的位置槽。
-                for port in kernel.optional_input_ports() {
-                    let Some(input) = resolved.get(port) else {
-                        break;
-                    };
-                    op_inputs.push(*input);
-                }
-                let op = match kernel {
-                    GroupKernel::PianoPartial => VoiceOp::PianoPartial,
-                    _ => {
-                        return Err(GraphError::InvalidGroupSocket {
-                            socket: group_id.to_string(),
-                            reason: "未知的组内核".to_string(),
-                        });
-                    },
-                };
-                let index = nodes.len();
-                nodes.push(VoiceNodePlan::new(op, op_inputs));
-                indices.insert((id.clone(), kernel.output_port().to_string()), index);
-                continue;
-            }
             if group
                 .interface
                 .inputs
@@ -1961,20 +1925,6 @@ fn migrate_legacy_repeat_groups(project: &mut Project) -> usize {
         .map_or(0, |group| {
             usize::from(migrate_piano_voice_graph(&mut group.graph))
         })
-}
-
-/// 旧工程的内置 partial 组没有内核声明；组图仍是内置内容时补上声明。
-fn declare_partial_kernel(project: &mut Project) -> usize {
-    let mut declared = 0;
-    if let Some(group) = project.node_groups.get_mut("piano.partial")
-        && group.kernel.is_none()
-        && group.interface == NodeGroupInterface::partial()
-        && group.graph == VoiceGraph::partial_default()
-    {
-        group.kernel = Some(GroupKernel::PianoPartial);
-        declared += 1;
-    }
-    declared
 }
 
 /// 旧版组实例把接口值混在 `params`；迁移到显式 `port_values`，
@@ -2840,7 +2790,6 @@ impl Session {
             .entry("piano.physical".to_string())
             .or_insert_with(NodeGroup::physical_default);
         let migrated_groups = migrate_legacy_repeat_groups(&mut project);
-        let declared_kernels = declare_partial_kernel(&mut project);
         let migrated_params = migrate_group_instance_params(&mut project);
         let (next_track, next_device, next_clip, next_note) = validate_project(&project)?;
         let token = self.snapshot("project.open");
@@ -2852,7 +2801,8 @@ impl Session {
         Ok(CommandResponse::ok(json!({
             "path": path,
             "migrated_groups": migrated_groups,
-            "declared_kernels": declared_kernels,
+            // NOTE: 组内核已移除；保留字段让旧脚本读响应时不缺键。
+            "declared_kernels": 0,
             "migrated_params": migrated_params,
             "upgraded_builtin": upgraded_builtin,
             "upgraded_soundboards": upgraded_soundboards,
@@ -3070,8 +3020,6 @@ impl Session {
             .validate_with_groups(&group.interface, &groups)
             .map_err(graph_error)?;
         group.graph = args.voice;
-        // NOTE: 组图被替换即放弃内核声明，回到展开编译，保证编辑生效。
-        group.kernel = None;
         Ok(CommandResponse::ok(json!({
             "group_id": args.group_id,
             "voice": "updated",
@@ -7246,11 +7194,12 @@ mod buffer_tests {
             .fold(0.0_f32, |peak, value| peak.max(value.abs()));
         let stats = aurtrack_engine::block_stats();
         println!(
-            "notes={note_count} elapsed={elapsed:?} peak={peak} track_blocks={} fallbacks={} silent_fallbacks={} piano_fallbacks={}",
+            "notes={note_count} elapsed={elapsed:?} peak={peak} track_blocks={} fallbacks={} silent_fallbacks={} piano_fallbacks={} accumulations={}",
             stats.track_blocks,
             stats.playback_block_fallbacks,
             stats.silent_block_fallbacks,
-            stats.piano_block_fallbacks
+            stats.piano_block_fallbacks,
+            stats.repeat_accumulations
         );
         assert!(peak > 1.0e-4, "block 输出不应静音，peak={peak}");
         assert!(stats.track_blocks > 0, "block 路径没有被使用");
@@ -7265,6 +7214,10 @@ mod buffer_tests {
         assert_eq!(
             stats.piano_block_fallbacks, 0,
             "PianoPlan block 内核不应回退"
+        );
+        assert!(
+            stats.repeat_accumulations > 0,
+            "Repeat 原生累加器必须命中，不能退回逐迭代 body"
         );
     }
 
@@ -7362,8 +7315,6 @@ mod buffer_tests {
     fn edited_partial_group(project: &mut Project, group_id: &str) {
         let mut custom = project.node_groups["piano.partial"].clone();
         custom.id = group_id.to_string();
-        // NOTE: 替换组图等价于放弃内核声明，走展开编译。
-        custom.kernel = None;
         project.node_groups.insert(group_id.to_string(), custom);
         project
             .node_groups
@@ -7420,48 +7371,10 @@ mod buffer_tests {
     }
 
     #[test]
-    fn partial_kernel_lowers_without_group_id() {
-        let mut session = Session::default();
-        session
-            .execute(&CommandRequest {
-                cmd: "project.create".to_string(),
-                args: json!({ "name": "structural" }),
-            })
-            .unwrap();
-        session
-            .execute(&CommandRequest {
-                cmd: "track.create".to_string(),
-                args: json!({ "name": "piano", "source": "physical" }),
-            })
-            .unwrap();
-        let mut project = session.project().unwrap().clone();
-        let mut custom = project.node_groups["piano.partial"].clone();
-        custom.id = "custom.partial".to_string();
-        assert_eq!(custom.kernel, Some(GroupKernel::PianoPartial));
-        project
-            .node_groups
-            .insert("custom.partial".to_string(), custom);
-        let physical = project.node_groups.get_mut("piano.physical").unwrap();
-        physical
-            .graph
-            .nodes
-            .get_mut(&NodeId::fixed("p-partial"))
-            .unwrap()
-            .group = Some("custom.partial".to_string());
-        let repeat = compiled_repeat(&project);
-        assert!(
-            repeat
-                .nodes
-                .iter()
-                .any(|node| matches!(node.op, VoiceOp::PianoPartial))
-        );
-    }
-
-    #[test]
-    fn partial_kernel_reads_repeat_body_inputs() {
+    fn partial_group_uses_repeat_accumulator() {
         let mut session = Session::default();
         for request in [
-            json!({ "cmd": "project.create", "args": { "name": "kernel" } }),
+            json!({ "cmd": "project.create", "args": { "name": "repeat-accumulator" } }),
             json!({ "cmd": "track.create", "args": { "name": "piano", "source": "physical" } }),
             json!({ "cmd": "clip.create", "args": { "track_id": "track-1", "start": 0, "duration": 1 } }),
             json!({ "cmd": "note.add", "args": {
@@ -7475,44 +7388,39 @@ mod buffer_tests {
         let mut project = session.project().unwrap().clone();
         silence_hammer(&mut project);
         let repeat = compiled_repeat(&project);
-        let Some(partial) = repeat
-            .nodes
-            .iter()
-            .find(|node| matches!(node.op, VoiceOp::PianoPartial))
-        else {
-            panic!("内核组应 lower 成 PianoPartial");
-        };
-        let expected = [1usize, 2, 3, 7, 4, 5, 6];
-        assert_eq!(partial.inputs.len(), expected.len());
-        let resolved: Vec<&VoiceOp> = partial
-            .inputs
-            .iter()
-            .map(|input| &repeat.nodes[*input].op)
-            .collect();
-        let pitch = matches!(resolved[0], VoiceOp::Input(1));
-        let velocity = matches!(resolved[1], VoiceOp::Input(2));
-        let time = matches!(resolved[2], VoiceOp::Input(3));
-        let index = matches!(resolved[3], VoiceOp::Iteration);
-        let inharmonicity = matches!(resolved[4], VoiceOp::Input(4));
-        let brightness = matches!(resolved[5], VoiceOp::Input(5));
-        let decay = matches!(resolved[6], VoiceOp::Input(6));
-        assert!(
-            pitch && velocity && time && index && inharmonicity && brightness && decay,
-            "PianoPartial 必须读取 Repeat body 槽位，实际 {:?}",
-            partial.inputs
-        );
         assert!(
             repeat
                 .nodes
                 .iter()
-                .all(|node| !matches!(node.op, VoiceOp::GroupCall { .. }))
+                .all(|node| !matches!(node.op, VoiceOp::PianoPartial)),
+            "内核删除后 body 不应再出现 PianoPartial"
         );
+        let call = repeat.nodes.iter().find_map(|node| match &node.op {
+            VoiceOp::GroupCall { outputs, .. } => Some((node.inputs.clone(), outputs.clone())),
+            _ => None,
+        });
+        let Some((inputs, _)) = call else {
+            panic!("partial 组应以 GroupCall 展开");
+        };
+        for input in inputs {
+            let op = &repeat.nodes[input].op;
+            assert!(
+                matches!(op, VoiceOp::Input(_) | VoiceOp::Iteration),
+                "GroupCall 输入必须来自显式 body 槽位，实际 {op:?}"
+            );
+        }
         let (_, _, plan) = project.tracks[0]
             .playback_graph(&project.node_groups, &project.audio_groups)
             .unwrap();
         let voice = plan.pianos[0].voice.as_ref().unwrap();
+        let before = aurtrack_engine::block_stats();
         let peak = block_peak(voice, project.sample_rate, aurtrack_engine::midi_to_hz(69));
-        assert!(peak > 0.01, "partial 内核必须发声，peak={peak}");
+        let after = aurtrack_engine::block_stats();
+        assert!(peak > 0.01, "通用 partial 循环必须发声，peak={peak}");
+        assert!(
+            after.repeat_accumulations > before.repeat_accumulations,
+            "Repeat 累加器应命中"
+        );
     }
 
     #[test]
@@ -7812,17 +7720,23 @@ mod buffer_tests {
     }
 
     #[test]
-    fn group_voice_command_clears_kernel() {
+    fn group_voice_command_replaces_graph() {
         let mut session = Session::default();
         session
             .execute(&CommandRequest {
                 cmd: "project.create".to_string(),
-                args: json!({ "name": "kernel-clear" }),
+                args: json!({ "name": "voice-update" }),
             })
             .unwrap();
-        let voice =
-            serde_json::to_value(&session.project().unwrap().node_groups["piano.partial"].graph)
-                .unwrap();
+        let mut voice = session.project().unwrap().node_groups["piano.partial"]
+            .graph
+            .clone();
+        voice
+            .nodes
+            .get_mut(&NodeId::fixed("gain"))
+            .unwrap()
+            .params
+            .insert("value".to_string(), 0.25);
         session
             .execute(&CommandRequest {
                 cmd: "group.voice".to_string(),
@@ -7830,37 +7744,9 @@ mod buffer_tests {
             })
             .unwrap();
         let project = session.project().unwrap();
-        assert_eq!(project.node_groups["piano.partial"].kernel, None);
-    }
-
-    #[test]
-    fn old_project_declares_partial_kernel() {
-        let mut session = Session::default();
-        session
-            .execute(&CommandRequest {
-                cmd: "project.create".to_string(),
-                args: json!({ "name": "kernel-migrate" }),
-            })
-            .unwrap();
-        let mut project = session.project().unwrap().clone();
-        let group = project.node_groups.get_mut("piano.partial").unwrap();
-        group.kernel = None;
-        assert_eq!(declare_partial_kernel(&mut project), 1);
-        assert_eq!(
-            project.node_groups["piano.partial"].kernel,
-            Some(GroupKernel::PianoPartial)
-        );
-        let group = project.node_groups.get_mut("piano.partial").unwrap();
-        group.kernel = None;
-        group
-            .graph
-            .nodes
-            .get_mut(&NodeId::fixed("gain"))
-            .unwrap()
-            .params
-            .insert("value".to_string(), 0.19);
-        assert_eq!(declare_partial_kernel(&mut project), 0);
-        assert_eq!(project.node_groups["piano.partial"].kernel, None);
+        let gain = project.node_groups["piano.partial"].graph.nodes[&NodeId::fixed("gain")].params
+            ["value"];
+        assert!((gain - 0.25).abs() < 1e-12);
     }
 
     #[test]
@@ -7964,19 +7850,21 @@ mod buffer_tests {
         let Some(repeat) = repeat else {
             panic!("物理钢琴应有 partial repeat");
         };
-        assert_eq!(
-            repeat
-                .nodes
-                .iter()
-                .filter(|node| matches!(node.op, VoiceOp::PianoPartial))
-                .count(),
-            1
-        );
         assert!(
             repeat
                 .nodes
                 .iter()
-                .all(|node| !matches!(node.op, VoiceOp::GroupCall { .. }))
+                .all(|node| !matches!(node.op, VoiceOp::PianoPartial)),
+            "物理钢琴不应再依赖 partial 专用内核"
+        );
+        assert_eq!(
+            repeat
+                .nodes
+                .iter()
+                .filter(|node| matches!(node.op, VoiceOp::GroupCall { .. }))
+                .count(),
+            1,
+            "partial 组应展开成唯一的 GroupCall"
         );
         assert!(
             project.tracks[0]

@@ -56,7 +56,7 @@
 | repeat | 重复 | Repeat Zone，引用循环体组并执行 count 次 |
 | iteration | 迭代 | 循环内部当前迭代序号 |
 | partial | 泛音 | 单次生成一个泛音的音频 |
-| group kernel | 组内核 | 节点组显式声明的编译期语义实现；声明后按接口端口直接生成对应 `VoiceOp` |
+| repeat accumulator | 重复累加器 | Repeat body 在 block 内按迭代求和的通用内核；提升帧不变与迭代不变计算 |
 | switch | 切换 | 按控制值在 false/true 两路音频中选择 |
 | index switch | 索引切换 | 按索引在 8 路音频中选择 |
 | sum | 求和 | 多输入音频求和 |

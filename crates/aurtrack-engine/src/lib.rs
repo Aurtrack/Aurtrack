@@ -19,6 +19,7 @@
 )]
 
 mod block;
+mod repeat;
 mod ssa;
 
 pub use block::{BlockContext, BlockKernel, SsaKernel};
@@ -44,7 +45,7 @@ const FADE_IDLE: u8 = 0;
 static BLOCK_CALLS: AtomicU64 = AtomicU64::new(0);
 static REPEAT_ITERATIONS: AtomicU64 = AtomicU64::new(0);
 static GROUP_CALLS: AtomicU64 = AtomicU64::new(0);
-static PARTIAL_LOOPS: AtomicU64 = AtomicU64::new(0);
+static REPEAT_ACCUMULATIONS: AtomicU64 = AtomicU64::new(0);
 static TRACK_BLOCKS: AtomicU64 = AtomicU64::new(0);
 static PLAYBACK_BLOCK_FALLBACKS: AtomicU64 = AtomicU64::new(0);
 static SILENT_BLOCK_FALLBACKS: AtomicU64 = AtomicU64::new(0);
@@ -56,7 +57,7 @@ pub struct BlockStats {
     pub block_calls: u64,
     pub repeat_iterations: u64,
     pub group_calls: u64,
-    pub partial_loops: u64,
+    pub repeat_accumulations: u64,
     pub track_blocks: u64,
     pub playback_block_fallbacks: u64,
     pub silent_block_fallbacks: u64,
@@ -68,7 +69,7 @@ pub fn block_stats() -> BlockStats {
         block_calls: BLOCK_CALLS.load(Ordering::Relaxed),
         repeat_iterations: REPEAT_ITERATIONS.load(Ordering::Relaxed),
         group_calls: GROUP_CALLS.load(Ordering::Relaxed),
-        partial_loops: PARTIAL_LOOPS.load(Ordering::Relaxed),
+        repeat_accumulations: REPEAT_ACCUMULATIONS.load(Ordering::Relaxed),
         track_blocks: TRACK_BLOCKS.load(Ordering::Relaxed),
         playback_block_fallbacks: PLAYBACK_BLOCK_FALLBACKS.load(Ordering::Relaxed),
         silent_block_fallbacks: SILENT_BLOCK_FALLBACKS.load(Ordering::Relaxed),
@@ -80,7 +81,7 @@ pub fn reset_block_stats() {
     BLOCK_CALLS.store(0, Ordering::Relaxed);
     REPEAT_ITERATIONS.store(0, Ordering::Relaxed);
     GROUP_CALLS.store(0, Ordering::Relaxed);
-    PARTIAL_LOOPS.store(0, Ordering::Relaxed);
+    REPEAT_ACCUMULATIONS.store(0, Ordering::Relaxed);
     TRACK_BLOCKS.store(0, Ordering::Relaxed);
     PLAYBACK_BLOCK_FALLBACKS.store(0, Ordering::Relaxed);
     SILENT_BLOCK_FALLBACKS.store(0, Ordering::Relaxed);
@@ -196,6 +197,7 @@ pub struct VoicePlan {
     repeat_cache: Arc<[AtomicU64]>,
     repeat_stride: usize,
     scratch: Arc<[AtomicU64]>,
+    repeat_accumulator: Option<repeat::RepeatAccumulator>,
 }
 
 impl VoicePlan {
@@ -229,6 +231,7 @@ impl VoicePlan {
                 .map(|_| AtomicU64::new(0))
                 .collect::<Vec<_>>()
                 .into(),
+            repeat_accumulator: None,
         }
     }
 
@@ -271,9 +274,18 @@ impl VoicePlan {
 
     fn optimize_bodies(&mut self) {
         for node in &mut self.nodes {
-            if let VoiceOp::Repeat { body, outputs, .. }
-            | VoiceOp::GroupCall { body, outputs, .. } = &mut node.op
-            {
+            if let VoiceOp::Repeat { body, outputs, .. } = &mut node.op {
+                let old_outputs = outputs.clone();
+                let placeholder = VoicePlan::new(Vec::new(), 0);
+                let old = std::mem::replace(body.as_mut(), placeholder);
+                *body = Box::new(old.optimize());
+                for (slot, old_index) in old_outputs.into_iter().enumerate() {
+                    if let Some(mapped) = body.last_remap.get(old_index).copied() {
+                        outputs[slot] = mapped;
+                    }
+                }
+                body.repeat_accumulator = repeat::RepeatAccumulator::compile(body);
+            } else if let VoiceOp::GroupCall { body, outputs, .. } = &mut node.op {
                 let old_outputs = outputs.clone();
                 let placeholder = VoicePlan::new(Vec::new(), 0);
                 let old = std::mem::replace(body.as_mut(), placeholder);
@@ -754,6 +766,9 @@ impl CompiledVoice {
                 crate::ssa::SsaOp::ContextVelocity => CompiledOp::ContextVelocity,
                 crate::ssa::SsaOp::ContextTime => CompiledOp::ContextTime,
                 crate::ssa::SsaOp::ContextGate => CompiledOp::ContextGate,
+                // NOTE: 融合表达式只在单次采样上下文里求值，迭代序号由
+                // Repeat 内核单独提供，不能进 JIT。
+                crate::ssa::SsaOp::ContextIteration => return None,
                 crate::ssa::SsaOp::Add => CompiledOp::Add,
                 crate::ssa::SsaOp::Subtract => CompiledOp::Subtract,
                 crate::ssa::SsaOp::Multiply => CompiledOp::Multiply,
@@ -1486,141 +1501,6 @@ impl VoicePlan {
         None
     }
 
-    #[allow(dead_code)]
-    fn partial_spec(&self) -> Option<PartialSpec> {
-        let mut found = None;
-        for (index, node) in self.nodes.iter().enumerate() {
-            if matches!(node.op, VoiceOp::PianoPartial) {
-                if found.is_some() {
-                    return None;
-                }
-                found = Some((index, node));
-            }
-        }
-        let (index, node) = found?;
-        let index_input = node.inputs.get(3).copied()?;
-        // NOTE: 融合循环直接用部分序号代替 Index，索引输入必须是 Iteration；
-        // 否则 body 的 Index 可能来自别的关系，必须退回逐帧求值。
-        if !matches!(
-            self.nodes.get(index_input).map(|node| &node.op),
-            Some(VoiceOp::Iteration)
-        ) {
-            return None;
-        }
-        let mut params = [usize::MAX; 7];
-        for (slot, input) in params.iter_mut().enumerate() {
-            let source = if slot < 3 { slot } else { slot + 1 };
-            *input = node.inputs.get(source).copied().unwrap_or(usize::MAX);
-        }
-        Some(PartialSpec {
-            node: index,
-            index_input,
-            params,
-        })
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn fused_partial_block(
-        &self,
-        spec: &PartialSpec,
-        count: usize,
-        state: &mut VoiceState,
-        context: VoiceContext,
-        inputs: &VoiceBlockInputs<'_>,
-        frames: usize,
-        output: &mut [f32],
-    ) -> bool {
-        let mut params = [[0.0_f32; 64]; 7];
-        for (slot, values) in params.iter_mut().enumerate() {
-            let source = spec.params[slot];
-            if source == usize::MAX {
-                let default = match slot {
-                    0 => context.pitch,
-                    1 => context.velocity,
-                    2 => context.local_time,
-                    3 => 0.0004,
-                    4 => 0.5,
-                    5 => 1.2,
-                    _ => 0.12,
-                };
-                values[..frames].fill(default as f32);
-            } else if !self.eval_top_block(
-                source,
-                state,
-                context,
-                inputs,
-                frames,
-                &mut values[..frames],
-            ) {
-                return false;
-            }
-        }
-        PARTIAL_LOOPS.fetch_add(1, Ordering::Relaxed);
-        output.fill(0.0);
-        let constant = [0, 1, 3, 4, 5, 6].iter().all(|slot| {
-            params[*slot][..frames]
-                .windows(2)
-                .all(|pair| (pair[0] - pair[1]).abs() < f32::EPSILON)
-        });
-        for partial in 0..count {
-            let index = partial as f64;
-            if constant {
-                let harmonic = index.max(0.0).round() + 1.0;
-                let pitch = f64::from(params[0][0]);
-                let velocity = f64::from(params[1][0]);
-                let inharmonicity = f64::from(params[3][0]).clamp(0.0, 0.01);
-                let brightness = f64::from(params[4][0]).clamp(0.0, 1.0);
-                let decay = f64::from(params[5][0]).clamp(0.05, 8.0) / (1.0 + harmonic * 0.06);
-                let position = f64::from(params[6][0]);
-                let frequency =
-                    pitch * harmonic * (1.0 + inharmonicity * harmonic * harmonic).sqrt();
-                if frequency >= 20_000.0 {
-                    continue;
-                }
-                let velocity = velocity.clamp(0.0, 1.0).powf(0.55 + brightness * 0.7);
-                let position_amplitude =
-                    (std::f64::consts::PI * harmonic * position.clamp(0.0, 1.0))
-                        .sin()
-                        .abs()
-                        .max(0.08);
-                let amplitude =
-                    velocity * position_amplitude / harmonic.powf(0.55 + brightness * 0.7);
-                let low = frequency * 0.99975;
-                let high = frequency * 1.00025;
-                for (frame, slot) in output.iter_mut().enumerate() {
-                    let time = f64::from(params[2][frame]);
-                    if time < 0.0 {
-                        continue;
-                    }
-                    let prompt = (-time / 0.08).exp();
-                    let sustain = (-time / decay).exp();
-                    let envelope =
-                        (0.35 * prompt + 0.65 * sustain) * (1.0 - (-time / 0.0025).exp());
-                    let strings = ((std::f64::consts::TAU * frequency * time).sin()
-                        + (std::f64::consts::TAU * low * time).sin()
-                        + (std::f64::consts::TAU * high * time).sin())
-                        / 3.0;
-                    *slot += (strings * envelope * amplitude * 0.18) as f32;
-                }
-            } else {
-                for (frame, slot) in output.iter_mut().enumerate() {
-                    *slot += piano_partial_sample(
-                        f64::from(params[0][frame]),
-                        f64::from(params[1][frame]),
-                        f64::from(params[2][frame]),
-                        index,
-                        f64::from(params[3][frame]),
-                        f64::from(params[4][frame]),
-                        f64::from(params[5][frame]),
-                        f64::from(params[6][frame]),
-                    ) as f32;
-                }
-            }
-        }
-        let _ = spec.node;
-        true
-    }
-
     /// 把 GroupCall 节点的输入块映射到 body 的输入槽。
     #[allow(clippy::too_many_arguments)]
     fn eval_group_inputs(
@@ -1927,20 +1807,23 @@ impl VoicePlan {
                     }
                 }
                 carried_block[..carried].copy_from_slice(&body_inputs[..carried]);
-                if let Some(spec) = body.partial_spec() {
-                    // NOTE: 融合 kernel 读取的是 body 输入槽，必须传入 Repeat 自己
-                    // 解析出的块值，不能把外层声部输入直接透传进 body。
+                if carried == 1
+                    && outputs.get(*slot).copied() == Some(body.output)
+                    && let Some(accumulator) = &body.repeat_accumulator
+                {
+                    // NOTE: 累加器读的是 Repeat 自己解析出的 body 输入槽，
+                    // 不能把外层声部输入直接透传进 body。
                     let body_values =
                         VoiceBlockInputs::new(&body_inputs, frames, inputs.sample_rate());
-                    if body.fused_partial_block(
-                        &spec,
-                        count,
-                        state,
+                    if accumulator.accumulate(
                         context,
                         &body_values,
                         frames,
+                        count,
+                        &body_inputs[0],
                         output,
                     ) {
+                        REPEAT_ACCUMULATIONS.fetch_add(1, Ordering::Relaxed);
                         return true;
                     }
                 }
@@ -3490,15 +3373,6 @@ fn osc_partials(
             (std::f64::consts::TAU * frequency * time).sin() * envelope * velocity / partial as f64;
     }
     output * 0.18
-}
-
-/// 加法钢琴音色。
-#[derive(Debug)]
-#[allow(dead_code)]
-struct PartialSpec {
-    node: usize,
-    index_input: usize,
-    params: [usize; 7],
 }
 
 /// VoicePlan block ABI v2 的逐帧输入。
@@ -6812,31 +6686,6 @@ mod tests {
             &mut block
         ));
         assert!(block.iter().any(|value| value.abs() > 1e-9));
-    }
-
-    #[test]
-    fn partial_spec_finds_piano_partial() {
-        let plan = VoicePlan::new(
-            vec![
-                VoiceNodePlan::new(VoiceOp::Constant(220.0), Vec::new()),
-                VoiceNodePlan::new(VoiceOp::Constant(0.8), Vec::new()),
-                VoiceNodePlan::new(VoiceOp::Constant(0.1), Vec::new()),
-                VoiceNodePlan::new(VoiceOp::Iteration, Vec::new()),
-                VoiceNodePlan::new(VoiceOp::Constant(0.0004), Vec::new()),
-                VoiceNodePlan::new(VoiceOp::Constant(0.5), Vec::new()),
-                VoiceNodePlan::new(VoiceOp::Constant(1.2), Vec::new()),
-                VoiceNodePlan::new(VoiceOp::Constant(0.12), Vec::new()),
-                VoiceNodePlan::new(VoiceOp::PianoPartial, vec![0, 1, 2, 3, 4, 5, 6, 7]),
-                VoiceNodePlan::new(VoiceOp::Output, vec![8]),
-            ],
-            9,
-        );
-        let Some(spec) = plan.partial_spec() else {
-            panic!("应找到 PianoPartial");
-        };
-        assert_eq!(spec.node, 8);
-        assert_eq!(spec.index_input, 3);
-        assert_eq!(spec.params, [0, 1, 2, 4, 5, 6, 7]);
     }
 
     #[test]
