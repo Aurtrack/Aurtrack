@@ -65,6 +65,13 @@ impl BlockScratch {
     pub fn len(&self) -> usize {
         self.values.len()
     }
+
+    /// 就地清零；seek/stop 后的 block 必须从与新建计划相同的状态起算。
+    pub fn reset(&mut self) {
+        for value in &mut self.values {
+            value.fill(0.0);
+        }
+    }
 }
 
 /// 无状态 VoicePlan 的 SSA 程序。

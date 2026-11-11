@@ -96,6 +96,19 @@ impl TrackPlan {
         self.graph.is_some()
     }
 
+    /// 清空该轨道所有历史状态；音频线程执行，不分配。
+    pub fn reset_state(&self) {
+        for filter in &self.filters {
+            filter.reset();
+        }
+        if let Some(piano) = &self.piano {
+            piano.reset_state();
+        }
+        if let Some(graph) = &self.graph {
+            graph.reset_state();
+        }
+    }
+
     /// 轨道级 block 渲染；只有 graph 轨道走节点主序，其余由调用方 fallback。
     pub fn process_block(
         &self,
@@ -3315,6 +3328,29 @@ impl VoicePlan {
         Some(self.scratch_value(context.note_index, index))
     }
 
+    /// 清空逐采样历史与 scratch；音频线程执行，不分配。
+    pub fn reset_state(&self) {
+        for node in &self.nodes {
+            for slot in node.state.iter() {
+                slot.store(0, Ordering::Relaxed);
+            }
+            if let Some(buffer) = &node.buffer {
+                for slot in buffer.iter() {
+                    slot.store(0, Ordering::Relaxed);
+                }
+            }
+            if let VoiceOp::Repeat { body, .. } | VoiceOp::GroupCall { body, .. } = &node.op {
+                body.reset_state();
+            }
+        }
+        for value in self.scratch.iter() {
+            value.store(0, Ordering::Relaxed);
+        }
+        for value in self.repeat_cache.iter() {
+            value.store(0, Ordering::Relaxed);
+        }
+    }
+
     pub fn sample_sockets(
         &self,
         sockets: &[usize],
@@ -3518,6 +3554,15 @@ impl VoiceState {
     pub fn last_fail(&self) -> Option<BlockFail> {
         self.last_fail
     }
+
+    /// 恢复到刚创建时的状态；音频线程执行，不分配。
+    pub(crate) fn reset(&mut self) {
+        self.scratch.reset();
+        // NOTE: 逐采样 `Damper` 的状态从 0 起；seek 后 block 必须回到同一起点，
+        // 否则旧位置的制音器电平会直接乘到新位置的输出上。
+        self.damper_level = 0.0;
+        self.last_fail = None;
+    }
 }
 
 impl VoiceState {
@@ -3558,6 +3603,15 @@ impl VoiceStateStore {
         // SAFETY: 由调用方保证唯一写者和索引有效。
         let states = unsafe { &mut *self.0.get() };
         &mut states[index]
+    }
+
+    /// SAFETY: 调用方必须是唯一音频渲染线程；只遍历既有 Vec，不改变长度。
+    unsafe fn reset(&self) {
+        // SAFETY: 由调用方保证没有其他音频线程并发访问。
+        let states = unsafe { &mut *self.0.get() };
+        for state in states {
+            state.reset();
+        }
     }
 }
 
@@ -3603,6 +3657,15 @@ impl PianoPlan {
 
     pub fn set_states(&mut self, states: Vec<VoiceState>) {
         self.states.replace(states);
+    }
+
+    /// 恢复到新建计划的状态；音频线程在 seek/stop 边界调用，不分配。
+    pub fn reset_state(&self) {
+        // SAFETY: 音频线程是唯一写入者；这里只遍历既有状态槽。
+        unsafe { self.states.reset() };
+        if let Some(voice) = &self.voice {
+            voice.reset_state();
+        }
     }
 
     /// block 接口：按每个音符的起始帧切段，段内仍走声部 block kernel。
@@ -4425,6 +4488,23 @@ impl GraphState {
         }
         state
     }
+
+    /// 就地清零所有节点历史；不缩容、不分配。
+    fn reset(&mut self) {
+        self.values.fill([0.0; 64]);
+        self.resonators.fill([0.0; 4]);
+        self.filters.fill([0.0; 2]);
+        self.highpass.fill(0.0);
+        for delay in &mut self.delays {
+            delay.buffer.fill(0.0);
+            delay.write = 0;
+        }
+        for soundboard in &mut self.soundboards {
+            for mode in soundboard.iter_mut() {
+                mode.fill(0.0);
+            }
+        }
+    }
 }
 
 /// GraphPlan 持有的 block 状态；音频线程是唯一写入者。
@@ -4484,6 +4564,29 @@ fn control_value(
 }
 
 impl GraphPlan {
+    /// 清空图状态与声部状态；音频线程执行，不分配。
+    ///
+    /// 块路径和逐采样路径共用 `GraphState`，因此 seek 后必须重置它，
+    /// 否则旧位置的 Delay、滤波和音板尾音会进入新位置。
+    pub fn reset_state(&self) {
+        // SAFETY: 音频线程是唯一调用方；控制线程不会并发写 state。
+        let state = unsafe { &mut *self.state.0.get() };
+        state.reset();
+        for piano in &self.pianos {
+            piano.reset_state();
+        }
+        for node in &self.nodes {
+            match &node.op {
+                GraphOp::Filter(filter) => filter.reset(),
+                GraphOp::Highpass(filter) => filter.reset(),
+                GraphOp::Soundboard(soundboard) => soundboard.reset(),
+                GraphOp::Resonator(resonator) => resonator.reset(),
+                GraphOp::Delay(delay) => delay.reset(),
+                _ => {},
+            }
+        }
+    }
+
     pub fn sample(&self, voices: &[f64], sample_rate: u32, time: f64) -> f64 {
         if self.nodes.len() > MAX_GRAPH_NODES || self.output >= self.nodes.len() {
             return 0.0;
@@ -5040,6 +5143,13 @@ impl PlaybackPlan {
             tracks: Vec::new(),
         }
     }
+
+    /// 清空所有轨道的实时历史；音频线程执行，不分配。
+    pub fn reset_state(&self) {
+        for track in &self.tracks {
+            track.reset_state();
+        }
+    }
 }
 
 /// 实时走带状态。音频回调只调用 `render`。
@@ -5055,6 +5165,10 @@ pub struct Playback {
     fade_target: AtomicU64,
     seek_stage: AtomicU8,
     fade_elapsed: AtomicU64,
+    /// 控制线程递增；音频线程在 block 边界消费。
+    state_generation: AtomicU64,
+    /// 音频线程已应用到的 generation。
+    applied_state_generation: AtomicU64,
 }
 
 impl Playback {
@@ -5070,11 +5184,16 @@ impl Playback {
             fade_target: AtomicU64::new(NO_SEEK),
             seek_stage: AtomicU8::new(FADE_IDLE),
             fade_elapsed: AtomicU64::new(0),
+            state_generation: AtomicU64::new(0),
+            applied_state_generation: AtomicU64::new(0),
         }
     }
 
     pub fn set_plan(&self, plan: PlaybackPlan) {
         self.plan.store(Arc::new(plan));
+        // NOTE: 计划可能来自已用过的克隆；新计划也必须在首个 block 前
+        // 回到确定状态，不能继承调用方手里的历史。
+        self.request_state_reset();
     }
 
     pub fn play(&self) {
@@ -5083,30 +5202,32 @@ impl Playback {
         if !was_playing || was_stopping {
             self.transport_gain
                 .store(0.0_f64.to_bits(), Ordering::Release);
-            self.reset_filters();
+            self.request_state_reset();
         }
     }
 
-    fn reset_filters(&self) {
-        let plan = self.plan.load();
-        for track in &plan.tracks {
-            for filter in &track.filters {
-                filter.reset();
-            }
-            if let Some(graph) = &track.graph {
-                for node in &graph.nodes {
-                    if let GraphOp::Filter(filter) = &node.op {
-                        filter.reset();
-                    }
-                    if let GraphOp::Soundboard(soundboard) = &node.op {
-                        soundboard.reset();
-                    }
-                    if let GraphOp::Resonator(resonator) = &node.op {
-                        resonator.reset();
-                    }
-                }
-            }
+    /// 控制线程请求状态重置；真正的清空发生在音频线程的 block 边界。
+    fn request_state_reset(&self) {
+        self.state_generation.fetch_add(1, Ordering::AcqRel);
+    }
+
+    /// 清空当前计划的全部实时历史；音频线程调用，不分配。
+    fn reset_audio_state(&self) {
+        let generation = self.state_generation.load(Ordering::Acquire);
+        self.plan.load().reset_state();
+        self.applied_state_generation
+            .store(generation, Ordering::Release);
+    }
+
+    /// 消费控制线程留下的 generation；同一 generation 只重置一次。
+    fn apply_pending_state_reset(&self) {
+        let generation = self.state_generation.load(Ordering::Acquire);
+        if generation == self.applied_state_generation.load(Ordering::Relaxed) {
+            return;
         }
+        self.plan.load().reset_state();
+        self.applied_state_generation
+            .store(generation, Ordering::Release);
     }
 
     pub fn stop(&self) {
@@ -5117,6 +5238,9 @@ impl Playback {
         self.fade_target.store(NO_SEEK, Ordering::Release);
         self.seek_stage.store(FADE_IDLE, Ordering::Release);
         self.fade_elapsed.store(0, Ordering::Release);
+        // NOTE: 停止淡化仍要使用旧状态才能自然收尾；真正的清空留到
+        // 下一次播放的首个 block，避免把淡出尾巴切断。
+        self.request_state_reset();
     }
 
     pub fn is_playing(&self) -> bool {
@@ -5128,7 +5252,7 @@ impl Playback {
         let length_seconds = plan.length_seconds.max(plan.loop_seconds).max(0.001);
         let wrapped = seconds.rem_euclid(length_seconds);
         let frames = (wrapped * f64::from(plan.sample_rate)).round() as u64;
-        self.reset_filters();
+        self.request_state_reset();
         if !self.playing.load(Ordering::Acquire) {
             self.position.store(frames, Ordering::Release);
             self.seek_target.store(NO_SEEK, Ordering::Release);
@@ -5182,6 +5306,8 @@ impl Playback {
             return;
         }
 
+        let stop_requested = self.stop_requested.load(Ordering::Acquire);
+        // NOTE: 停止淡化要保留旧状态自然收尾；重置留到下一次播放。
         let plan = self.plan.load();
         let sample_rate = f64::from(plan.sample_rate).max(1.0);
         // NOTE: `loop_seconds <= 0` 表示无循环；此时位置线性前进，
@@ -5208,12 +5334,12 @@ impl Playback {
             0
         };
         let master_gain = f64::from_bits(self.master_gain.load(Ordering::Relaxed));
-        let stop_requested = self.stop_requested.load(Ordering::Acquire);
         let target_gain = if stop_requested { 0.0 } else { 1.0 };
         let gain_step = 1.0 / fade_frames as f64;
         let mut gain = f64::from_bits(self.transport_gain.load(Ordering::Relaxed));
         let mut position = self.position.load(Ordering::Relaxed);
         let mut stage = self.seek_stage.load(Ordering::Acquire);
+        let stage_start = stage;
         let mut target = if stage == FADE_IN {
             self.fade_target.load(Ordering::Acquire)
         } else {
@@ -5234,6 +5360,12 @@ impl Playback {
         } else if stage == FADE_OUT && target == NO_SEEK {
             stage = FADE_IDLE;
             elapsed = 0;
+        }
+
+        // NOTE: 只在真正恢复常速渲染时消费重置；seek 中途的状态断点
+        // 在位置跳变处统一清零，避免把淡化尾巴切断。
+        if !stop_requested && stage == FADE_IDLE && target == NO_SEEK {
+            self.apply_pending_state_reset();
         }
 
         // NOTE: block 路径只在无循环、无 seek/stop 时启用；循环淡化和
@@ -5308,6 +5440,9 @@ impl Playback {
                             stage = FADE_IDLE;
                             elapsed = 0;
                         } else {
+                            // NOTE: 位置跳变是状态断点；旧位置的 Delay、
+                            // 滤波和制音器不能跨到新位置。
+                            self.reset_audio_state();
                             position = target;
                             self.fade_target.store(target, Ordering::Release);
                             stage = FADE_IN;
@@ -5349,10 +5484,17 @@ impl Playback {
 
         self.position.store(position, Ordering::Release);
         self.transport_gain.store(gain.to_bits(), Ordering::Release);
+        // NOTE: 必须把回落到 `FADE_IDLE` 的事实写回，否则 seek 完成后
+        // 会永久停在 `FADE_IN`，block 路径再也恢复不了。CAS 用来避免
+        // 覆盖控制线程在 block 渲染期间新设的淡化阶段。
         if stage != FADE_IDLE {
             self.seek_stage.store(stage, Ordering::Release);
             self.fade_elapsed.store(elapsed, Ordering::Release);
-        } else if self.seek_stage.load(Ordering::Acquire) == FADE_IDLE {
+        } else if self
+            .seek_stage
+            .compare_exchange(stage_start, FADE_IDLE, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
             self.fade_elapsed.store(0, Ordering::Release);
         }
     }
@@ -5412,6 +5554,7 @@ impl Playback {
             stems[..needed].fill(0.0);
             return;
         }
+        let stop_requested = self.stop_requested.load(Ordering::Acquire);
         let plan = self.plan.load();
         let sample_rate = f64::from(plan.sample_rate).max(1.0);
         let looping = plan.loop_seconds > 0.0;
@@ -5436,12 +5579,12 @@ impl Playback {
             0
         };
         let master_gain = f64::from_bits(self.master_gain.load(Ordering::Relaxed));
-        let stop_requested = self.stop_requested.load(Ordering::Acquire);
         let target_gain = if stop_requested { 0.0 } else { 1.0 };
         let gain_step = 1.0 / fade_frames as f64;
         let mut gain = f64::from_bits(self.transport_gain.load(Ordering::Relaxed));
         let mut position = self.position.load(Ordering::Relaxed);
         let mut stage = self.seek_stage.load(Ordering::Acquire);
+        let stage_start = stage;
         let mut target = if stage == FADE_IN {
             self.fade_target.load(Ordering::Acquire)
         } else {
@@ -5460,6 +5603,10 @@ impl Playback {
         } else if stage == FADE_OUT && target == NO_SEEK {
             stage = FADE_IDLE;
             elapsed = 0;
+        }
+        // NOTE: 与 `render_block` 一致；seek 中途由位置跳变处清零。
+        if !stop_requested && stage == FADE_IDLE && target == NO_SEEK {
+            self.apply_pending_state_reset();
         }
         for frame in 0..frames {
             let seek_gain = if stage == FADE_OUT {
@@ -5492,6 +5639,9 @@ impl Playback {
                             stage = FADE_IDLE;
                             elapsed = 0;
                         } else {
+                            // NOTE: 位置跳变是状态断点；旧位置的 Delay、
+                            // 滤波和制音器不能跨到新位置。
+                            self.reset_audio_state();
                             position = target;
                             self.fade_target.store(target, Ordering::Release);
                             stage = FADE_IN;
@@ -5534,10 +5684,17 @@ impl Playback {
         }
         self.position.store(position, Ordering::Release);
         self.transport_gain.store(gain.to_bits(), Ordering::Release);
+        // NOTE: 必须把回落到 `FADE_IDLE` 的事实写回，否则 seek 完成后
+        // 会永久停在 `FADE_IN`，block 路径再也恢复不了。CAS 用来避免
+        // 覆盖控制线程在 block 渲染期间新设的淡化阶段。
         if stage != FADE_IDLE {
             self.seek_stage.store(stage, Ordering::Release);
             self.fade_elapsed.store(elapsed, Ordering::Release);
-        } else if self.seek_stage.load(Ordering::Acquire) == FADE_IDLE {
+        } else if self
+            .seek_stage
+            .compare_exchange(stage_start, FADE_IDLE, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
             self.fade_elapsed.store(0, Ordering::Release);
         }
     }
@@ -7664,6 +7821,62 @@ mod tests {
     }
 
     #[test]
+    fn graph_reset_state_clears_delay_history() {
+        fn build() -> GraphPlan {
+            GraphPlan {
+                nodes: vec![
+                    GraphNodePlan {
+                        op: GraphOp::Constant(1.0),
+                        inputs: Vec::new(),
+                        controls: Vec::new(),
+                    },
+                    GraphNodePlan {
+                        op: GraphOp::Constant(0.001),
+                        inputs: Vec::new(),
+                        controls: Vec::new(),
+                    },
+                    GraphNodePlan {
+                        op: GraphOp::Constant(0.5),
+                        inputs: Vec::new(),
+                        controls: Vec::new(),
+                    },
+                    GraphNodePlan {
+                        op: GraphOp::Delay(DelayPlan::new(0.001, 0.5)),
+                        inputs: vec![0],
+                        controls: vec![1, 2],
+                    },
+                    GraphNodePlan {
+                        op: GraphOp::Output,
+                        inputs: vec![3],
+                        controls: Vec::new(),
+                    },
+                ],
+                output: 4,
+                plugin: None,
+                pianos: Vec::new(),
+                fallback_sine: None,
+                state: GraphStateCell::new(),
+            }
+        }
+        let used = build();
+        let mut primed = [0.0_f32; 64];
+        used.process_block(&[], 48_000, 0.01, &mut primed);
+        used.reset_state();
+        let mut actual = [0.0_f32; 64];
+        used.process_block(&[], 48_000, 0.02, &mut actual);
+
+        let fresh = build();
+        let mut expected = [0.0_f32; 64];
+        fresh.process_block(&[], 48_000, 0.02, &mut expected);
+        for (frame, (actual, expected)) in actual.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (actual - expected).abs() < 1.0e-9,
+                "frame {frame}: Delay 状态未清空，实际 {actual} 预期 {expected}"
+            );
+        }
+    }
+
+    #[test]
     fn blocked_render_matches_contiguous_render() {
         let direct = Playback::new(48_000);
         direct.set_plan(plan());
@@ -7906,6 +8119,140 @@ mod tests {
         playback.render(&mut buffer);
         assert!(buffer[0].abs() < 1e-9);
         assert!(buffer[11_999].abs() < 0.005);
+    }
+
+    fn no_loop_damper_plan() -> PlaybackPlan {
+        let graph = GraphPlan {
+            nodes: vec![
+                GraphNodePlan {
+                    op: GraphOp::Voice { index: 0 },
+                    inputs: Vec::new(),
+                    controls: Vec::new(),
+                },
+                GraphNodePlan {
+                    op: GraphOp::Output,
+                    inputs: vec![0],
+                    controls: Vec::new(),
+                },
+            ],
+            output: 1,
+            plugin: None,
+            pianos: vec![damper_piano()],
+            fallback_sine: None,
+            state: GraphStateCell::new(),
+        };
+        PlaybackPlan {
+            sample_rate: 48_000,
+            loop_start_seconds: 0.0,
+            loop_seconds: 0.0,
+            length_seconds: 5.0,
+            tracks: vec![TrackPlan {
+                frequency: None,
+                gain: 1.0,
+                adsr: None,
+                filters: Vec::new(),
+                graph: Some(graph),
+                notes: vec![NotePlan {
+                    start: 0.0,
+                    duration: 4.0,
+                    frequency: 220.0,
+                    velocity: 0.8,
+                }],
+                plugin: None,
+                piano: None,
+            }],
+        }
+    }
+
+    #[test]
+    fn seek_resets_damper_block_state_before_resume() {
+        let playback = Playback::new(48_000);
+        playback.set_plan(no_loop_damper_plan());
+        playback.play();
+        let mut warmup = vec![0.0_f32; 4_800];
+        playback.render(&mut warmup);
+        playback.seek(1.0);
+        let fade_frames = (DECLICK_FADE_SECONDS * 48_000.0).round() as usize;
+        let mut fade_out = vec![0.0_f32; fade_frames];
+        playback.render(&mut fade_out);
+        let mut fade_in = vec![0.0_f32; fade_frames];
+        playback.render(&mut fade_in);
+        let start_time = playback.position_seconds();
+        let mut block = [0.0_f32; DEFAULT_BLOCK_SIZE];
+        let before = block_stats();
+        playback.render(&mut block);
+        let after = block_stats();
+        assert!(
+            after.track_blocks > before.track_blocks,
+            "seek 交叉淡化结束后必须恢复 block 路径"
+        );
+
+        let reference = damper_piano();
+        let notes = [NotePlan {
+            start: 0.0,
+            duration: 4.0,
+            frequency: 220.0,
+            velocity: 0.8,
+        }];
+        let mut expected = [0.0_f32; DEFAULT_BLOCK_SIZE];
+        reference.sample_block(&notes, start_time, 48_000.0, &mut expected);
+        for (frame, (actual, expected)) in block.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (actual - expected).abs() < 1.0e-4,
+                "frame {frame}: seek 后 block 带上了旧位置的 Damper 状态，\
+                 实际 {actual} 预期 {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn stop_play_resets_damper_block_state() {
+        let playback = Playback::new(48_000);
+        playback.set_plan(no_loop_damper_plan());
+        playback.play();
+        let mut warmup = vec![0.0_f32; 4_800];
+        playback.render(&mut warmup);
+        playback.stop();
+        let fade_frames = (DECLICK_FADE_SECONDS * 48_000.0).round() as usize;
+        let mut stop_fade = vec![0.0_f32; fade_frames];
+        playback.render(&mut stop_fade);
+        assert!(!playback.is_playing());
+        let resume_time = playback.position_seconds();
+        playback.play();
+        let mut fade_in = vec![0.0_f32; fade_frames];
+        playback.render(&mut fade_in);
+        let start_time = playback.position_seconds();
+        let mut block = [0.0_f32; DEFAULT_BLOCK_SIZE];
+        playback.render(&mut block);
+
+        let reference = damper_piano();
+        let notes = [NotePlan {
+            start: 0.0,
+            duration: 4.0,
+            frequency: 220.0,
+            velocity: 0.8,
+        }];
+        let mut offset = 0;
+        while offset < fade_frames {
+            let frames = (fade_frames - offset).min(DEFAULT_BLOCK_SIZE);
+            let mut discard = [0.0_f32; DEFAULT_BLOCK_SIZE];
+            reference.sample_block(
+                &notes,
+                resume_time + offset as f64 / 48_000.0,
+                48_000.0,
+                &mut discard[..frames],
+            );
+            offset += frames;
+        }
+        let mut expected = [0.0_f32; DEFAULT_BLOCK_SIZE];
+        reference.sample_block(&notes, start_time, 48_000.0, &mut expected);
+        for (frame, (actual, expected)) in block.iter().zip(expected.iter()).enumerate() {
+            assert!(
+                (actual - expected).abs() < 1.0e-4,
+                "frame {frame}: stop/play 后 block 带上了旧 Damper 状态，\
+                 实际 {actual} 预期 {expected}"
+            );
+        }
     }
 
     #[test]
