@@ -37,6 +37,8 @@ pub const NOTE_FADE_SECONDS: f64 = 0.005;
 pub const DEFAULT_BLOCK_SIZE: usize = 64;
 
 const DECLICK_FADE_SECONDS: f64 = 0.003;
+/// block 混音低于该峰值且存在活跃音符时视为异常静音。
+const BLOCK_SILENCE_EPS: f32 = 1.0e-6;
 const NO_SEEK: u64 = u64::MAX;
 const FADE_IDLE: u8 = 0;
 static BLOCK_CALLS: AtomicU64 = AtomicU64::new(0);
@@ -44,14 +46,21 @@ static REPEAT_ITERATIONS: AtomicU64 = AtomicU64::new(0);
 static GROUP_CALLS: AtomicU64 = AtomicU64::new(0);
 static PARTIAL_LOOPS: AtomicU64 = AtomicU64::new(0);
 static TRACK_BLOCKS: AtomicU64 = AtomicU64::new(0);
+static PLAYBACK_BLOCK_FALLBACKS: AtomicU64 = AtomicU64::new(0);
+static SILENT_BLOCK_FALLBACKS: AtomicU64 = AtomicU64::new(0);
+static PIANO_BLOCK_FALLBACKS: AtomicU64 = AtomicU64::new(0);
 
 #[derive(Debug, Clone, Copy, Default)]
+#[non_exhaustive]
 pub struct BlockStats {
     pub block_calls: u64,
     pub repeat_iterations: u64,
     pub group_calls: u64,
     pub partial_loops: u64,
     pub track_blocks: u64,
+    pub playback_block_fallbacks: u64,
+    pub silent_block_fallbacks: u64,
+    pub piano_block_fallbacks: u64,
 }
 
 pub fn block_stats() -> BlockStats {
@@ -61,6 +70,9 @@ pub fn block_stats() -> BlockStats {
         group_calls: GROUP_CALLS.load(Ordering::Relaxed),
         partial_loops: PARTIAL_LOOPS.load(Ordering::Relaxed),
         track_blocks: TRACK_BLOCKS.load(Ordering::Relaxed),
+        playback_block_fallbacks: PLAYBACK_BLOCK_FALLBACKS.load(Ordering::Relaxed),
+        silent_block_fallbacks: SILENT_BLOCK_FALLBACKS.load(Ordering::Relaxed),
+        piano_block_fallbacks: PIANO_BLOCK_FALLBACKS.load(Ordering::Relaxed),
     }
 }
 
@@ -69,6 +81,10 @@ pub fn reset_block_stats() {
     REPEAT_ITERATIONS.store(0, Ordering::Relaxed);
     GROUP_CALLS.store(0, Ordering::Relaxed);
     PARTIAL_LOOPS.store(0, Ordering::Relaxed);
+    TRACK_BLOCKS.store(0, Ordering::Relaxed);
+    PLAYBACK_BLOCK_FALLBACKS.store(0, Ordering::Relaxed);
+    SILENT_BLOCK_FALLBACKS.store(0, Ordering::Relaxed);
+    PIANO_BLOCK_FALLBACKS.store(0, Ordering::Relaxed);
 }
 
 const FADE_OUT: u8 = 1;
@@ -1426,7 +1442,7 @@ impl VoicePlan {
     pub fn debug_node_peaks(&self, context: VoiceContext, frames: usize) -> Vec<f32> {
         let mut state = VoiceState::new(512);
         let empty = [[0.0_f64; 64]; 0];
-        let inputs = VoiceBlockInputs::new(&empty, frames.min(64));
+        let inputs = VoiceBlockInputs::new(&empty, frames.min(64), 48_000.0);
         self.nodes
             .iter()
             .enumerate()
@@ -1871,9 +1887,13 @@ impl VoicePlan {
                 };
                 let count = count.round().clamp(0.0, 64.0) as usize;
                 REPEAT_ITERATIONS.fetch_add(count as u64, Ordering::Relaxed);
-                let carried = (*carried).min(8);
+                // NOTE: `carried` 由 zone 输入数量估算，可能多于实际音频
+                // 输出槽；逐采样路径同样按 `outputs.len()` 截断。
+                let carried = (*carried).min(outputs.len()).min(8);
                 let mut carried_block = [[0.0_f64; 64]; 8];
                 let mut body_inputs = [[0.0_f64; 64]; 8];
+                // NOTE: `Repeat.inputs[1 + slot]` 与 body 的输入槽一一对应，
+                // 首槽是 carried 音频，其余是值输入。
                 for (slot, slot_values) in body_inputs.iter_mut().enumerate() {
                     let Some(input) = repeat.inputs.get(slot + 1) else {
                         break;
@@ -1897,7 +1917,8 @@ impl VoicePlan {
                 if let Some(spec) = body.partial_spec() {
                     // NOTE: 融合 kernel 读取的是 body 输入槽，必须传入 Repeat 自己
                     // 解析出的块值，不能把外层声部输入直接透传进 body。
-                    let body_values = VoiceBlockInputs::new(&body_inputs, frames);
+                    let body_values =
+                        VoiceBlockInputs::new(&body_inputs, frames, inputs.sample_rate());
                     if body.fused_partial_block(
                         &spec,
                         count,
@@ -1912,7 +1933,8 @@ impl VoicePlan {
                 }
                 for iteration in 0..count {
                     body_inputs[..carried].copy_from_slice(&carried_block[..carried]);
-                    let body_values = VoiceBlockInputs::new(&body_inputs, frames);
+                    let body_values =
+                        VoiceBlockInputs::new(&body_inputs, frames, inputs.sample_rate());
                     let mut loop_context = context;
                     loop_context.iteration = iteration as u64;
                     if !body.eval_top_block(
@@ -1950,7 +1972,8 @@ impl VoicePlan {
                 {
                     return false;
                 }
-                let group_values = VoiceBlockInputs::new(&group_inputs, frames);
+                let group_values =
+                    VoiceBlockInputs::new(&group_inputs, frames, inputs.sample_rate());
                 body.eval_top_block(body_output, state, context, &group_values, frames, output)
             },
             VoiceOp::GroupCall { body, outputs } => {
@@ -1963,7 +1986,8 @@ impl VoicePlan {
                 {
                     return false;
                 }
-                let group_values = VoiceBlockInputs::new(&group_inputs, frames);
+                let group_values =
+                    VoiceBlockInputs::new(&group_inputs, frames, inputs.sample_rate());
                 body.eval_top_block(body.output, state, context, &group_values, frames, output)
             },
             VoiceOp::Add | VoiceOp::Multiply => {
@@ -2002,7 +2026,7 @@ impl VoicePlan {
                         VoiceOp::Pitch => context.pitch,
                         VoiceOp::Velocity => context.velocity,
                         VoiceOp::Gate => f64::from(u8::from(context.gate)),
-                        VoiceOp::Time => context.local_time + frame as f64 / 48_000.0,
+                        VoiceOp::Time => context.local_time + frame as f64 / inputs.sample_rate(),
                         VoiceOp::Iteration => context.iteration as f64,
                         VoiceOp::NoteIndex => context.note_index as f64,
                         _ => 0.0,
@@ -2050,7 +2074,7 @@ impl VoicePlan {
                         f64::from(hardness[frame])
                     }
                     .clamp(0.0, 1.0);
-                    let time = context.local_time.max(0.0);
+                    let time = (context.local_time + frame as f64 / inputs.sample_rate()).max(0.0);
                     let contact = 0.0012 + (1.0 - velocity) * 0.0025;
                     let envelope = (-time / contact).exp();
                     let noise = (hash64(context.seed ^ time.to_bits().rotate_left(17) ^ 0x51ed_2701)
@@ -2325,7 +2349,7 @@ impl VoicePlan {
             let carried_count = carried.min(8);
             for iteration in 0..count {
                 body_inputs[..carried_count].copy_from_slice(&carried_block[..carried_count]);
-                let body_values = VoiceBlockInputs::new(&body_inputs, frames);
+                let body_values = VoiceBlockInputs::new(&body_inputs, frames, inputs.sample_rate());
                 let mut loop_context = context;
                 loop_context.iteration = iteration as u64;
                 if !body.process_block_inputs(
@@ -3446,18 +3470,25 @@ struct PartialSpec {
 pub struct VoiceBlockInputs<'a> {
     values: &'a [[f64; 64]],
     frames: usize,
+    sample_rate: f64,
 }
 
 impl<'a> VoiceBlockInputs<'a> {
-    pub fn new(values: &'a [[f64; 64]], frames: usize) -> Self {
+    /// block 输入；`sample_rate` 决定 `Time` 和 `Hammer` 的逐帧推进。
+    pub fn new(values: &'a [[f64; 64]], frames: usize, sample_rate: f64) -> Self {
         Self {
             values,
             frames: frames.min(64),
+            sample_rate: sample_rate.max(1.0),
         }
     }
 
     pub fn frames(&self) -> usize {
         self.frames
+    }
+
+    pub fn sample_rate(&self) -> f64 {
+        self.sample_rate
     }
 
     pub fn frame(&self, input: usize, frame: usize) -> f64 {
@@ -3493,7 +3524,9 @@ impl VoiceState {
     pub fn new(value_count: usize) -> Self {
         Self {
             scratch: crate::ssa::BlockScratch::new(value_count),
-            damper_level: f64::NAN,
+            // NOTE: 逐采样 `Damper` 的节点状态从 0 起，block 必须一致，
+            // 否则同一个音在两条路径上的起音电平会差 100 倍。
+            damper_level: 0.0,
             last_fail: None,
         }
     }
@@ -3556,8 +3589,10 @@ impl PianoPlan {
             brightness,
             hammer,
             voice: None,
+            // NOTE: block 声部按音符下标取状态，容量必须覆盖逐采样路径的
+            // `VOICE_STATE_SLOTS`；`MAX_VOICES` 只是图声部上限，不是音符数。
             states: VoiceStateStore(std::cell::UnsafeCell::new(
-                (0..MAX_VOICES).map(|_| VoiceState::new(0)).collect(),
+                (0..VOICE_STATE_SLOTS).map(|_| VoiceState::new(0)).collect(),
             )),
         }
     }
@@ -3579,7 +3614,18 @@ impl PianoPlan {
         output: &mut [f32],
     ) {
         let voice_ref = self.voice.as_ref();
+        let block_end = start_time + output.len() as f64 / sample_rate.max(1.0);
+        let audible = notes.iter().any(|note| {
+            note.velocity > 0.0
+                && note.start <= block_end
+                && start_time <= note.start + note.duration + 0.5
+        });
+        if !audible {
+            output.fill(0.0);
+            return;
+        }
         if output.len() <= 64
+            && notes.len() <= self.states.len()
             && let Some(voice) = voice_ref
             && notes.iter().all(|note| {
                 note.start <= start_time && start_time <= note.start + note.duration + 0.5
@@ -3608,7 +3654,7 @@ impl PianoPlan {
                     voice_inputs[1][frame] = note.velocity;
                     voice_inputs[2][frame] = local + frame as f64 / sample_rate;
                 }
-                let inputs = VoiceBlockInputs::new(&voice_inputs, frames);
+                let inputs = VoiceBlockInputs::new(&voice_inputs, frames, sample_rate);
                 if !voice.process_block_inputs(
                     state,
                     context,
@@ -3629,6 +3675,7 @@ impl PianoPlan {
                 }
                 return;
             }
+            PIANO_BLOCK_FALLBACKS.fetch_add(1, Ordering::Relaxed);
         }
         for (offset, slot) in output.iter_mut().enumerate() {
             *slot = self.sample(notes, start_time + offset as f64 / sample_rate) as f32;
@@ -5013,17 +5060,29 @@ impl Playback {
 
         let plan = self.plan.load();
         let sample_rate = f64::from(plan.sample_rate).max(1.0);
+        // NOTE: `loop_seconds <= 0` 表示无循环；此时位置线性前进，
+        // 不能再复用 `advance` 的循环回绕语义。
+        let looping = plan.loop_seconds > 0.0;
         let loop_start_frames = (plan.loop_start_seconds * sample_rate).round() as u64;
-        let loop_end_frames = (plan.loop_seconds * sample_rate)
-            .round()
-            .max(loop_start_frames.saturating_add(1) as f64) as u64;
-        let fade_frames = (DECLICK_FADE_SECONDS * sample_rate).round().max(1.0) as u64;
-        let loop_fade = if loop_end_frames.saturating_sub(loop_start_frames) > fade_frames * 2 {
-            fade_frames
+        let loop_end_frames = if looping {
+            (plan.loop_seconds * sample_rate)
+                .round()
+                .max(loop_start_frames.saturating_add(1) as f64) as u64
         } else {
             0
         };
-        let loop_advance_start = loop_start_frames + loop_fade;
+        let fade_frames = (DECLICK_FADE_SECONDS * sample_rate).round().max(1.0) as u64;
+        let loop_fade =
+            if looping && loop_end_frames.saturating_sub(loop_start_frames) > fade_frames * 2 {
+                fade_frames
+            } else {
+                0
+            };
+        let loop_advance_start = if looping {
+            loop_start_frames + loop_fade
+        } else {
+            0
+        };
         let master_gain = f64::from_bits(self.master_gain.load(Ordering::Relaxed));
         let stop_requested = self.stop_requested.load(Ordering::Acquire);
         let target_gain = if stop_requested { 0.0 } else { 1.0 };
@@ -5053,33 +5112,49 @@ impl Playback {
             elapsed = 0;
         }
 
+        // NOTE: block 路径只在无循环、无 seek/stop 时启用；循环淡化和
+        // seek 淡化仍走逐采样，避免两套状态机互相污染。
         if stage == FADE_IDLE
             && target == NO_SEEK
             && !stop_requested
-            && loop_fade == 0
-            && loop_end_frames == 0
+            && !looping
             && out.len() <= DEFAULT_BLOCK_SIZE
             && plan.tracks.iter().all(TrackPlan::supports_block)
         {
             let frames = out.len();
-            out.fill(0.0);
+            let mut mixed = [0.0_f32; DEFAULT_BLOCK_SIZE];
             let mut track_block = [0.0_f32; DEFAULT_BLOCK_SIZE];
+            mixed[..frames].fill(0.0);
+            let mut block_ok = true;
             for track in &plan.tracks {
                 if !track.process_block(&plan, position, &mut track_block[..frames]) {
+                    block_ok = false;
                     break;
                 }
-                for (slot, value) in out.iter_mut().zip(&track_block[..frames]) {
+                for (slot, value) in mixed[..frames].iter_mut().zip(&track_block[..frames]) {
                     *slot += *value;
                 }
             }
-            for slot in out.iter_mut() {
-                *slot = (f64::from(*slot) * master_gain * gain).clamp(-1.0, 1.0) as f32;
+            if block_ok && Self::block_output_needs_fallback(&plan, position, &mixed[..frames]) {
+                SILENT_BLOCK_FALLBACKS.fetch_add(1, Ordering::Relaxed);
+                block_ok = false;
             }
-            for _ in 0..frames {
-                position = advance(position, loop_end_frames, loop_advance_start);
+            if block_ok {
+                // NOTE: 起音增益也按帧推进，否则 block 路径会吞掉 `play`
+                // 之后的第一个淡化段，并让声部状态晚于位置 144 帧。
+                for (slot, value) in out.iter_mut().zip(&mixed[..frames]) {
+                    let sample = (f64::from(*value) * master_gain).clamp(-1.0, 1.0);
+                    *slot = (sample * gain) as f32;
+                    if gain < target_gain {
+                        gain = (gain + gain_step).min(target_gain);
+                    }
+                }
+                position = position.saturating_add(frames as u64);
+                self.position.store(position, Ordering::Release);
+                self.transport_gain.store(gain.to_bits(), Ordering::Release);
+                return;
             }
-            self.position.store(position, Ordering::Release);
-            return;
+            PLAYBACK_BLOCK_FALLBACKS.fetch_add(1, Ordering::Relaxed);
         }
 
         for (index, slot) in out.iter_mut().enumerate() {
@@ -5141,7 +5216,11 @@ impl Playback {
             } else if gain < target_gain {
                 gain = (gain + gain_step).min(target_gain);
             }
-            position = advance(position, loop_end_frames, loop_advance_start);
+            position = if looping {
+                advance(position, loop_end_frames, loop_advance_start)
+            } else {
+                position.saturating_add(1)
+            };
         }
 
         self.position.store(position, Ordering::Release);
@@ -5152,6 +5231,41 @@ impl Playback {
         } else if self.seek_stage.load(Ordering::Acquire) == FADE_IDLE {
             self.fade_elapsed.store(0, Ordering::Release);
         }
+    }
+
+    /// block 混音接近静音但计划里仍有活跃音符时，必须回退逐采样。
+    fn block_output_needs_fallback(plan: &PlaybackPlan, position: u64, block: &[f32]) -> bool {
+        let peak = block
+            .iter()
+            .fold(0.0_f32, |peak, value| peak.max(value.abs()));
+        peak <= BLOCK_SILENCE_EPS && Self::tracks_expect_audio(plan, position, block.len())
+    }
+
+    /// 判断该 block 内是否存在理论上应当发声的源。
+    fn tracks_expect_audio(plan: &PlaybackPlan, position: u64, frames: usize) -> bool {
+        let sample_rate = f64::from(plan.sample_rate).max(1.0);
+        let start = position as f64 / sample_rate;
+        let end = position.saturating_add(frames as u64) as f64 / sample_rate;
+        plan.tracks.iter().any(|track| {
+            if track
+                .graph
+                .as_ref()
+                .is_some_and(|graph| graph.fallback_sine.is_some())
+            {
+                return true;
+            }
+            if track.graph.is_none() && track.frequency.is_some() {
+                return true;
+            }
+            let tail = track
+                .adsr
+                .map_or(0.5, |adsr| adsr.release.max(MIN_ENVELOPE_SECONDS));
+            track.notes.iter().any(|note| {
+                note.velocity > 0.0
+                    && note.start <= end
+                    && start <= note.start + note.duration + tail
+            })
+        })
     }
 
     /// 以固定 block 边界驱动渲染；当前仍是兼容实现，后续替换为节点 block 内核。
@@ -5176,17 +5290,27 @@ impl Playback {
         }
         let plan = self.plan.load();
         let sample_rate = f64::from(plan.sample_rate).max(1.0);
+        let looping = plan.loop_seconds > 0.0;
         let loop_start_frames = (plan.loop_start_seconds * sample_rate).round() as u64;
-        let loop_end_frames = (plan.loop_seconds * sample_rate)
-            .round()
-            .max(loop_start_frames.saturating_add(1) as f64) as u64;
-        let fade_frames = (DECLICK_FADE_SECONDS * sample_rate).round().max(1.0) as u64;
-        let loop_fade = if loop_end_frames.saturating_sub(loop_start_frames) > fade_frames * 2 {
-            fade_frames
+        let loop_end_frames = if looping {
+            (plan.loop_seconds * sample_rate)
+                .round()
+                .max(loop_start_frames.saturating_add(1) as f64) as u64
         } else {
             0
         };
-        let loop_advance_start = loop_start_frames + loop_fade;
+        let fade_frames = (DECLICK_FADE_SECONDS * sample_rate).round().max(1.0) as u64;
+        let loop_fade =
+            if looping && loop_end_frames.saturating_sub(loop_start_frames) > fade_frames * 2 {
+                fade_frames
+            } else {
+                0
+            };
+        let loop_advance_start = if looping {
+            loop_start_frames + loop_fade
+        } else {
+            0
+        };
         let master_gain = f64::from_bits(self.master_gain.load(Ordering::Relaxed));
         let stop_requested = self.stop_requested.load(Ordering::Acquire);
         let target_gain = if stop_requested { 0.0 } else { 1.0 };
@@ -5278,7 +5402,11 @@ impl Playback {
             } else if gain < target_gain {
                 gain = (gain + gain_step).min(target_gain);
             }
-            position = advance(position, loop_end_frames, loop_advance_start);
+            position = if looping {
+                advance(position, loop_end_frames, loop_advance_start)
+            } else {
+                position.saturating_add(1)
+            };
         }
         self.position.store(position, Ordering::Release);
         self.transport_gain.store(gain.to_bits(), Ordering::Release);
@@ -6267,7 +6395,7 @@ mod tests {
             values[0][frame] = frame as f64;
             values[1][frame] = 10.0 + frame as f64;
         }
-        let inputs = VoiceBlockInputs::new(&values, 4);
+        let inputs = VoiceBlockInputs::new(&values, 4, 48_000.0);
         assert_eq!(inputs.frames(), 4);
         assert!((inputs.frame(0, 2) - 2.0).abs() < f64::EPSILON);
         assert!((inputs.frame(1, 3) - 13.0).abs() < f64::EPSILON);
@@ -6287,7 +6415,7 @@ mod tests {
         for frame in 0..64 {
             values[0][frame] = frame as f64;
         }
-        let inputs = VoiceBlockInputs::new(&values, 64);
+        let inputs = VoiceBlockInputs::new(&values, 64, 48_000.0);
         let mut state = VoiceState::new(8);
         let mut block = [0.0_f32; 64];
         assert!(plan.process_block_inputs(
@@ -6321,7 +6449,7 @@ mod tests {
         );
         let mut state = VoiceState::new(32);
         let empty = [[0.0_f64; 64]; 0];
-        let inputs = VoiceBlockInputs::new(&empty, 64);
+        let inputs = VoiceBlockInputs::new(&empty, 64, 48_000.0);
         let mut block = [0.0_f32; 64];
         assert!(plan.process_block_inputs(
             &mut state,
@@ -6371,7 +6499,7 @@ mod tests {
         );
         let mut state = VoiceState::new(64);
         let empty = [[0.0_f64; 64]; 0];
-        let inputs = VoiceBlockInputs::new(&empty, 64);
+        let inputs = VoiceBlockInputs::new(&empty, 64, 48_000.0);
         let mut block = [0.0_f32; 64];
         assert!(plan.process_block_inputs(
             &mut state,
@@ -6433,7 +6561,7 @@ mod tests {
         let mut state = VoiceState::new(8);
         let mut block = [0.0_f32; 64];
         let empty = [[0.0_f64; 64]; 0];
-        let inputs = VoiceBlockInputs::new(&empty, 64);
+        let inputs = VoiceBlockInputs::new(&empty, 64, 48_000.0);
         assert!(plan.process_block_inputs(
             &mut state,
             test_context(0.0),
@@ -6476,7 +6604,7 @@ mod tests {
         let mut state = VoiceState::new(8);
         let mut block = [0.0_f32; 64];
         let empty = [[0.0_f64; 64]; 0];
-        let inputs = VoiceBlockInputs::new(&empty, 64);
+        let inputs = VoiceBlockInputs::new(&empty, 64, 48_000.0);
         assert!(plan.process_block_inputs(
             &mut state,
             test_context(0.0),
@@ -6509,7 +6637,7 @@ mod tests {
         let mut state = VoiceState::new(8);
         let mut block = [0.0_f32; 64];
         let empty = [[0.0_f64; 64]; 0];
-        let inputs = VoiceBlockInputs::new(&empty, 64);
+        let inputs = VoiceBlockInputs::new(&empty, 64, 48_000.0);
         assert!(plan.process_block_inputs(
             &mut state,
             test_context(0.0),
@@ -6565,7 +6693,7 @@ mod tests {
         let mut state = VoiceState::new(64);
         let mut block = [0.0_f32; 64];
         let empty = [[0.0_f64; 64]; 0];
-        let inputs = VoiceBlockInputs::new(&empty, 64);
+        let inputs = VoiceBlockInputs::new(&empty, 64, 48_000.0);
         assert!(plan.process_block_inputs(
             &mut state,
             test_context(0.05),
@@ -6600,7 +6728,7 @@ mod tests {
         for frame in 0..64 {
             values[0][frame] = frame as f64;
         }
-        let inputs = VoiceBlockInputs::new(&values, 64);
+        let inputs = VoiceBlockInputs::new(&values, 64, 48_000.0);
         let mut state = VoiceState::new(8);
         let mut block = [0.0_f32; 64];
         assert!(plan.process_block_inputs(
@@ -6644,7 +6772,7 @@ mod tests {
         let mut state = VoiceState::new(16);
         let mut block = [0.0_f32; 64];
         let empty = [[0.0_f64; 64]; 0];
-        let inputs = VoiceBlockInputs::new(&empty, 64);
+        let inputs = VoiceBlockInputs::new(&empty, 64, 48_000.0);
         assert!(plan.process_block_inputs(
             &mut state,
             test_context(0.0),
@@ -7066,6 +7194,159 @@ mod tests {
         playback.render(&mut buffer);
         assert!(buffer.iter().any(|sample| sample.abs() > 0.0));
         assert!(playback.position_seconds() > 0.0);
+    }
+
+    #[test]
+    fn no_loop_sample_path_advances_linearly() {
+        let mut plan = plan();
+        plan.loop_seconds = 0.0;
+        plan.length_seconds = 1.0;
+        let playback = Playback::new(48_000);
+        playback.set_plan(plan);
+        playback.play();
+        let mut buffer = [0.0_f32; 256];
+        playback.render(&mut buffer);
+        assert!(buffer.iter().any(|sample| sample.abs() > 1.0e-4));
+        let expected = 256.0 / 48_000.0;
+        assert!(
+            (playback.position_seconds() - expected).abs() < 1.0e-9,
+            "position={} expected={expected}",
+            playback.position_seconds()
+        );
+    }
+
+    #[test]
+    fn no_loop_block_path_advances_and_counts_blocks() {
+        let graph = GraphPlan {
+            nodes: vec![
+                GraphNodePlan {
+                    op: GraphOp::Voice { index: 0 },
+                    inputs: Vec::new(),
+                    controls: Vec::new(),
+                },
+                GraphNodePlan {
+                    op: GraphOp::Output,
+                    inputs: vec![0],
+                    controls: Vec::new(),
+                },
+            ],
+            output: 1,
+            plugin: None,
+            pianos: Vec::new(),
+            fallback_sine: Some(440.0),
+            state: GraphStateCell::new(),
+        };
+        let plan = PlaybackPlan {
+            sample_rate: 48_000,
+            loop_start_seconds: 0.0,
+            loop_seconds: 0.0,
+            length_seconds: 1.0,
+            tracks: vec![TrackPlan {
+                frequency: None,
+                gain: 1.0,
+                adsr: None,
+                filters: Vec::new(),
+                graph: Some(graph),
+                notes: vec![NotePlan {
+                    start: 0.0,
+                    duration: 1.0,
+                    frequency: 440.0,
+                    velocity: 0.8,
+                }],
+                plugin: None,
+                piano: None,
+            }],
+        };
+        let before = block_stats();
+        let playback = Playback::new(48_000);
+        playback.set_plan(plan);
+        playback.play();
+        let mut buffer = [0.0_f32; 128];
+        playback.render(&mut buffer);
+        let after = block_stats();
+        assert!(
+            after.track_blocks > before.track_blocks,
+            "block 路径必须被调用"
+        );
+        assert!(buffer.iter().any(|sample| sample.abs() > 1.0e-2));
+        let expected = 128.0 / 48_000.0;
+        assert!(
+            (playback.position_seconds() - expected).abs() < 1.0e-9,
+            "position={} expected={expected}",
+            playback.position_seconds()
+        );
+    }
+
+    #[test]
+    fn silent_block_falls_back_to_sample_path() {
+        let graph = GraphPlan {
+            nodes: vec![
+                GraphNodePlan {
+                    op: GraphOp::Constant(0.0),
+                    inputs: Vec::new(),
+                    controls: Vec::new(),
+                },
+                GraphNodePlan {
+                    op: GraphOp::Output,
+                    inputs: vec![0],
+                    controls: Vec::new(),
+                },
+            ],
+            output: 1,
+            plugin: None,
+            pianos: Vec::new(),
+            fallback_sine: None,
+            state: GraphStateCell::new(),
+        };
+        let plan = PlaybackPlan {
+            sample_rate: 48_000,
+            loop_start_seconds: 0.0,
+            loop_seconds: 0.0,
+            length_seconds: 1.0,
+            tracks: vec![TrackPlan {
+                frequency: None,
+                gain: 1.0,
+                adsr: None,
+                filters: Vec::new(),
+                graph: Some(graph),
+                notes: vec![NotePlan {
+                    start: 0.0,
+                    duration: 1.0,
+                    frequency: 440.0,
+                    velocity: 0.8,
+                }],
+                plugin: None,
+                piano: None,
+            }],
+        };
+        let before = block_stats();
+        let playback = Playback::new(48_000);
+        playback.set_plan(plan);
+        playback.play();
+        let mut buffer = [1.0_f32; 64];
+        playback.render(&mut buffer);
+        let after = block_stats();
+        assert!(after.track_blocks > before.track_blocks);
+        assert!(
+            after.silent_block_fallbacks > before.silent_block_fallbacks,
+            "活跃音符的静音 block 必须回退"
+        );
+        assert!(buffer.iter().all(|sample| *sample == 0.0));
+        assert!(playback.position_seconds() > 0.0);
+    }
+
+    #[test]
+    fn loop_still_wraps_position() {
+        let mut plan = plan();
+        plan.loop_seconds = 0.01;
+        plan.length_seconds = 0.01;
+        let playback = Playback::new(48_000);
+        playback.set_plan(plan);
+        playback.play();
+        let mut buffer = [0.0_f32; 960];
+        playback.render(&mut buffer);
+        let position = playback.position_seconds();
+        assert!(position > 0.0 && position < 0.01, "position={position}");
     }
 
     #[test]

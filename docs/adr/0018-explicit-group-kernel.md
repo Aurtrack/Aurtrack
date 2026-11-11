@@ -75,13 +75,10 @@ body_inputs.push(Input(slot))
 - 物理钢琴的 partial 银行重新发声，8 音 sample/block 峰值一致；
 - 结构特化消失，组是否走内核由组数据显式决定；
 - 用户替换组图后仍能走完整展开路径，block 路径也通过测试；
-- 性能保持：8 音约 0.95 秒、12 音约 1.41 秒（2 秒离线 Playback）。
+- 性能保持：8 音约 0.47 秒、12 音约 0.69 秒（block 路径，见 ADR 0019）。
 
 ## 已知限制
 
-- `Playback::render_block` 的 block 分支要求 `loop_end_frames == 0`，但
-  `loop_end_frames` 最小为 1，所以正式播放仍走逐采样路径；基准测试也在
-  `loop_seconds = 0` 下把位置固定在 0。block 路径目前由
-  `PianoPlan::sample_block` 的单元测试直接覆盖，后续再修播放调度。
+- block 调度已由 ADR 0019 修复；本 ADR 只保留组内核与 Repeat 槽位决策。
 - `PianoPartial` 内核仍然是 partial 的专用语义，通用展开路径性能更低；后续若实现
   Repeat 原生 partial 循环，可以再删除该内核。

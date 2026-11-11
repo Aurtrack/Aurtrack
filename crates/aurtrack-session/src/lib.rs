@@ -7235,11 +7235,37 @@ mod buffer_tests {
         };
         let playback = aurtrack_engine::Playback::new(project.sample_rate);
         playback.set_plan(plan);
+        aurtrack_engine::reset_block_stats();
         playback.play();
         let mut output = vec![0.0_f32; project.sample_rate as usize * 2];
         let started = std::time::Instant::now();
         playback.render(&mut output);
-        println!("elapsed={:?}", started.elapsed());
+        let elapsed = started.elapsed();
+        let peak = output
+            .iter()
+            .fold(0.0_f32, |peak, value| peak.max(value.abs()));
+        let stats = aurtrack_engine::block_stats();
+        println!(
+            "notes={note_count} elapsed={elapsed:?} peak={peak} track_blocks={} fallbacks={} silent_fallbacks={} piano_fallbacks={}",
+            stats.track_blocks,
+            stats.playback_block_fallbacks,
+            stats.silent_block_fallbacks,
+            stats.piano_block_fallbacks
+        );
+        assert!(peak > 1.0e-4, "block 输出不应静音，peak={peak}");
+        assert!(stats.track_blocks > 0, "block 路径没有被使用");
+        assert!(
+            stats.track_blocks > stats.playback_block_fallbacks,
+            "block 路径必须真正产出音频"
+        );
+        assert_eq!(
+            stats.playback_block_fallbacks, stats.silent_block_fallbacks,
+            "只有静音保护允许整块回退，轨道失败不应回退"
+        );
+        assert_eq!(
+            stats.piano_block_fallbacks, 0,
+            "PianoPlan block 内核不应回退"
+        );
     }
 
     #[test]
@@ -7374,7 +7400,7 @@ mod buffer_tests {
             for (offset, value) in voice_inputs[2].iter_mut().enumerate() {
                 *value = local + offset as f64 / rate;
             }
-            let inputs = aurtrack_engine::VoiceBlockInputs::new(&voice_inputs, 64);
+            let inputs = aurtrack_engine::VoiceBlockInputs::new(&voice_inputs, 64, rate);
             let context = aurtrack_engine::VoiceContext {
                 pitch: frequency,
                 velocity: 0.9,
@@ -7487,6 +7513,131 @@ mod buffer_tests {
         let voice = plan.pianos[0].voice.as_ref().unwrap();
         let peak = block_peak(voice, project.sample_rate, aurtrack_engine::midi_to_hz(69));
         assert!(peak > 0.01, "partial 内核必须发声，peak={peak}");
+    }
+
+    #[test]
+    fn physical_piano_block_matches_scalar_render() {
+        let mut session = Session::default();
+        for request in [
+            json!({ "cmd": "project.create", "args": { "name": "block-compare" } }),
+            json!({ "cmd": "track.create", "args": { "name": "piano", "source": "physical" } }),
+            json!({ "cmd": "clip.create", "args": { "track_id": "track-1", "start": 0, "duration": 1 } }),
+        ] {
+            let request: CommandRequest = serde_json::from_value(request).unwrap();
+            session.execute(&request).unwrap();
+        }
+        for pitch in [60, 64, 67] {
+            session
+                .execute(&CommandRequest {
+                    cmd: "note.add".to_string(),
+                    args: json!({
+                        "path": "/tracks/track-1/clips/clip-1",
+                        "pitch": pitch,
+                        "start": 0,
+                        "duration": 0.5,
+                        "velocity": 0.8,
+                    }),
+                })
+                .unwrap();
+        }
+        let project = session.project().unwrap().clone();
+        let track = &project.tracks[0];
+        let notes: Vec<_> = track
+            .clips
+            .iter()
+            .flat_map(|clip| {
+                clip.notes.iter().map(|note| aurtrack_engine::NotePlan {
+                    start: project.ticks_to_seconds(clip.start_tick + note.start_tick),
+                    duration: project.ticks_to_seconds(note.duration_tick),
+                    frequency: aurtrack_engine::midi_to_hz(note.pitch),
+                    velocity: note.velocity,
+                })
+            })
+            .collect();
+        let (_, _, graph) = track
+            .playback_graph_with_buffers(
+                &project.node_groups,
+                &project.audio_groups,
+                &project.buffers,
+            )
+            .unwrap();
+        let plan = aurtrack_engine::PlaybackPlan {
+            sample_rate: project.sample_rate,
+            loop_start_seconds: 0.0,
+            loop_seconds: 0.0,
+            length_seconds: 1.0,
+            tracks: vec![aurtrack_engine::TrackPlan {
+                frequency: None,
+                gain: 1.0,
+                adsr: None,
+                filters: Vec::new(),
+                graph: Some(graph),
+                notes: notes.clone(),
+                plugin: None,
+                piano: None,
+            }],
+        };
+        let frames = project.sample_rate as usize / 10;
+        let mut rendered = vec![0.0_f32; frames];
+        for start in (0..frames).step_by(64) {
+            let count = (frames - start).min(64);
+            let mut block = [0.0_f32; 64];
+            assert!(
+                plan.tracks[0].process_block(&plan, start as u64, &mut block[..count]),
+                "block 路径应可用"
+            );
+            rendered[start..start + count].copy_from_slice(&block[..count]);
+        }
+        // NOTE: 参考渲染必须重新编译计划，避免与 block 路径共享声部状态。
+        let (_, _, reference_graph) = track
+            .playback_graph_with_buffers(
+                &project.node_groups,
+                &project.audio_groups,
+                &project.buffers,
+            )
+            .unwrap();
+        // NOTE: Hammer 噪声以 `time.to_bits()` 为种子，block 内的加法时间
+        // 与逐采样的直接除法可能差 1 ULP，噪声实现不同但包络一致；
+        // 因此参考仍逐帧推进状态，只比较锤击瞬态结束后的稳定段。
+        let hammer_frames = (f64::from(project.sample_rate) * 0.02) as usize;
+        let mut worst = 0.0_f64;
+        let mut worst_frame = 0usize;
+        let mut worst_pair = (0.0_f32, 0.0_f64);
+        for (frame, actual) in rendered.iter().enumerate() {
+            let time = frame as f64 / f64::from(project.sample_rate);
+            let mut voices = [0.0_f64; aurtrack_engine::MAX_VOICES];
+            for (index, piano) in reference_graph
+                .pianos
+                .iter()
+                .enumerate()
+                .take(aurtrack_engine::MAX_VOICES)
+            {
+                voices[index] = piano.sample(&notes, time);
+            }
+            let expected = reference_graph.sample(&voices, project.sample_rate, time);
+            if frame < hammer_frames {
+                continue;
+            }
+            let error = (f64::from(*actual) - expected).abs();
+            if error > worst {
+                worst = error;
+                worst_frame = frame;
+                worst_pair = (*actual, expected);
+            }
+        }
+        assert!(
+            rendered[..hammer_frames]
+                .iter()
+                .any(|value| value.abs() > 1.0e-3),
+            "block 锤击瞬态不应静音"
+        );
+        assert!(rendered.iter().any(|value| value.abs() > 1.0e-3));
+        assert!(
+            worst < 1.0e-4,
+            "block 与逐采样偏差过大，frame={worst_frame} worst={worst} actual={} expected={}",
+            worst_pair.0,
+            worst_pair.1
+        );
     }
 
     #[test]
