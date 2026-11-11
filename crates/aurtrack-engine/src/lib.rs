@@ -3605,7 +3605,10 @@ impl PianoPlan {
         self.states.replace(states);
     }
 
-    /// block 接口：当前逐帧调用 `sample`，下一步替换为声部 block kernel。
+    /// block 接口：按每个音符的起始帧切段，段内仍走声部 block kernel。
+    ///
+    /// 音符尚未开始时不能进入 kernel，否则 `Time` 为负、状态提前推进；已开始
+    /// 的音符必须按帧连续推进，才能让包络和制音器状态跨 block 保持连续。
     pub fn sample_block(
         &self,
         notes: &[NotePlan],
@@ -3614,59 +3617,77 @@ impl PianoPlan {
         output: &mut [f32],
     ) {
         let voice_ref = self.voice.as_ref();
-        let block_end = start_time + output.len() as f64 / sample_rate.max(1.0);
+        let sample_rate = sample_rate.max(1.0);
+        let frames = output.len();
+        let block_end = start_time + frames as f64 / sample_rate;
         let audible = notes.iter().any(|note| {
             note.velocity > 0.0
-                && note.start <= block_end
+                && note.start < block_end
                 && start_time <= note.start + note.duration + 0.5
         });
         if !audible {
             output.fill(0.0);
             return;
         }
-        if output.len() <= 64
+        if frames <= 64
             && notes.len() <= self.states.len()
             && let Some(voice) = voice_ref
-            && notes.iter().all(|note| {
-                note.start <= start_time && start_time <= note.start + note.duration + 0.5
-            })
         {
             output.fill(0.0);
-            let frames = output.len();
             let mut note_block = [0.0_f32; 64];
             let mut block_ok = true;
             for (index, note) in notes.iter().enumerate().take(self.states.len()) {
-                let local = start_time - note.start;
-                let context = VoiceContext {
-                    pitch: note.frequency,
-                    velocity: note.velocity,
-                    local_time: local,
-                    gate: local <= note.duration,
-                    seed: note.start.to_bits() ^ note.frequency.to_bits() ^ note.velocity.to_bits(),
-                    note_index: index as u64,
-                    iteration: 0,
-                };
+                let tail_end = note.start + note.duration + 0.5;
+                if note.start >= block_end || start_time > tail_end {
+                    continue;
+                }
+                // NOTE: 用实际帧时刻比较而不是只做浮点乘加，避免恰在块边界
+                // 的音符多算或少算一帧。
+                let first = first_frame_at_or_after(start_time, note.start, sample_rate, frames);
+                let last = first_frame_after(start_time, tail_end, sample_rate, frames);
+                if last <= first {
+                    continue;
+                }
+                let gate_off =
+                    first_frame_after(start_time, note.start + note.duration, sample_rate, frames)
+                        .clamp(first, last);
                 // SAFETY: 音频线程是唯一写入者；index 小于 states 长度。
                 let state = unsafe { self.states.get_mut(index) };
-                let mut voice_inputs = [[0.0_f64; 64]; 3];
-                for frame in 0..frames {
-                    voice_inputs[0][frame] = note.frequency;
-                    voice_inputs[1][frame] = note.velocity;
-                    voice_inputs[2][frame] = local + frame as f64 / sample_rate;
-                }
-                let inputs = VoiceBlockInputs::new(&voice_inputs, frames, sample_rate);
-                if !voice.process_block_inputs(
-                    state,
-                    context,
-                    &inputs,
-                    sample_rate,
-                    &mut note_block[..frames],
-                ) {
+                if gate_off > first
+                    && !render_note_segment(
+                        voice,
+                        state,
+                        note,
+                        index,
+                        start_time,
+                        first,
+                        gate_off,
+                        true,
+                        sample_rate,
+                        &mut note_block,
+                        output,
+                    )
+                {
                     block_ok = false;
                     break;
                 }
-                for (slot, value) in output.iter_mut().zip(&note_block[..frames]) {
-                    *slot += *value;
+                if last > gate_off
+                    && !render_note_segment(
+                        voice,
+                        state,
+                        note,
+                        index,
+                        start_time,
+                        gate_off,
+                        last,
+                        false,
+                        sample_rate,
+                        &mut note_block,
+                        output,
+                    )
+                {
+                    block_ok = false;
+                    break;
                 }
             }
             if block_ok {
@@ -3728,6 +3749,109 @@ impl PianoPlan {
         }
         output * 0.18
     }
+}
+
+/// 首个满足 `time >= boundary` 的帧。
+///
+/// 用实际帧时刻比较，避免 `(boundary - start_time) * sample_rate` 的舍入让
+/// 恰好落在块边界的音符多算或少算一帧。
+fn first_frame_at_or_after(
+    start_time: f64,
+    boundary: f64,
+    sample_rate: f64,
+    frames: usize,
+) -> usize {
+    let raw = (boundary - start_time) * sample_rate;
+    if raw.is_nan() {
+        return frames;
+    }
+    if raw <= 0.0 {
+        return 0;
+    }
+    if raw >= frames as f64 {
+        return frames;
+    }
+    let mut frame = raw.floor() as usize;
+    while frame < frames && start_time + frame as f64 / sample_rate < boundary {
+        frame += 1;
+    }
+    frame
+}
+
+/// 首个满足 `time > boundary` 的帧。
+fn first_frame_after(start_time: f64, boundary: f64, sample_rate: f64, frames: usize) -> usize {
+    let raw = (boundary - start_time) * sample_rate;
+    if raw.is_nan() || raw >= frames as f64 {
+        return frames;
+    }
+    if raw < 0.0 {
+        return 0;
+    }
+    let mut frame = raw.floor().max(0.0) as usize;
+    while frame < frames && start_time + frame as f64 / sample_rate <= boundary {
+        frame += 1;
+    }
+    frame
+}
+
+/// 把一个音符的帧段送进声部 block 内核，并把结果累加到轨道块。
+///
+/// 状态由调用方跨段复用，`gate` 只在段内为常量，因此段边界必须落在音符
+/// 起始或 gate 翻转帧上。
+#[allow(clippy::too_many_arguments)]
+fn render_note_segment(
+    voice: &VoicePlan,
+    state: &mut VoiceState,
+    note: &NotePlan,
+    note_index: usize,
+    start_time: f64,
+    segment_start: usize,
+    segment_end: usize,
+    gate: bool,
+    sample_rate: f64,
+    note_block: &mut [f32; 64],
+    output: &mut [f32],
+) -> bool {
+    let frames = segment_end.saturating_sub(segment_start);
+    if frames == 0 {
+        return true;
+    }
+    if frames > note_block.len() || segment_end > output.len() {
+        return false;
+    }
+    let local = (start_time + segment_start as f64 / sample_rate - note.start).max(0.0);
+    let context = VoiceContext {
+        pitch: note.frequency,
+        velocity: note.velocity,
+        local_time: local,
+        gate,
+        seed: note.start.to_bits() ^ note.frequency.to_bits() ^ note.velocity.to_bits(),
+        note_index: note_index as u64,
+        iteration: 0,
+    };
+    let mut voice_inputs = [[0.0_f64; 64]; 3];
+    for frame in 0..frames {
+        voice_inputs[0][frame] = note.frequency;
+        voice_inputs[1][frame] = note.velocity;
+        voice_inputs[2][frame] = local + frame as f64 / sample_rate;
+    }
+    let inputs = VoiceBlockInputs::new(&voice_inputs, frames, sample_rate);
+    if !voice.process_block_inputs(
+        state,
+        context,
+        &inputs,
+        sample_rate,
+        &mut note_block[..frames],
+    ) {
+        return false;
+    }
+    for (slot, value) in output[segment_start..segment_end]
+        .iter_mut()
+        .zip(&note_block[..frames])
+    {
+        *slot += *value;
+    }
+    true
 }
 
 /// 轨道插件引用；实际处理器由宿主线程持有。
@@ -5553,6 +5677,28 @@ mod tests {
         }
     }
 
+    fn damper_piano() -> PianoPlan {
+        let voice = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Constant(1.0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Gate, Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(0.0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(0.0001), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Damper, vec![0, 1, 2, 3]),
+                VoiceNodePlan::new(VoiceOp::Output, vec![4]),
+            ],
+            5,
+        );
+        let mut piano = PianoPlan::new(4, 1.0, 0.5, 0.2);
+        piano.voice = Some(voice);
+        piano.set_states(
+            (0..piano.state_count())
+                .map(|_| VoiceState::new(8))
+                .collect(),
+        );
+        piano
+    }
+
     #[test]
     fn exp_and_sqrt_primitives_sample() {
         let plan = VoicePlan::new(
@@ -6845,6 +6991,135 @@ mod tests {
             assert!(
                 (f64::from(*value) - expected).abs() < 1e-4,
                 "offset {offset}: block {value} expected {expected}"
+            );
+        }
+    }
+
+    #[test]
+    fn piano_block_mixed_start_keeps_voice_state_continuous() {
+        let sample_rate = 48_000.0;
+        let mixed_block = 100;
+        let onset_frame = 20;
+        let notes = [
+            NotePlan {
+                start: 0.0,
+                duration: 1.0,
+                frequency: 220.0,
+                velocity: 0.8,
+            },
+            NotePlan {
+                start: (mixed_block * DEFAULT_BLOCK_SIZE + onset_frame) as f64 / sample_rate,
+                duration: 1.0,
+                frequency: 330.0,
+                velocity: 0.8,
+            },
+        ];
+        let block_piano = damper_piano();
+        let reference = damper_piano();
+        let blocks = mixed_block + 4;
+        let mut rendered = Vec::with_capacity(blocks * DEFAULT_BLOCK_SIZE);
+        let before = block_stats();
+        for index in 0..blocks {
+            let start_time = (index * DEFAULT_BLOCK_SIZE) as f64 / sample_rate;
+            let mut block = [0.0_f32; DEFAULT_BLOCK_SIZE];
+            block_piano.sample_block(&notes, start_time, sample_rate, &mut block);
+            rendered.extend_from_slice(&block);
+        }
+        let after = block_stats();
+        assert_eq!(
+            after.piano_block_fallbacks, before.piano_block_fallbacks,
+            "混合起始音符不应让整块回退"
+        );
+        for (frame, actual) in rendered.iter().enumerate() {
+            let time = frame as f64 / sample_rate;
+            let expected = reference.sample(&notes, time);
+            assert!(
+                (f64::from(*actual) - expected).abs() < 1e-5,
+                "frame {frame}: block {actual} expected {expected}；回退恢复后包络不应跳变"
+            );
+        }
+    }
+
+    #[test]
+    fn piano_block_starts_note_mid_block_on_exact_frame() {
+        let voice = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Constant(1.0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Output, vec![0]),
+            ],
+            1,
+        );
+        let mut piano = PianoPlan::new(4, 1.0, 0.5, 0.2);
+        piano.voice = Some(voice);
+        piano.set_states(
+            (0..piano.state_count())
+                .map(|_| VoiceState::new(8))
+                .collect(),
+        );
+        let sample_rate = 48_000.0;
+        let block_start = 0.1;
+        let onset_frame = 20;
+        let notes = [
+            NotePlan {
+                start: 0.0,
+                duration: 1.0,
+                frequency: 220.0,
+                velocity: 0.8,
+            },
+            NotePlan {
+                start: block_start + onset_frame as f64 / sample_rate,
+                duration: 1.0,
+                frequency: 330.0,
+                velocity: 0.8,
+            },
+        ];
+        let before = block_stats();
+        let mut block = [0.0_f32; DEFAULT_BLOCK_SIZE];
+        piano.sample_block(&notes, block_start, sample_rate, &mut block);
+        let after = block_stats();
+        assert_eq!(
+            after.piano_block_fallbacks, before.piano_block_fallbacks,
+            "混合起始音符不应让整块回退"
+        );
+        for (offset, actual) in block.iter().enumerate() {
+            let expected = piano.sample(&notes, block_start + offset as f64 / sample_rate);
+            assert!(
+                (f64::from(*actual) - expected).abs() < 1e-6,
+                "offset {offset}: block {actual} expected {expected}"
+            );
+            let expected = if offset < onset_frame { 0.18 } else { 0.36 };
+            assert!(
+                (f64::from(*actual) - expected).abs() < 1e-6,
+                "offset {offset}: 新音符必须从第 {onset_frame} 帧开始，实际 {actual}"
+            );
+        }
+    }
+
+    #[test]
+    fn piano_block_splits_note_gate_mid_block() {
+        let sample_rate = 48_000.0;
+        let block_start = 0.1;
+        let gate_frame = 32;
+        let notes = [NotePlan {
+            start: 0.0,
+            duration: block_start + gate_frame as f64 / sample_rate,
+            frequency: 220.0,
+            velocity: 0.8,
+        }];
+        let piano = damper_piano();
+        let before = block_stats();
+        let mut block = [0.0_f32; DEFAULT_BLOCK_SIZE];
+        piano.sample_block(&notes, block_start, sample_rate, &mut block);
+        let after = block_stats();
+        assert_eq!(
+            after.piano_block_fallbacks, before.piano_block_fallbacks,
+            "gate 翻转不应让整块回退"
+        );
+        for (offset, actual) in block.iter().enumerate() {
+            let expected = piano.sample(&notes, block_start + offset as f64 / sample_rate);
+            assert!(
+                (f64::from(*actual) - expected).abs() < 1e-6,
+                "offset {offset}: block {actual} expected {expected}；gate 翻转让状态跳变"
             );
         }
     }
