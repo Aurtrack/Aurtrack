@@ -2,7 +2,8 @@
 
 ## 状态
 
-已接受。
+部分被 ADR 0018、0020、0021 取代：`VoiceOp::PianoPartial` 的 lowering、组内核
+和专用节点都已删除，partial 只由 `piano.partial` 组图决定。
 
 ## 背景
 

@@ -2,7 +2,8 @@
 
 ## 状态
 
-已接受。
+已接受。partial 的结构化 lowering 已被 ADR 0020、0021 删除：优化器现在是纯
+通用 pass，`VoiceOp::PianoPartial` 不再存在。
 
 ## 背景
 

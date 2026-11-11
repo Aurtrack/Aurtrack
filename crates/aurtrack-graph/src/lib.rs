@@ -331,7 +331,7 @@ impl NodeGroup {
             id: "piano.voice".to_string(),
             name: "Piano Voice".to_string(),
             interface: NodeGroupInterface::piano(),
-            graph: VoiceGraph::piano_open(),
+            graph: VoiceGraph::piano_default(),
         }
     }
 
@@ -977,40 +977,6 @@ const PARTIAL_INPUTS: [VoiceSocketSpec; 7] = [
         .with_range(0.05, 8.0)
         .with_step(0.01),
 ];
-const PIANO_PARTIAL_INPUTS: [VoiceSocketSpec; 8] = [
-    VoiceSocketSpec::new("pitch", "Pitch", SocketType::Float)
-        .with_default(261.63)
-        .with_range(20.0, 20_000.0)
-        .with_step(0.01),
-    VoiceSocketSpec::new("velocity", "Velocity", SocketType::Float)
-        .with_default(0.8)
-        .with_range(0.0, 1.0)
-        .with_step(0.01),
-    VoiceSocketSpec::new("time", "Time", SocketType::Float)
-        .with_default(0.0)
-        .with_range(0.0, 1000.0)
-        .with_step(0.001),
-    VoiceSocketSpec::new("index", "Index", SocketType::Int)
-        .with_default(0.0)
-        .with_range(0.0, 63.0)
-        .with_step(1.0),
-    VoiceSocketSpec::new("inharmonicity", "Inharmonicity", SocketType::Float)
-        .with_default(0.0004)
-        .with_range(0.0, 0.01)
-        .with_step(0.0001),
-    VoiceSocketSpec::new("brightness", "Brightness", SocketType::Float)
-        .with_default(0.5)
-        .with_range(0.0, 1.0)
-        .with_step(0.01),
-    VoiceSocketSpec::new("decay", "Decay", SocketType::Float)
-        .with_default(1.2)
-        .with_range(0.05, 8.0)
-        .with_step(0.01),
-    VoiceSocketSpec::new("position", "Position", SocketType::Float)
-        .with_default(0.12)
-        .with_range(0.0, 1.0)
-        .with_step(0.01),
-];
 const REPEAT_INPUTS: [VoiceSocketSpec; 1] =
     [VoiceSocketSpec::new("count", "Count", SocketType::Int)
         .with_default(10.0)
@@ -1326,14 +1292,6 @@ pub const VOICE_NODE_TYPES: &[VoiceNodeType] = &[
         name: "Partial",
         category: "Generator",
         inputs: &PARTIAL_INPUTS,
-        outputs: &AUDIO_OUT,
-        params: &[],
-    },
-    VoiceNodeType {
-        id: "voice.piano_partial",
-        name: "Piano Partial",
-        category: "String",
-        inputs: &PIANO_PARTIAL_INPUTS,
         outputs: &AUDIO_OUT,
         params: &[],
     },
@@ -2499,6 +2457,7 @@ impl VoiceGraph {
         graph
     }
 
+    /// 默认钢琴音色：partial 通过显式 `voice.group` 调用 `piano.partial`。
     #[allow(clippy::too_many_lines)]
     pub fn piano_default() -> Self {
         let input = VoiceNode::new(NodeId::fixed("voice-in"), "group.input");
@@ -2517,7 +2476,11 @@ impl VoiceGraph {
             "Audio",
             NodeGroupSocketType::Audio,
         )];
-        let mut partial = VoiceNode::new(NodeId::fixed("p-partial"), "voice.partial");
+        let mut partial = VoiceNode::new(NodeId::fixed("p-partial"), "voice.group");
+        partial.group = Some("piano.partial".to_string());
+        partial.params.insert("inharmonicity".to_string(), 0.0004);
+        partial.params.insert("brightness".to_string(), 0.5);
+        partial.params.insert("decay".to_string(), 1.2);
         let mut partial_add = VoiceNode::new(NodeId::fixed("p-add"), "voice.add");
         let mut partial_time = VoiceNode::new(NodeId::fixed("p-time"), "voice.time");
         for node in [
@@ -2749,7 +2712,7 @@ impl VoiceGraph {
                     PortRef::fixed(NodeId::fixed("p-partial"), "index"),
                 ),
                 VoiceConnection::new(
-                    PortRef::fixed(NodeId::fixed("p-partial"), "out"),
+                    PortRef::fixed(NodeId::fixed("p-partial"), "audio"),
                     PortRef::fixed(NodeId::fixed("p-add"), "in2"),
                 ),
                 VoiceConnection::new(
@@ -3228,25 +3191,6 @@ impl VoiceGraph {
                 PortRef::new(NodeId::fixed("out"), "audio"),
             ),
         ];
-        graph
-    }
-
-    /// 默认钢琴的开放版本：Partial 由可打开的 `piano.partial` 组实现。
-    pub fn piano_open() -> Self {
-        let mut graph = Self::piano_default();
-        let partial = NodeId::fixed("p-partial");
-        if let Some(node) = graph.nodes.get_mut(&partial) {
-            node.type_id = "voice.group".to_string();
-            node.group = Some("piano.partial".to_string());
-            node.params.insert("inharmonicity".to_string(), 0.0004);
-            node.params.insert("brightness".to_string(), 0.5);
-            node.params.insert("decay".to_string(), 1.2);
-        }
-        for connection in &mut graph.connections {
-            if connection.from.node() == &partial && connection.from.port() == "out" {
-                connection.from = PortRef::new(partial.clone(), "audio");
-            }
-        }
         graph
     }
 
@@ -4831,7 +4775,34 @@ mod tests {
             connection.from.node != NodeId::fixed("p-out")
                 && connection.to.node != NodeId::fixed("p-out")
         });
-        assert!(matches!(graph.validate(), Err(GraphError::ZoneTerminals)));
+        assert!(matches!(
+            graph.validate_with_groups(&NodeGroupInterface::piano(), &piano_partial_groups()),
+            Err(GraphError::ZoneTerminals)
+        ));
+    }
+
+    fn piano_partial_groups() -> BTreeMap<String, NodeGroup> {
+        BTreeMap::from([("piano.partial".to_string(), NodeGroup::partial_default())])
+    }
+
+    #[test]
+    fn removed_piano_partial_node_is_not_registered() {
+        assert!(
+            voice_node_type("voice.piano_partial").is_none(),
+            "专用 piano partial 节点不应再注册"
+        );
+        assert!(
+            VOICE_NODE_TYPES
+                .iter()
+                .all(|node_type| node_type.id != "voice.piano_partial")
+        );
+        let graph = VoiceGraph::piano_default();
+        let partial = &graph.nodes[&NodeId::fixed("p-partial")];
+        assert_eq!(partial.type_id, "voice.group");
+        assert_eq!(partial.group.as_deref(), Some("piano.partial"));
+        graph
+            .validate_with_groups(&NodeGroupInterface::piano(), &piano_partial_groups())
+            .unwrap();
     }
 
     #[test]
@@ -4848,7 +4819,9 @@ mod tests {
                 node.zone_outputs.push(aux.clone());
             }
         }
-        graph.validate().unwrap();
+        graph
+            .validate_with_groups(&NodeGroupInterface::piano(), &piano_partial_groups())
+            .unwrap();
         let (_, interface) = graph
             .zone_body(&graph.nodes[&NodeId::fixed("partials")])
             .unwrap();
@@ -4876,7 +4849,9 @@ mod tests {
                 node.zone_outputs.push(note.clone());
             }
         }
-        graph.validate().unwrap();
+        graph
+            .validate_with_groups(&NodeGroupInterface::piano(), &piano_partial_groups())
+            .unwrap();
         let (_, interface) = graph
             .zone_body(&graph.nodes[&NodeId::fixed("partials")])
             .unwrap();
@@ -4908,7 +4883,7 @@ mod tests {
             boundary.zone_outputs = outputs;
         }
         assert!(matches!(
-            graph.validate(),
+            graph.validate_with_groups(&NodeGroupInterface::piano(), &piano_partial_groups()),
             Err(GraphError::InvalidGroupSocket { .. })
         ));
     }
@@ -4920,7 +4895,10 @@ mod tests {
             PortRef::fixed(NodeId::fixed("p-add"), "out"),
             PortRef::fixed(NodeId::fixed("out"), "audio"),
         ));
-        assert!(matches!(graph.validate(), Err(GraphError::ZoneLeak(_))));
+        assert!(matches!(
+            graph.validate_with_groups(&NodeGroupInterface::piano(), &piano_partial_groups()),
+            Err(GraphError::ZoneLeak(_))
+        ));
     }
 
     #[test]

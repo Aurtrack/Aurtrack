@@ -1317,7 +1317,6 @@ pub enum VoiceOp {
         looped: bool,
     },
     Partial,
-    PianoPartial,
     Attack,
     Decay,
     Adsr,
@@ -1655,48 +1654,6 @@ impl VoicePlan {
                         f64::from(args[4][frame]),
                         f64::from(args[5][frame]),
                         f64::from(args[6][frame]),
-                    ) as f32;
-                }
-                true
-            },
-            VoiceOp::PianoPartial => {
-                let mut args = [[0.0_f32; 64]; 8];
-                for (slot, values) in args.iter_mut().enumerate() {
-                    if let Some(input) = node.inputs.get(slot) {
-                        if !self.eval_top_block(
-                            *input,
-                            state,
-                            context,
-                            inputs,
-                            frames,
-                            &mut values[..frames],
-                        ) {
-                            return false;
-                        }
-                    } else {
-                        let default = match slot {
-                            0 => context.pitch,
-                            1 => context.velocity,
-                            2 => context.local_time,
-                            3 => 0.0,
-                            4 => 0.0004,
-                            5 => 0.5,
-                            6 => 1.2,
-                            _ => 0.12,
-                        };
-                        values[..frames].fill(default as f32);
-                    }
-                }
-                for (frame, slot) in output.iter_mut().enumerate() {
-                    *slot = piano_partial_sample(
-                        f64::from(args[0][frame]),
-                        f64::from(args[1][frame]),
-                        f64::from(args[2][frame]),
-                        f64::from(args[3][frame]),
-                        f64::from(args[4][frame]),
-                        f64::from(args[5][frame]),
-                        f64::from(args[6][frame]),
-                        f64::from(args[7][frame]),
                     ) as f32;
                 }
                 true
@@ -2424,50 +2381,6 @@ impl VoicePlan {
                         inharmonicity,
                         brightness,
                         decay,
-                    )
-                },
-                VoiceOp::PianoPartial => {
-                    let pitch = node
-                        .inputs
-                        .first()
-                        .map_or(context.pitch, |input| scratch_value(*input));
-                    let velocity = node
-                        .inputs
-                        .get(1)
-                        .map_or(context.velocity, |input| scratch_value(*input));
-                    let time = node
-                        .inputs
-                        .get(2)
-                        .map_or(context.local_time, |input| scratch_value(*input));
-                    let index = node
-                        .inputs
-                        .get(3)
-                        .map_or(0.0, |input| scratch_value(*input));
-                    let inharmonicity = node
-                        .inputs
-                        .get(4)
-                        .map_or(0.0004, |input| scratch_value(*input));
-                    let brightness = node
-                        .inputs
-                        .get(5)
-                        .map_or(0.5, |input| scratch_value(*input));
-                    let decay = node
-                        .inputs
-                        .get(6)
-                        .map_or(1.2, |input| scratch_value(*input));
-                    let position = node
-                        .inputs
-                        .get(7)
-                        .map_or(0.12, |input| scratch_value(*input));
-                    piano_partial_sample(
-                        pitch,
-                        velocity,
-                        time,
-                        index,
-                        inharmonicity,
-                        brightness,
-                        decay,
-                        position,
                     )
                 },
                 VoiceOp::Hammer => {
@@ -3311,44 +3224,6 @@ fn partial_sample(
     let envelope = (-time * (0.8 + partial as f64 * 0.35) / decay.max(0.05)).exp();
     let velocity = velocity.clamp(0.0, 1.0).powf(brightness + 0.5);
     (std::f64::consts::TAU * frequency * time).sin() * envelope * velocity * 0.18 / partial as f64
-}
-
-#[allow(clippy::too_many_arguments)]
-fn piano_partial_sample(
-    pitch: f64,
-    velocity: f64,
-    time: f64,
-    index: f64,
-    inharmonicity: f64,
-    brightness: f64,
-    decay: f64,
-    position: f64,
-) -> f64 {
-    let partial = index.max(0.0).round() as usize + 1;
-    let harmonic = partial as f64;
-    let frequency =
-        pitch * harmonic * (1.0 + inharmonicity.clamp(0.0, 0.01) * harmonic * harmonic).sqrt();
-    if frequency >= 20_000.0 || time < 0.0 {
-        return 0.0;
-    }
-    let brightness = brightness.clamp(0.0, 1.0);
-    let velocity = velocity.clamp(0.0, 1.0).powf(0.55 + brightness * 0.7);
-    let decay = decay.clamp(0.05, 8.0) / (1.0 + harmonic * 0.06);
-    let prompt = (-time / 0.08).exp();
-    let sustain = (-time / decay).exp();
-    let envelope = (0.35 * prompt + 0.65 * sustain) * (1.0 - (-time / 0.0025).exp());
-    let position_amplitude = (std::f64::consts::PI * harmonic * position.clamp(0.0, 1.0))
-        .sin()
-        .abs()
-        .max(0.08);
-    let amplitude = velocity * position_amplitude / harmonic.powf(0.55 + brightness * 0.7);
-    let low = frequency * 0.99975;
-    let high = frequency * 1.00025;
-    let strings = ((std::f64::consts::TAU * frequency * time).sin()
-        + (std::f64::consts::TAU * low * time).sin()
-        + (std::f64::consts::TAU * high * time).sin())
-        / 3.0;
-    strings * envelope * amplitude * 0.18
 }
 
 fn osc_partials(
@@ -6492,59 +6367,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "性能原型，手动运行"]
-    fn partial_bank_loop_prototype() {
-        let notes = 8;
-        let samples = 96_000;
-        let start = std::time::Instant::now();
-        let mut sink = 0.0_f64;
-        for note in 0..notes {
-            let pitch = 440.0 * 2_f64.powf(note as f64 / 12.0);
-            for sample in 0..samples {
-                let time = sample as f64 / 48_000.0;
-                for partial in 0..12 {
-                    sink += piano_partial_sample(
-                        pitch,
-                        0.8,
-                        time,
-                        partial as f64,
-                        0.0004,
-                        0.5,
-                        1.2,
-                        0.12,
-                    );
-                }
-            }
-        }
-        std::hint::black_box(sink);
-        println!("partial bank loop: {:?}", start.elapsed());
-
-        let function: fn(f64, f64, f64, f64, f64, f64, f64, f64) -> f64 = piano_partial_sample;
-        let start = std::time::Instant::now();
-        let mut sink = 0.0_f64;
-        for note in 0..notes {
-            let pitch = 440.0 * 2_f64.powf(note as f64 / 12.0);
-            for sample in 0..samples {
-                let time = sample as f64 / 48_000.0;
-                for partial in 0..12 {
-                    sink += std::hint::black_box(function)(
-                        pitch,
-                        0.8,
-                        time,
-                        partial as f64,
-                        0.0004,
-                        0.5,
-                        1.2,
-                        0.12,
-                    );
-                }
-            }
-        }
-        std::hint::black_box(sink);
-        println!("partial bank function-pointer loop: {:?}", start.elapsed());
-    }
-
-    #[test]
     fn voice_process_block_matches_sample() {
         let plan = VoicePlan::new(
             vec![
@@ -6608,52 +6430,16 @@ mod tests {
     }
 
     #[test]
-    fn piano_partial_block_is_audible() {
-        let plan = VoicePlan::new(
-            vec![
-                VoiceNodePlan::new(VoiceOp::Constant(220.0), Vec::new()),
-                VoiceNodePlan::new(VoiceOp::Constant(0.8), Vec::new()),
-                VoiceNodePlan::new(VoiceOp::Constant(0.1), Vec::new()),
-                VoiceNodePlan::new(VoiceOp::Constant(0.0), Vec::new()),
-                VoiceNodePlan::new(VoiceOp::Constant(0.0004), Vec::new()),
-                VoiceNodePlan::new(VoiceOp::Constant(0.5), Vec::new()),
-                VoiceNodePlan::new(VoiceOp::Constant(1.2), Vec::new()),
-                VoiceNodePlan::new(VoiceOp::Constant(0.12), Vec::new()),
-                VoiceNodePlan::new(VoiceOp::PianoPartial, vec![0, 1, 2, 3, 4, 5, 6, 7]),
-                VoiceNodePlan::new(VoiceOp::Output, vec![8]),
-            ],
-            9,
-        );
-        let mut state = VoiceState::new(32);
-        let empty = [[0.0_f64; 64]; 0];
-        let inputs = VoiceBlockInputs::new(&empty, 64, 48_000.0);
-        let mut block = [0.0_f32; 64];
-        assert!(plan.process_block_inputs(
-            &mut state,
-            test_context(0.1),
-            &inputs,
-            48_000.0,
-            &mut block
-        ));
-        assert!(block.iter().any(|value| value.abs() > 1e-9));
-    }
-
-    #[test]
     fn repeat_result_and_damper_are_audible() {
         let body = VoicePlan::new(
             vec![
                 VoiceNodePlan::new(VoiceOp::Constant(220.0), Vec::new()),
-                VoiceNodePlan::new(VoiceOp::Constant(0.8), Vec::new()),
-                VoiceNodePlan::new(VoiceOp::Constant(0.1), Vec::new()),
                 VoiceNodePlan::new(VoiceOp::Constant(0.0), Vec::new()),
-                VoiceNodePlan::new(VoiceOp::Constant(0.0004), Vec::new()),
-                VoiceNodePlan::new(VoiceOp::Constant(0.5), Vec::new()),
-                VoiceNodePlan::new(VoiceOp::Constant(1.2), Vec::new()),
-                VoiceNodePlan::new(VoiceOp::Constant(0.12), Vec::new()),
-                VoiceNodePlan::new(VoiceOp::PianoPartial, vec![0, 1, 2, 3, 4, 5, 6, 7]),
-                VoiceNodePlan::new(VoiceOp::Output, vec![8]),
+                VoiceNodePlan::new(VoiceOp::Constant(0.1), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Sine, vec![0, 1, 2]),
+                VoiceNodePlan::new(VoiceOp::Output, vec![3]),
             ],
-            9,
+            4,
         );
         let plan = VoicePlan::new(
             vec![
@@ -6662,7 +6448,7 @@ mod tests {
                     VoiceOp::Repeat {
                         zone: "partial".to_string(),
                         body: Box::new(body),
-                        outputs: vec![9],
+                        outputs: vec![4],
                         carried: 0,
                     },
                     vec![0],
@@ -6801,7 +6587,7 @@ mod tests {
     }
 
     #[test]
-    fn fused_repeat_reads_body_inputs() {
+    fn repeat_accumulator_reads_body_inputs() {
         let body = VoicePlan::new(
             vec![
                 VoiceNodePlan::new(VoiceOp::Input(0), Vec::new()),
@@ -6812,11 +6598,17 @@ mod tests {
                 VoiceNodePlan::new(VoiceOp::Input(5), Vec::new()),
                 VoiceNodePlan::new(VoiceOp::Input(6), Vec::new()),
                 VoiceNodePlan::new(VoiceOp::Iteration, Vec::new()),
-                VoiceNodePlan::new(VoiceOp::PianoPartial, vec![1, 2, 3, 7, 4, 5, 6]),
-                VoiceNodePlan::new(VoiceOp::Add, vec![0, 8]),
-                VoiceNodePlan::new(VoiceOp::Output, vec![9]),
+                VoiceNodePlan::new(VoiceOp::IntToFloat, vec![7]),
+                VoiceNodePlan::new(VoiceOp::Add, vec![1, 2]),
+                VoiceNodePlan::new(VoiceOp::Add, vec![9, 3]),
+                VoiceNodePlan::new(VoiceOp::Add, vec![10, 4]),
+                VoiceNodePlan::new(VoiceOp::Add, vec![11, 5]),
+                VoiceNodePlan::new(VoiceOp::Add, vec![12, 6]),
+                VoiceNodePlan::new(VoiceOp::Add, vec![13, 8]),
+                VoiceNodePlan::new(VoiceOp::Add, vec![0, 14]),
+                VoiceNodePlan::new(VoiceOp::Output, vec![15]),
             ],
-            10,
+            16,
         );
         let plan = VoicePlan::new(
             vec![
@@ -6832,7 +6624,7 @@ mod tests {
                     VoiceOp::Repeat {
                         zone: "partials".to_string(),
                         body: Box::new(body),
-                        outputs: vec![10],
+                        outputs: vec![16],
                         carried: 1,
                     },
                     vec![0, 1, 2, 3, 4, 5, 6, 7],
@@ -6841,6 +6633,17 @@ mod tests {
                 VoiceNodePlan::new(VoiceOp::Output, vec![9]),
             ],
             10,
+        )
+        .optimize();
+        let Some(body) = plan.nodes.iter().find_map(|node| match &node.op {
+            VoiceOp::Repeat { body, .. } => Some(body.as_ref()),
+            _ => None,
+        }) else {
+            panic!("应有 partial repeat");
+        };
+        assert!(
+            body.repeat_accumulator.is_some(),
+            "线性累加 body 必须编译出 Repeat 累加器"
         );
         let mut state = VoiceState::new(64);
         let mut block = [0.0_f32; 64];
@@ -6854,7 +6657,7 @@ mod tests {
             &mut block
         ));
         let expected = plan.sample(test_context(0.05));
-        assert!(expected.abs() > 1e-9, "融合路径必须发声");
+        assert!(expected.abs() > 1e-9, "累加路径必须发声");
         for value in &block {
             assert!(
                 (f64::from(*value) - expected).abs() < 1e-6,

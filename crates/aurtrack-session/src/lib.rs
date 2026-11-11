@@ -1474,7 +1474,6 @@ fn compile_voice_inner(
             "hammer.exciter" => VoiceOp::Hammer,
             "damper" => VoiceOp::Damper,
             "voice.partial" => VoiceOp::Partial,
-            "voice.piano_partial" => VoiceOp::PianoPartial,
             "voice.iteration" => VoiceOp::Iteration,
             "voice.pitch" => VoiceOp::Pitch,
             "voice.velocity" => VoiceOp::Velocity,
@@ -1925,6 +1924,39 @@ fn migrate_legacy_repeat_groups(project: &mut Project) -> usize {
         .map_or(0, |group| {
             usize::from(migrate_piano_voice_graph(&mut group.graph))
         })
+}
+
+/// 旧工程可能保存过已删除的 `voice.piano_partial` 节点；改写成显式
+/// `voice.group` 调用，让旧工程打开后仍能按组图发声。
+fn migrate_removed_piano_partial(project: &mut Project) -> usize {
+    let mut migrated = 0;
+    for group in project.node_groups.values_mut() {
+        let graph = &mut group.graph;
+        let removed: Vec<NodeId> = graph
+            .nodes
+            .values()
+            .filter(|node| node.type_id == "voice.piano_partial")
+            .map(|node| node.id.clone())
+            .collect();
+        for id in removed {
+            if let Some(node) = graph.nodes.get_mut(&id) {
+                node.type_id = "voice.group".to_string();
+                node.group = Some("piano.partial".to_string());
+                // NOTE: `piano.partial` 没有 position 端口，旧参数和连线一并丢弃。
+                node.params.remove("position");
+            }
+            graph.connections.retain(|connection| {
+                !(connection.to.node() == &id && connection.to.port() == "position")
+            });
+            for connection in &mut graph.connections {
+                if connection.from.node() == &id && connection.from.port() == "out" {
+                    connection.from = PortRef::new(id.clone(), "audio");
+                }
+            }
+            migrated += 1;
+        }
+    }
+    migrated
 }
 
 /// 旧版组实例把接口值混在 `params`；迁移到显式 `port_values`，
@@ -2790,6 +2822,7 @@ impl Session {
             .entry("piano.physical".to_string())
             .or_insert_with(NodeGroup::physical_default);
         let migrated_groups = migrate_legacy_repeat_groups(&mut project);
+        let migrated_partial_nodes = migrate_removed_piano_partial(&mut project);
         let migrated_params = migrate_group_instance_params(&mut project);
         let (next_track, next_device, next_clip, next_note) = validate_project(&project)?;
         let token = self.snapshot("project.open");
@@ -2804,6 +2837,7 @@ impl Session {
             // NOTE: 组内核已移除；保留字段让旧脚本读响应时不缺键。
             "declared_kernels": 0,
             "migrated_params": migrated_params,
+            "migrated_partial_nodes": migrated_partial_nodes,
             "upgraded_builtin": upgraded_builtin,
             "upgraded_soundboards": upgraded_soundboards,
             "project": self.project_summary(),
@@ -6959,7 +6993,7 @@ mod repeat_zone_tests {
         let plan = compile_voice(
             &graph,
             &NodeGroupInterface::piano(),
-            &BTreeMap::new(),
+            &BTreeMap::from([("piano.partial".to_string(), NodeGroup::partial_default())]),
             &BTreeMap::new(),
         )
         .unwrap();
@@ -7000,7 +7034,7 @@ mod repeat_zone_tests {
         let plan = compile_voice(
             &graph,
             &NodeGroupInterface::piano(),
-            &BTreeMap::new(),
+            &BTreeMap::from([("piano.partial".to_string(), NodeGroup::partial_default())]),
             &BTreeMap::new(),
         )
         .unwrap();
@@ -7388,13 +7422,6 @@ mod buffer_tests {
         let mut project = session.project().unwrap().clone();
         silence_hammer(&mut project);
         let repeat = compiled_repeat(&project);
-        assert!(
-            repeat
-                .nodes
-                .iter()
-                .all(|node| !matches!(node.op, VoiceOp::PianoPartial)),
-            "内核删除后 body 不应再出现 PianoPartial"
-        );
         let call = repeat.nodes.iter().find_map(|node| match &node.op {
             VoiceOp::GroupCall { outputs, .. } => Some((node.inputs.clone(), outputs.clone())),
             _ => None,
@@ -7420,6 +7447,43 @@ mod buffer_tests {
         assert!(
             after.repeat_accumulations > before.repeat_accumulations,
             "Repeat 累加器应命中"
+        );
+    }
+
+    #[test]
+    fn compiled_piano_plan_has_no_dedicated_partial_op() {
+        let mut session = Session::default();
+        for request in [
+            json!({ "cmd": "project.create", "args": { "name": "no-dedicated-op" } }),
+            json!({ "cmd": "track.create", "args": { "name": "piano", "source": "physical" } }),
+            json!({ "cmd": "clip.create", "args": { "track_id": "track-1", "start": 0, "duration": 1 } }),
+            json!({ "cmd": "note.add", "args": {
+                "path": "/tracks/track-1/clips/clip-1",
+                "pitch": 64, "start": 0.0, "duration": 0.4, "velocity": 0.8
+            } }),
+        ] {
+            let request: CommandRequest = serde_json::from_value(request).unwrap();
+            session.execute(&request).unwrap();
+        }
+        // NOTE: 专用节点已从注册表删除；这里用文本断言防止它被重新引入。
+        assert!(
+            aurtrack_graph::VOICE_NODE_TYPES
+                .iter()
+                .all(|node_type| node_type.id != "voice.piano_partial")
+        );
+        let project = session.project().unwrap();
+        let (_, _, plan) = project.tracks[0]
+            .playback_graph(&project.node_groups, &project.audio_groups)
+            .unwrap();
+        let voice = plan.pianos[0].voice.as_ref().unwrap();
+        let compiled = format!("{voice:?}");
+        assert!(
+            !compiled.contains("PianoPartial"),
+            "编译后的计划不应再出现专用 piano partial op"
+        );
+        assert!(
+            compiled.contains("GroupCall"),
+            "partial 必须通过显式组调用展开"
         );
     }
 
@@ -7690,12 +7754,6 @@ mod buffer_tests {
                 .iter()
                 .any(|node| matches!(node.op, VoiceOp::GroupCall { .. }))
         );
-        assert!(
-            repeat
-                .nodes
-                .iter()
-                .all(|node| !matches!(node.op, VoiceOp::PianoPartial))
-        );
         let group_call = repeat.nodes.iter().find_map(|node| match &node.op {
             VoiceOp::GroupCall { outputs, .. } => Some((node.inputs.clone(), outputs.clone())),
             _ => None,
@@ -7850,13 +7908,6 @@ mod buffer_tests {
         let Some(repeat) = repeat else {
             panic!("物理钢琴应有 partial repeat");
         };
-        assert!(
-            repeat
-                .nodes
-                .iter()
-                .all(|node| !matches!(node.op, VoiceOp::PianoPartial)),
-            "物理钢琴不应再依赖 partial 专用内核"
-        );
         assert_eq!(
             repeat
                 .nodes
@@ -7999,6 +8050,19 @@ mod migration_tests {
         let input = NodeId::fixed("p-in");
         let output = NodeId::fixed("p-out");
         let header = NodeId::fixed("partials");
+        // NOTE: 旧工程里的 partial 是内联 `voice.partial`，没有组实例参数。
+        if let Some(node) = graph.nodes.get_mut(&NodeId::fixed("p-partial")) {
+            node.type_id = "voice.partial".to_string();
+            node.group = None;
+            node.params.clear();
+        }
+        for connection in &mut graph.connections {
+            if connection.from.node() == &NodeId::fixed("p-partial")
+                && connection.from.port() == "audio"
+            {
+                connection.from = PortRef::new(NodeId::fixed("p-partial"), "out");
+            }
+        }
         graph.connections.retain(|connection| {
             !(connection.from.node() == &NodeId::fixed("note-separate")
                 && matches!(connection.from.port(), "pitch" | "velocity")
@@ -8205,6 +8269,89 @@ mod migration_tests {
                 && connection.to.node() == &NodeId::fixed("p-partial")
                 && connection.to.port() == "pitch"
         }));
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn project_open_migrates_removed_piano_partial_node() {
+        let path = std::env::temp_dir()
+            .join(format!(
+                "aurtrack-removed-partial-{}.aurtrack.json",
+                std::process::id()
+            ))
+            .to_string_lossy()
+            .into_owned();
+        let mut session = Session::default();
+        session
+            .execute(&CommandRequest {
+                cmd: "project.create".to_string(),
+                args: json!({ "name": "removed-partial" }),
+            })
+            .unwrap();
+        session
+            .execute(&CommandRequest {
+                cmd: "track.create".to_string(),
+                args: json!({ "name": "piano", "source": "piano" }),
+            })
+            .unwrap();
+        {
+            let project = session.project.as_mut().unwrap();
+            let graph = &mut project.node_groups.get_mut("piano.voice").unwrap().graph;
+            let partial = NodeId::fixed("p-partial");
+            if let Some(node) = graph.nodes.get_mut(&partial) {
+                node.type_id = "voice.piano_partial".to_string();
+                node.group = None;
+            }
+            for connection in &mut graph.connections {
+                if connection.from.node() == &partial && connection.from.port() == "audio" {
+                    connection.from = PortRef::new(partial.clone(), "out");
+                }
+            }
+            graph.nodes.insert(
+                NodeId::fixed("legacy-position"),
+                VoiceNode::new(NodeId::fixed("legacy-position"), "value.float"),
+            );
+            graph.connections.push(VoiceConnection::new(
+                PortRef::new(NodeId::fixed("legacy-position"), "out"),
+                PortRef::new(partial, "position"),
+            ));
+        }
+        session
+            .execute(&CommandRequest {
+                cmd: "project.save".to_string(),
+                args: json!({ "path": path }),
+            })
+            .unwrap();
+
+        let mut opened = Session::default();
+        let response = opened
+            .execute(&CommandRequest {
+                cmd: "project.open".to_string(),
+                args: json!({ "path": path }),
+            })
+            .unwrap();
+        assert_eq!(response.data["migrated_partial_nodes"], 1);
+        let project = opened.project.as_ref().unwrap();
+        let graph = &project.node_groups["piano.voice"].graph;
+        let partial = &graph.nodes[&NodeId::fixed("p-partial")];
+        assert_eq!(partial.type_id, "voice.group");
+        assert_eq!(partial.group.as_deref(), Some("piano.partial"));
+        assert!(
+            !graph
+                .connections
+                .iter()
+                .any(|connection| connection.to.port() == "position"),
+            "组接口没有 position 端口，旧连线必须删除"
+        );
+        assert!(graph.connections.iter().any(|connection| {
+            connection.from.node() == &NodeId::fixed("p-partial")
+                && connection.from.port() == "audio"
+        }));
+        let (_, _, plan) = project.tracks[0]
+            .playback_graph(&project.node_groups, &project.audio_groups)
+            .unwrap();
+        let voice = plan.pianos[0].voice.as_ref().unwrap();
+        assert!(format!("{voice:?}").contains("GroupCall"));
         let _ = std::fs::remove_file(path);
     }
 

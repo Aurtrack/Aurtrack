@@ -101,5 +101,5 @@ output = sum
 - `rest` 含状态节点、`Partial`/`PianoPartial`、`OscPartials` 等未支持操作时
   不编译累加器；
 - 帧循环仍是 f64 标量数学，sin/exp 是主要成本；没有 SIMD 或近似三角函数；
-- `voice.piano_partial` 节点和 `VoiceOp::PianoPartial` 保留给旧的内联钢琴图，
-  它们不再是组内核，也不参与物理/开放钢琴的 Repeat 路径。
+- `voice.piano_partial` 节点和 `VoiceOp::PianoPartial` 曾保留给旧的内联钢琴图；
+  ADR 0021 已删除它们，默认钢琴图改为显式组调用。
