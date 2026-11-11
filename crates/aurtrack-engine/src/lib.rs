@@ -37,6 +37,9 @@ pub const NOTE_FADE_SECONDS: f64 = 0.005;
 /// 默认音频 block 大小；节点按 block 处理，而不是逐采样分派。
 pub const DEFAULT_BLOCK_SIZE: usize = 64;
 
+/// 标量输入版 block API 支持的最大输入槽数。
+const MAX_SCALAR_INPUTS: usize = 8;
+
 const DECLICK_FADE_SECONDS: f64 = 0.003;
 /// block 混音低于该峰值且存在活跃音符时视为异常静音。
 const BLOCK_SILENCE_EPS: f32 = 1.0e-6;
@@ -1981,6 +1984,39 @@ impl VoicePlan {
                 }
                 true
             },
+            VoiceOp::MapRange => {
+                let mut args = [[0.0_f32; 64]; 5];
+                args[2].fill(1.0);
+                args[4].fill(1.0);
+                for (slot, values) in args.iter_mut().enumerate() {
+                    if let Some(input) = node.inputs.get(slot)
+                        && !self.eval_top_block(
+                            *input,
+                            state,
+                            context,
+                            inputs,
+                            frames,
+                            &mut values[..frames],
+                        )
+                    {
+                        return false;
+                    }
+                }
+                for (frame, slot) in output.iter_mut().enumerate() {
+                    let value = f64::from(args[0][frame]);
+                    let from_min = f64::from(args[1][frame]);
+                    let from_max = f64::from(args[2][frame]);
+                    let to_min = f64::from(args[3][frame]);
+                    let to_max = f64::from(args[4][frame]);
+                    let span = from_max - from_min;
+                    *slot = if span.abs() < 1e-12 {
+                        to_min
+                    } else {
+                        to_min + (value - from_min) / span * (to_max - to_min)
+                    } as f32;
+                }
+                true
+            },
             VoiceOp::GreaterThan | VoiceOp::LessThan => {
                 let Some(right) = node.inputs.get(1) else {
                     return false;
@@ -2146,6 +2182,9 @@ impl VoicePlan {
     }
 
     /// 无状态 VoicePlan 的 block 路径；有状态或空间不足时返回 false。
+    ///
+    /// 标量输入按整块常量填充；输入槽超过 `MAX_SCALAR_INPUTS` 时返回
+    /// false，由调用方决定是否回退。该函数不分配、不加锁。
     pub fn process_block(
         &self,
         state: &mut VoiceState,
@@ -2154,9 +2193,12 @@ impl VoicePlan {
         sample_rate: f64,
         output: &mut [f32],
     ) -> bool {
+        let frames = output.len();
+        if frames > DEFAULT_BLOCK_SIZE {
+            return false;
+        }
         if let Some((body, count)) = self.repeat_body() {
             let mut block = [0.0_f32; 64];
-            let frames = output.len();
             for iteration in 0..count {
                 let mut loop_context = context;
                 loop_context.iteration = iteration as u64;
@@ -2173,14 +2215,17 @@ impl VoicePlan {
             output.copy_from_slice(&block[..frames]);
             return true;
         }
-        let Some(ssa) = VoiceSsa::compile(self) else {
-            return false;
-        };
-        if state.scratch.len() < ssa.instruction_count() {
+        // NOTE: 这里不能每块调用 `VoiceSsa::compile` 兜底；那会在音频线程
+        // 分配 HashMap、Vec 和格式化字符串。无状态图直接复用 block 求值器。
+        if inputs.len() > MAX_SCALAR_INPUTS {
             return false;
         }
-        ssa.process_block(context, inputs, sample_rate, &mut state.scratch, output);
-        true
+        let mut input_blocks = [[0.0_f64; 64]; MAX_SCALAR_INPUTS];
+        for (slot, value) in inputs.iter().enumerate() {
+            input_blocks[slot][..frames].fill(*value);
+        }
+        let block_inputs = VoiceBlockInputs::new(&input_blocks, frames, sample_rate);
+        self.eval_top_block(self.output, state, context, &block_inputs, frames, output)
     }
 
     pub fn process_block_inputs(
@@ -2192,6 +2237,9 @@ impl VoicePlan {
         output: &mut [f32],
     ) -> bool {
         BLOCK_CALLS.fetch_add(1, Ordering::Relaxed);
+        if output.len() > DEFAULT_BLOCK_SIZE {
+            return false;
+        }
         if self.eval_top_block(self.output, state, context, inputs, output.len(), output) {
             return true;
         }
@@ -2202,7 +2250,7 @@ impl VoicePlan {
             let carried_count = carried.min(8);
             for iteration in 0..count {
                 body_inputs[..carried_count].copy_from_slice(&carried_block[..carried_count]);
-                let body_values = VoiceBlockInputs::new(&body_inputs, frames, inputs.sample_rate());
+                let body_values = VoiceBlockInputs::new(&body_inputs, frames, sample_rate);
                 let mut loop_context = context;
                 loop_context.iteration = iteration as u64;
                 if !body.process_block_inputs(
@@ -2222,14 +2270,9 @@ impl VoicePlan {
             }
             return true;
         }
-        let Some(ssa) = VoiceSsa::compile(self) else {
-            return false;
-        };
-        if state.scratch.len() < ssa.instruction_count() || output.len() > inputs.frames() {
-            return false;
-        }
-        ssa.process_block_inputs(context, inputs, sample_rate, &mut state.scratch, output);
-        true
+        // NOTE: 不能用逐块 `VoiceSsa::compile` 兜底；那会在音频线程分配。
+        // 无法走 block 的图必须返回 false，让调用方回退到逐采样。
+        false
     }
 
     /// 兼容 block API：当前仍逐采样求值，调用方传入输出缓冲，不分配。
@@ -6385,6 +6428,29 @@ mod tests {
             context.local_time += offset as f64 / 48_000.0;
             assert!((f64::from(*value) - plan.sample(context)).abs() < 1e-6);
         }
+    }
+
+    #[test]
+    fn voice_process_block_supports_map_range() {
+        let plan = VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Constant(0.5), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(0.0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(1.0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(10.0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(20.0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::MapRange, vec![0, 1, 2, 3, 4]),
+                VoiceNodePlan::new(VoiceOp::Output, vec![5]),
+            ],
+            6,
+        );
+        let mut state = VoiceState::new(16);
+        let mut block = [0.0_f32; 64];
+        assert!(plan.process_block(&mut state, test_context(0.0), &[], 48_000.0, &mut block));
+        assert!(
+            block.iter().all(|value| (*value - 15.0).abs() < 1e-6),
+            "MapRange 应映射到 15"
+        );
     }
 
     #[test]
