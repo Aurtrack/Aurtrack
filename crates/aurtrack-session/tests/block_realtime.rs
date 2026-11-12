@@ -1,6 +1,7 @@
 //! 职责：
 //! - 验证 `Playback::render` 的 block 热路径不分配
-//! - 用生产同源的物理钢琴计划覆盖 8/12 音
+//! - 用生产同源的物理钢琴计划覆盖 8/12 音、32/64/128 同时音符
+//! - 覆盖 300 个顺序音符的声部分配与离线压力基准
 //!
 //! 禁止：
 //! - 把分配计数或计时逻辑放进生产 crate
@@ -71,29 +72,54 @@ fn allocation_count() -> u64 {
 
 /// 用命令总线搭一个与 `playback_block_benchmark` 同源的物理钢琴工程。
 fn build_playback(note_count: usize) -> (Playback, u32) {
+    let notes: Vec<(u16, f64, f64)> = (0..note_count)
+        // NOTE: 同时音符不能随 index 递增 pitch；循环一个八度才不会越过
+        // MIDI 127 上限，128 音压力测试才有意义。
+        .map(|index| ((60 + index % 12) as u16, 0.0, 1.0))
+        .collect();
+    build_playback_with(&notes, note_count.max(8), 2.0)
+}
+
+/// 按给定的 `(pitch, start, duration)` 搭工程；`polyphony` 走命令注册表。
+fn build_playback_with(
+    notes: &[(u16, f64, f64)],
+    polyphony: usize,
+    clip_seconds: f64,
+) -> (Playback, u32) {
     let mut session = Session::default();
     for request in [
         json!({ "cmd": "project.create", "args": { "name": "block-realtime" } }),
         json!({ "cmd": "track.create", "args": { "name": "piano", "source": "physical" } }),
-        json!({ "cmd": "clip.create", "args": { "track_id": "track-1", "start": 0, "duration": 2 } }),
+        json!({
+            "cmd": "track.polyphony",
+            "args": { "track_id": "track-1", "polyphony": polyphony },
+        }),
+        json!({
+            "cmd": "clip.create",
+            "args": { "track_id": "track-1", "start": 0, "duration": clip_seconds },
+        }),
     ] {
         let request: CommandRequest = serde_json::from_value(request).unwrap();
         session.execute(&request).unwrap();
     }
-    for index in 0..note_count {
+    for (pitch, start, duration) in notes {
         session
             .execute(&CommandRequest {
                 cmd: "note.add".to_string(),
                 args: json!({
                     "path": "/tracks/track-1/clips/clip-1",
-                    "pitch": 60 + index,
-                    "start": 0,
-                    "duration": 1,
+                    "pitch": pitch,
+                    "start": start,
+                    "duration": duration,
                     "velocity": 0.8,
                 }),
             })
             .unwrap();
     }
+    build_playback_from_session(&session, clip_seconds)
+}
+
+fn build_playback_from_session(session: &Session, length_seconds: f64) -> (Playback, u32) {
     let project = session.project().unwrap().clone();
     let track = &project.tracks[0];
     let (frequency, adsr, graph) = track
@@ -119,7 +145,7 @@ fn build_playback(note_count: usize) -> (Playback, u32) {
         sample_rate: project.sample_rate,
         loop_start_seconds: 0.0,
         loop_seconds: 0.0,
-        length_seconds: 2.0,
+        length_seconds,
         tracks: vec![TrackPlan {
             frequency,
             gain: 1.0,
@@ -139,6 +165,17 @@ fn build_playback(note_count: usize) -> (Playback, u32) {
     let playback = Playback::new(project.sample_rate);
     playback.set_plan(plan);
     (playback, project.sample_rate)
+}
+
+fn piano_voice_stats(playback: &Playback) -> aurtrack_engine::VoiceStats {
+    playback
+        .plan()
+        .tracks
+        .first()
+        .and_then(|track| track.graph.as_ref())
+        .and_then(|graph| graph.pianos.first())
+        .map(aurtrack_engine::PianoPlan::voice_stats)
+        .unwrap_or_default()
 }
 
 #[test]
@@ -208,6 +245,78 @@ fn block_render_does_not_allocate() {
             "渲染窗口必须覆盖制音器尾音段"
         );
     }
+}
+
+#[test]
+#[ignore = "复音压力基准，需 release 运行"]
+fn polyphony_stress_benchmark() {
+    let budget = 2.0;
+    for note_count in [32, 64, 128] {
+        let notes: Vec<(u16, f64, f64)> = (0..note_count)
+            .map(|index| ((60 + index % 12) as u16, 0.0, 1.0))
+            .collect();
+        let (playback, sample_rate) = build_playback_with(&notes, note_count, 2.0);
+        aurtrack_engine::reset_block_stats();
+        playback.play();
+        let mut output = vec![0.0_f32; sample_rate as usize * 2];
+        let started = Instant::now();
+        playback.render(&mut output);
+        let elapsed = started.elapsed();
+        let peak = output
+            .iter()
+            .fold(0.0_f32, |peak, value| peak.max(value.abs()));
+        let stats = aurtrack_engine::block_stats();
+        let voices = piano_voice_stats(&playback);
+        println!(
+            "simultaneous={note_count} elapsed={elapsed:?} ratio={:.3} peak={peak} \
+             voices={voices:?} piano_fallbacks={}",
+            elapsed.as_secs_f64() / budget,
+            stats.piano_block_fallbacks
+        );
+        assert!(peak > 1.0e-4, "压力基准不应静音，peak={peak}");
+        assert_eq!(
+            stats.piano_block_fallbacks, 0,
+            "复音压力不允许 PianoPlan 整块回退"
+        );
+        assert_eq!(
+            voices.voice_starts, note_count as u64,
+            "每个同时音符都必须进入声部分配"
+        );
+        assert_eq!(voices.voice_drops, 0);
+        assert_eq!(voices.voice_steals, 0, "复音上限足够时不允许抢占");
+        if cfg!(not(debug_assertions)) && note_count == 64 {
+            assert!(
+                elapsed.as_secs_f64() <= budget,
+                "64 同时音符 2 秒离线渲染 {elapsed:?} 超过实时 {budget}s"
+            );
+        }
+    }
+
+    // 300 个顺序音符：每个都必须被 block 处理，不能只处理前 128 个。
+    let notes: Vec<(u16, f64, f64)> = (0..300_u16)
+        .map(|index| (48 + index % 12, f64::from(index) * 0.002, 0.01))
+        .collect();
+    let (playback, sample_rate) = build_playback_with(&notes, 128, 0.8);
+    aurtrack_engine::reset_block_stats();
+    playback.play();
+    let mut output = vec![0.0_f32; sample_rate as usize * 2];
+    let started = Instant::now();
+    playback.render(&mut output);
+    let elapsed = started.elapsed();
+    let peak = output
+        .iter()
+        .fold(0.0_f32, |peak, value| peak.max(value.abs()));
+    let stats = aurtrack_engine::block_stats();
+    let voices = piano_voice_stats(&playback);
+    println!(
+        "sequential=300 elapsed={elapsed:?} peak={peak} voices={voices:?} \
+         piano_fallbacks={}",
+        stats.piano_block_fallbacks
+    );
+    assert!(peak > 1.0e-4, "300 顺序音符不应静音");
+    assert_eq!(stats.piano_block_fallbacks, 0);
+    assert_eq!(voices.voice_starts, 300, "300 个顺序音符必须全部经过分配");
+    assert_eq!(voices.voice_drops, 0, "顺序音符不允许丢音");
 }
 
 #[test]
