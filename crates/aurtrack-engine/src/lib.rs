@@ -3611,6 +3611,9 @@ impl VoiceAllocator {
     }
 
     /// 按固定规则分配槽位：空闲 → 已释放最旧 → 最轻 → 最旧。
+    ///
+    /// 返回槽位下标；调用方负责重置该槽的 `VoiceState`（旧包络不能污染新
+    /// 音符）。池为空时返回 `NO_NOTE` 并显式计入丢音。
     fn allocate(
         &mut self,
         note_index: usize,
@@ -3618,7 +3621,7 @@ impl VoiceAllocator {
         note_start: f64,
         gate_off: f64,
         now: f64,
-    ) {
+    ) -> usize {
         let limit = self.polyphony.min(self.slots.len());
         let mut picked = None;
         for index in 0..limit {
@@ -3659,7 +3662,7 @@ impl VoiceAllocator {
             // NOTE: 复音上限被钳在 1 以上，理论上不可达；保留显式计数以防
             // 以后出现 0 复音或空池的配置错误被当成正常输出。
             self.stats.voice_drops = self.stats.voice_drops.saturating_add(1);
-            return;
+            return NO_NOTE;
         };
         let dropped = stolen && !self.slots[slot].rendered;
         if stolen {
@@ -3678,6 +3681,7 @@ impl VoiceAllocator {
         };
         self.next_sequence = self.next_sequence.saturating_add(1);
         self.stats.voice_starts = self.stats.voice_starts.saturating_add(1);
+        slot
     }
 }
 
@@ -4065,13 +4069,19 @@ impl PianoPlan {
                 break;
             }
             cursor = cursor.max(frame);
-            allocator.allocate(
+            let slot = allocator.allocate(
                 index,
                 note.velocity,
                 note.start,
                 note.start + note.duration,
                 note.start.max(start_time),
             );
+            if slot != NO_NOTE {
+                // SAFETY: 音频线程是唯一写入者；slot 小于槽位池长度。
+                // NOTE: 槽位会被不同音符复用，必须重置包络状态，否则被抢占
+                // 声部的高电平会直接叠到新音符的起音上。
+                unsafe { self.states.get_mut(slot) }.reset();
+            }
             allocator.cursor = Some((key_time, index));
         }
         if block_ok && cursor < frames {
@@ -7841,6 +7851,50 @@ mod tests {
             "同帧被抢占且尚未渲染的音符必须显式计数，不能静默消失"
         );
         assert_eq!(stats.active_voices, 4);
+    }
+
+    /// 抢占必须重置旧声部状态：新音符的起音只能从零电平开始。
+    #[test]
+    fn voice_steal_resets_previous_envelope() {
+        let piano = damper_piano_with(0.0001, 1);
+        let notes = [
+            NotePlan {
+                start: 0.0,
+                duration: 1.0,
+                frequency: 220.0,
+                velocity: 0.8,
+            },
+            NotePlan {
+                start: 0.1,
+                duration: 1.0,
+                frequency: 330.0,
+                velocity: 0.8,
+            },
+        ];
+        // 先把 note 0 推到制音器电平接近 1；第 75 块从 0.1 起，note 1 在
+        // 帧 0 抢占它。
+        let mut block = [0.0_f32; DEFAULT_BLOCK_SIZE];
+        for index in 0..75 {
+            let start_time = (index * DEFAULT_BLOCK_SIZE) as f64 / 48_000.0;
+            piano.sample_block(&notes, start_time, 48_000.0, &mut block);
+        }
+        piano.sample_block(
+            &notes,
+            75.0 * DEFAULT_BLOCK_SIZE as f64 / 48_000.0,
+            48_000.0,
+            &mut block,
+        );
+        let stats = piano.voice_stats();
+        assert_eq!(stats.voice_starts, 2);
+        assert_eq!(stats.voice_steals, 1);
+        assert_eq!(stats.voice_drops, 0);
+        // 新音符第一帧的制音器电平应从 0 起算：0.01 × 0.18。
+        assert!(
+            block[0].abs() < 0.01,
+            "抢占后新音符的起音带上了旧包络：{}",
+            block[0]
+        );
+        assert!(block[0].abs() > 1.0e-6);
     }
 
     /// 尾音结束后槽位必须回到空闲池并可直接复用，而不是继续抢占。
