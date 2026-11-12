@@ -3431,6 +3431,14 @@ impl VoiceStateStore {
         self.0 = std::cell::UnsafeCell::new(states);
     }
 
+    /// 控制线程按复音上限扩缩槽位；新槽从零状态开始。
+    fn resize(&mut self, len: usize) {
+        // SAFETY: `&mut self` 保证控制线程独占访问，音频线程此时不渲染。
+        unsafe {
+            (*self.0.get()).resize_with(len, || VoiceState::new(0));
+        }
+    }
+
     /// SAFETY: 调用方必须是唯一音频渲染线程，且 index 小于 len。
     #[allow(clippy::mut_from_ref)]
     unsafe fn get_mut(&self, index: usize) -> &mut VoiceState {
@@ -3458,6 +3466,274 @@ impl Clone for VoiceStateStore {
     }
 }
 
+/// 默认复音上限；显式常量，不随 CPU 负载或块大小变化。
+pub const DEFAULT_POLYPHONY: usize = 64;
+
+/// 单个乐器允许请求的最大复音数。
+pub const MAX_POLYPHONY: usize = 256;
+
+const NO_NOTE: usize = usize::MAX;
+
+/// 复音分配统计。音频线程写，控制线程在播放停止或测试结束后读。
+#[non_exhaustive]
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct VoiceStats {
+    /// 当前占用槽位的活动声部数。
+    pub active_voices: usize,
+    /// 分配过的 note-on 总数，含后来被抢占的声部。
+    pub voice_starts: u64,
+    /// 因复音上限被抢占的次数。
+    pub voice_steals: u64,
+    /// 尚未渲染任何一帧就被抢占的音符数；正常密度下恒为 0。
+    pub voice_drops: u64,
+}
+
+/// 统计的跨线程快照槽；音频线程按块发布，控制线程随时读取。
+#[derive(Debug, Default)]
+struct VoiceStatsCell {
+    active_voices: AtomicUsize,
+    voice_starts: AtomicU64,
+    voice_steals: AtomicU64,
+    voice_drops: AtomicU64,
+}
+
+impl VoiceStatsCell {
+    fn publish(&self, stats: VoiceStats) {
+        self.active_voices
+            .store(stats.active_voices, Ordering::Relaxed);
+        self.voice_starts
+            .store(stats.voice_starts, Ordering::Relaxed);
+        self.voice_steals
+            .store(stats.voice_steals, Ordering::Relaxed);
+        self.voice_drops.store(stats.voice_drops, Ordering::Relaxed);
+    }
+
+    fn load(&self) -> VoiceStats {
+        VoiceStats {
+            active_voices: self.active_voices.load(Ordering::Relaxed),
+            voice_starts: self.voice_starts.load(Ordering::Relaxed),
+            voice_steals: self.voice_steals.load(Ordering::Relaxed),
+            voice_drops: self.voice_drops.load(Ordering::Relaxed),
+        }
+    }
+}
+
+impl Clone for VoiceStatsCell {
+    fn clone(&self) -> Self {
+        // NOTE: 复制计划不继承播放统计；新计划从零开始。
+        Self::default()
+    }
+}
+
+/// 一个 note → `VoiceState` 槽的分配记录；`note_index == NO_NOTE` 表示空闲。
+#[derive(Debug, Clone)]
+struct VoiceSlot {
+    note_index: usize,
+    velocity: f64,
+    note_start: f64,
+    gate_off: f64,
+    sequence: u64,
+    /// 本槽当前音符是否已经渲染过至少一帧；抢占时用来统计静默丢弃。
+    rendered: bool,
+}
+
+impl VoiceSlot {
+    fn idle() -> Self {
+        Self {
+            note_index: NO_NOTE,
+            velocity: 0.0,
+            note_start: 0.0,
+            gate_off: 0.0,
+            sequence: 0,
+            rendered: false,
+        }
+    }
+
+    fn is_active(&self) -> bool {
+        self.note_index != NO_NOTE
+    }
+}
+
+/// 预分配的声部槽池；音频线程只改槽内容，不改长度。
+#[derive(Debug, Clone)]
+struct VoiceAllocator {
+    slots: Vec<VoiceSlot>,
+    polyphony: usize,
+    next_sequence: u64,
+    stats: VoiceStats,
+    /// 上一块结束时刻；块不连续时按块边界重建分配。
+    next_block_start: Option<f64>,
+    /// 已处理到的 note-on 游标；同一音符不会被重复分配，块末帧的起音
+    /// 会顺延到下一块，不会因为块边界浮点舍入丢失。
+    cursor: Option<(f64, usize)>,
+}
+
+impl VoiceAllocator {
+    fn new(polyphony: usize) -> Self {
+        let polyphony = polyphony.clamp(1, MAX_POLYPHONY);
+        Self {
+            slots: (0..polyphony).map(|_| VoiceSlot::idle()).collect(),
+            polyphony,
+            next_sequence: 0,
+            stats: VoiceStats::default(),
+            next_block_start: None,
+            cursor: None,
+        }
+    }
+
+    fn set_polyphony(&mut self, polyphony: usize) {
+        self.polyphony = polyphony.clamp(1, MAX_POLYPHONY);
+        self.slots.resize_with(self.polyphony, VoiceSlot::idle);
+        self.stats.active_voices = self.stats.active_voices.min(self.polyphony);
+        self.next_block_start = None;
+        self.cursor = None;
+    }
+
+    fn resize(&mut self, capacity: usize) {
+        self.slots.resize_with(capacity.max(1), VoiceSlot::idle);
+        self.polyphony = self.polyphony.clamp(1, self.slots.len());
+        self.next_block_start = None;
+        self.cursor = None;
+    }
+
+    /// 清空所有分配，保留累计计数；音频线程在 seek/stop 边界调用。
+    fn reset_voices(&mut self) {
+        for slot in &mut self.slots {
+            *slot = VoiceSlot::idle();
+        }
+        self.stats.active_voices = 0;
+        self.next_block_start = None;
+        self.cursor = None;
+    }
+
+    fn active_count(&self) -> usize {
+        self.slots.iter().filter(|slot| slot.is_active()).count()
+    }
+
+    /// 按固定规则分配槽位：空闲 → 已释放最旧 → 最轻 → 最旧。
+    fn allocate(
+        &mut self,
+        note_index: usize,
+        velocity: f64,
+        note_start: f64,
+        gate_off: f64,
+        now: f64,
+    ) {
+        let limit = self.polyphony.min(self.slots.len());
+        let mut picked = None;
+        for index in 0..limit {
+            if !self.slots[index].is_active() {
+                picked = Some((index, false));
+                break;
+            }
+        }
+        if picked.is_none() {
+            let mut best: Option<(f64, u64)> = None;
+            for index in 0..limit {
+                let slot = &self.slots[index];
+                if !slot.is_active() || slot.gate_off > now {
+                    continue;
+                }
+                let key = (slot.gate_off, slot.sequence);
+                if best.is_none_or(|value| earlier_release(key, value)) {
+                    best = Some(key);
+                    picked = Some((index, true));
+                }
+            }
+        }
+        if picked.is_none() {
+            let mut best: Option<(f64, f64, u64)> = None;
+            for index in 0..limit {
+                let slot = &self.slots[index];
+                if !slot.is_active() {
+                    continue;
+                }
+                let key = (slot.velocity, slot.note_start, slot.sequence);
+                if best.is_none_or(|value| lighter_voice(key, value)) {
+                    best = Some(key);
+                    picked = Some((index, true));
+                }
+            }
+        }
+        let Some((slot, stolen)) = picked else {
+            // NOTE: 复音上限被钳在 1 以上，理论上不可达；保留显式计数以防
+            // 以后出现 0 复音或空池的配置错误被当成正常输出。
+            self.stats.voice_drops = self.stats.voice_drops.saturating_add(1);
+            return;
+        };
+        let dropped = stolen && !self.slots[slot].rendered;
+        if stolen {
+            self.stats.voice_steals = self.stats.voice_steals.saturating_add(1);
+            if dropped {
+                self.stats.voice_drops = self.stats.voice_drops.saturating_add(1);
+            }
+        }
+        self.slots[slot] = VoiceSlot {
+            note_index,
+            velocity,
+            note_start,
+            gate_off,
+            sequence: self.next_sequence,
+            rendered: false,
+        };
+        self.next_sequence = self.next_sequence.saturating_add(1);
+        self.stats.voice_starts = self.stats.voice_starts.saturating_add(1);
+    }
+}
+
+/// 已释放最旧的排序键：先比释放时刻，再比分配序号。
+fn earlier_release(candidate: (f64, u64), current: (f64, u64)) -> bool {
+    candidate
+        .0
+        .total_cmp(&current.0)
+        .then(candidate.1.cmp(&current.1))
+        .is_lt()
+}
+
+/// 最轻声部的排序键：力度、起始时刻、分配序号依次比较。
+fn lighter_voice(candidate: (f64, f64, u64), current: (f64, f64, u64)) -> bool {
+    candidate
+        .0
+        .total_cmp(&current.0)
+        .then(candidate.1.total_cmp(&current.1))
+        .then(candidate.2.cmp(&current.2))
+        .is_lt()
+}
+
+#[derive(Debug)]
+struct AllocatorCell(std::cell::UnsafeCell<VoiceAllocator>);
+
+// SAFETY: 与 `VoiceStateStore` 相同：只有唯一音频线程在渲染期修改分配表，
+// 控制线程只在计划替换前整体替换。
+unsafe impl Sync for AllocatorCell {}
+
+impl AllocatorCell {
+    fn get(&self) -> &VoiceAllocator {
+        // SAFETY: 只读；调用方必须保证音频线程此刻不在写。
+        unsafe { &*self.0.get() }
+    }
+
+    /// SAFETY: 调用方必须是唯一音频渲染线程。
+    #[allow(clippy::mut_from_ref)]
+    unsafe fn get_mut(&self) -> &mut VoiceAllocator {
+        // SAFETY: 由调用方保证唯一写者。
+        unsafe { &mut *self.0.get() }
+    }
+
+    fn get_mut_exclusive(&mut self) -> &mut VoiceAllocator {
+        self.0.get_mut()
+    }
+}
+
+impl Clone for AllocatorCell {
+    fn clone(&self) -> Self {
+        // SAFETY: 克隆发生在控制线程，不并发写。
+        Self(std::cell::UnsafeCell::new(unsafe {
+            (*self.0.get()).clone()
+        }))
+    }
+}
+
 #[non_exhaustive]
 #[derive(Debug, Clone)]
 pub struct PianoPlan {
@@ -3467,6 +3743,8 @@ pub struct PianoPlan {
     pub hammer: f64,
     pub voice: Option<VoicePlan>,
     states: VoiceStateStore,
+    allocator: AllocatorCell,
+    stats: VoiceStatsCell,
 }
 
 impl PianoPlan {
@@ -3477,11 +3755,15 @@ impl PianoPlan {
             brightness,
             hammer,
             voice: None,
-            // NOTE: block 声部按音符下标取状态，容量必须覆盖逐采样路径的
-            // `VOICE_STATE_SLOTS`；`MAX_VOICES` 只是图声部上限，不是音符数。
+            // NOTE: 声部状态按槽位池预分配；音符数与复音上限解耦，超过上限
+            // 只会触发确定的抢占，不会整块回退或按 128 取模。
             states: VoiceStateStore(std::cell::UnsafeCell::new(
-                (0..VOICE_STATE_SLOTS).map(|_| VoiceState::new(0)).collect(),
+                (0..DEFAULT_POLYPHONY).map(|_| VoiceState::new(0)).collect(),
             )),
+            allocator: AllocatorCell(std::cell::UnsafeCell::new(VoiceAllocator::new(
+                DEFAULT_POLYPHONY,
+            ))),
+            stats: VoiceStatsCell::default(),
         }
     }
 
@@ -3489,14 +3771,47 @@ impl PianoPlan {
         self.states.len()
     }
 
+    /// 当前复音上限。
+    pub fn polyphony(&self) -> usize {
+        self.allocator.get().polyphony
+    }
+
+    /// 显式设置复音上限；控制线程在计划构建期调用，池随之预分配。
+    pub fn set_polyphony(&mut self, polyphony: usize) {
+        let polyphony = polyphony.clamp(1, MAX_POLYPHONY);
+        self.states.resize(polyphony);
+        let allocator = self.allocator.get_mut_exclusive();
+        allocator.set_polyphony(polyphony);
+        self.stats.publish(allocator.stats);
+    }
+
+    /// 声部分配统计快照；跨线程安全，最多落后一个 block。
+    pub fn voice_stats(&self) -> VoiceStats {
+        self.stats.load()
+    }
+
+    /// 把音频线程刚更新的统计发布到快照槽；按块调用，不分配。
+    fn publish_voice_stats(&self, allocator: &VoiceAllocator) {
+        self.stats.publish(allocator.stats);
+    }
+
     pub fn set_states(&mut self, states: Vec<VoiceState>) {
+        let len = states.len();
         self.states.replace(states);
+        let allocator = self.allocator.get_mut_exclusive();
+        allocator.resize(len);
+        self.stats.publish(allocator.stats);
     }
 
     /// 恢复到新建计划的状态；音频线程在 seek/stop 边界调用，不分配。
     pub fn reset_state(&self) {
         // SAFETY: 音频线程是唯一写入者；这里只遍历既有状态槽。
-        unsafe { self.states.reset() };
+        unsafe {
+            self.states.reset();
+            let allocator = self.allocator.get_mut();
+            allocator.reset_voices();
+            self.stats.publish(allocator.stats);
+        }
         if let Some(voice) = &self.voice {
             voice.reset_state();
         }
@@ -3541,10 +3856,127 @@ impl PianoPlan {
         Some(1.0 / damping.clamp(0.0001, 0.2) / sample_rate.max(1.0))
     }
 
-    /// block 接口：按每个音符的起始帧切段，段内仍走声部 block kernel。
+    /// block 段边界使用的尾音上界。
+    ///
+    /// 只有声部输出经直通后就是制音器时才能证明电平在 `1 / damping` 个采样
+    /// 后精确为零；跳过之后的静音段不改变输出。其余声部保留 0.5 秒窗口。
+    fn render_tail_seconds(&self, sample_rate: f64) -> f64 {
+        self.damper_tail_seconds(sample_rate)
+            .map_or(DEFAULT_NOTE_TAIL_SECONDS, |tail| {
+                tail.min(DEFAULT_NOTE_TAIL_SECONDS)
+            })
+    }
+
+    /// 把活动声部在 `[from, to)` 帧内推进到输出。
+    ///
+    /// 每个声部只按自己的音符窗口切段；段边界必须落在音符起始、gate 翻转和
+    /// 尾音结束帧上，状态才能跨块连续。返回 false 表示声部 block 内核失败。
+    #[allow(clippy::too_many_arguments)]
+    fn render_voices(
+        &self,
+        voice: &VoicePlan,
+        notes: &[NotePlan],
+        allocator: &mut VoiceAllocator,
+        start_time: f64,
+        sample_rate: f64,
+        from: usize,
+        to: usize,
+        tail_seconds: f64,
+        note_block: &mut [f32; DEFAULT_BLOCK_SIZE],
+        output: &mut [f32],
+    ) -> bool {
+        for index in 0..allocator.slots.len() {
+            if !allocator.slots[index].is_active() {
+                continue;
+            }
+            let note_index = allocator.slots[index].note_index;
+            let Some(note) = notes.get(note_index) else {
+                continue;
+            };
+            let note_end = note.start + note.duration;
+            let tail_end = note_end + tail_seconds;
+            // NOTE: 用实际帧时刻比较而不是只做浮点乘加，避免恰在块边界
+            // 的音符多算或少算一帧。
+            let first = from.max(first_frame_at_or_after(
+                start_time,
+                note.start,
+                sample_rate,
+                to,
+            ));
+            let last = to.min(first_frame_after(start_time, tail_end, sample_rate, to));
+            if last <= first {
+                continue;
+            }
+            let gate_off =
+                first_frame_after(start_time, note_end, sample_rate, to).clamp(first, last);
+            // SAFETY: 音频线程是唯一写入者；index 小于槽位池长度。
+            let state = unsafe { self.states.get_mut(index) };
+            if gate_off > first
+                && !render_note_segment(
+                    voice,
+                    state,
+                    note,
+                    note_index,
+                    start_time,
+                    first,
+                    gate_off,
+                    true,
+                    sample_rate,
+                    note_block,
+                    output,
+                )
+            {
+                return false;
+            }
+            if last > gate_off
+                && !render_note_segment(
+                    voice,
+                    state,
+                    note,
+                    note_index,
+                    start_time,
+                    gate_off,
+                    last,
+                    false,
+                    sample_rate,
+                    note_block,
+                    output,
+                )
+            {
+                return false;
+            }
+            allocator.slots[index].rendered = true;
+        }
+        true
+    }
+
+    /// 释放尾音已经结束的槽位；不影响仍在发声的声部。
+    fn release_finished(
+        allocator: &mut VoiceAllocator,
+        notes: &[NotePlan],
+        block_end: f64,
+        tail_seconds: f64,
+    ) {
+        for slot in &mut allocator.slots {
+            if !slot.is_active() {
+                continue;
+            }
+            let finished = notes
+                .get(slot.note_index)
+                .is_none_or(|note| note.start + note.duration + tail_seconds <= block_end);
+            if finished {
+                *slot = VoiceSlot::idle();
+            }
+        }
+        allocator.stats.active_voices = allocator.active_count();
+    }
+
+    /// block 接口：按活动声部槽渲染，note-on 在块内精确到帧分配。
     ///
     /// 音符尚未开始时不能进入 kernel，否则 `Time` 为负、状态提前推进；已开始
     /// 的音符必须按帧连续推进，才能让包络和制音器状态跨 block 保持连续。
+    /// 块不连续（首次调用、seek 或上一块被回退）时按块边界重建分配表，让
+    /// 中途进入的播放位置仍与逐采样路径一致。
     pub fn sample_block(
         &self,
         notes: &[NotePlan],
@@ -3552,90 +3984,123 @@ impl PianoPlan {
         sample_rate: f64,
         output: &mut [f32],
     ) {
-        let voice_ref = self.voice.as_ref();
         let sample_rate = sample_rate.max(1.0);
         let frames = output.len();
+        if frames == 0 {
+            return;
+        }
         let block_end = start_time + frames as f64 / sample_rate;
+        let tail_seconds = self.render_tail_seconds(sample_rate);
         let audible = notes.iter().any(|note| {
             note.velocity > 0.0
                 && note.start < block_end
-                && start_time <= note.start + note.duration + 0.5
+                && start_time <= note.start + note.duration + tail_seconds
         });
         if !audible {
             output.fill(0.0);
+            // SAFETY: 音频线程是唯一写入者；窗口已全部结束，清空分配表。
+            unsafe {
+                let allocator = self.allocator.get_mut();
+                allocator.reset_voices();
+                self.stats.publish(allocator.stats);
+            }
             return;
         }
-        if frames <= 64
-            && notes.len() <= self.states.len()
-            && let Some(voice) = voice_ref
-        {
-            output.fill(0.0);
-            let mut note_block = [0.0_f32; 64];
-            let mut block_ok = true;
-            for (index, note) in notes.iter().enumerate().take(self.states.len()) {
-                let tail_end = note.start + note.duration + 0.5;
-                if note.start >= block_end || start_time > tail_end {
-                    continue;
-                }
-                // NOTE: 用实际帧时刻比较而不是只做浮点乘加，避免恰在块边界
-                // 的音符多算或少算一帧。
-                let first = first_frame_at_or_after(start_time, note.start, sample_rate, frames);
-                let last = first_frame_after(start_time, tail_end, sample_rate, frames);
-                if last <= first {
-                    continue;
-                }
-                let gate_off =
-                    first_frame_after(start_time, note.start + note.duration, sample_rate, frames)
-                        .clamp(first, last);
-                // SAFETY: 音频线程是唯一写入者；index 小于 states 长度。
-                let state = unsafe { self.states.get_mut(index) };
-                if gate_off > first
-                    && !render_note_segment(
-                        voice,
-                        state,
-                        note,
-                        index,
-                        start_time,
-                        first,
-                        gate_off,
-                        true,
-                        sample_rate,
-                        &mut note_block,
-                        output,
-                    )
-                {
-                    block_ok = false;
-                    break;
-                }
-                if last > gate_off
-                    && !render_note_segment(
-                        voice,
-                        state,
-                        note,
-                        index,
-                        start_time,
-                        gate_off,
-                        last,
-                        false,
-                        sample_rate,
-                        &mut note_block,
-                        output,
-                    )
-                {
-                    block_ok = false;
-                    break;
-                }
+        let Some(voice) = self.voice.as_ref() else {
+            for (offset, slot) in output.iter_mut().enumerate() {
+                *slot = self.sample(notes, start_time + offset as f64 / sample_rate) as f32;
             }
-            if block_ok {
-                for slot in output.iter_mut() {
-                    *slot *= 0.18;
-                }
-                return;
-            }
+            return;
+        };
+        if frames > DEFAULT_BLOCK_SIZE {
             PIANO_BLOCK_FALLBACKS.fetch_add(1, Ordering::Relaxed);
+            for (offset, slot) in output.iter_mut().enumerate() {
+                *slot = self.sample(notes, start_time + offset as f64 / sample_rate) as f32;
+            }
+            return;
         }
-        for (offset, slot) in output.iter_mut().enumerate() {
-            *slot = self.sample(notes, start_time + offset as f64 / sample_rate) as f32;
+        output.fill(0.0);
+        let mut note_block = [0.0_f32; DEFAULT_BLOCK_SIZE];
+        // SAFETY: 音频线程是唯一写入者。
+        let allocator = unsafe { self.allocator.get_mut() };
+        let continuous = allocator
+            .next_block_start
+            .is_some_and(|expected| (start_time - expected).abs() <= 0.5 / sample_rate);
+        if !continuous {
+            allocator.reset_voices();
+        }
+        let mut cursor = 0usize;
+        let mut block_ok = true;
+        while let Some((index, key_time)) = next_note_on(
+            notes,
+            start_time,
+            block_end,
+            tail_seconds,
+            continuous,
+            allocator.cursor,
+        ) {
+            let note = &notes[index];
+            let frame =
+                first_frame_at_or_after(start_time, note.start, sample_rate, frames).max(cursor);
+            // NOTE: 恰在块末帧之后的起音属于下一块；游标不前进，交给下一块
+            // 按帧 0 分配，既不重复分配也不会因浮点舍入丢音。
+            if frame >= frames {
+                break;
+            }
+            if frame > cursor
+                && !self.render_voices(
+                    voice,
+                    notes,
+                    allocator,
+                    start_time,
+                    sample_rate,
+                    cursor,
+                    frame,
+                    tail_seconds,
+                    &mut note_block,
+                    output,
+                )
+            {
+                block_ok = false;
+                break;
+            }
+            cursor = cursor.max(frame);
+            allocator.allocate(
+                index,
+                note.velocity,
+                note.start,
+                note.start + note.duration,
+                note.start.max(start_time),
+            );
+            allocator.cursor = Some((key_time, index));
+        }
+        if block_ok && cursor < frames {
+            block_ok = self.render_voices(
+                voice,
+                notes,
+                allocator,
+                start_time,
+                sample_rate,
+                cursor,
+                frames,
+                tail_seconds,
+                &mut note_block,
+                output,
+            );
+        }
+        if !block_ok {
+            PIANO_BLOCK_FALLBACKS.fetch_add(1, Ordering::Relaxed);
+            self.publish_voice_stats(allocator);
+            for (offset, slot) in output.iter_mut().enumerate() {
+                *slot = self.sample(notes, start_time + offset as f64 / sample_rate) as f32;
+            }
+            return;
+        }
+        Self::release_finished(allocator, notes, block_end, tail_seconds);
+        allocator.next_block_start = Some(block_end);
+        self.publish_voice_stats(allocator);
+        for slot in output.iter_mut() {
+            *slot *= 0.18;
         }
     }
 
@@ -3685,6 +4150,50 @@ impl PianoPlan {
         }
         output * 0.18
     }
+}
+
+/// 依次返回块内 note-on：先按起始时刻，再按音符下标排序。
+///
+/// `after` 是上一块处理到的游标：同一音符只会被分配一次，块末帧的起音会
+/// 顺延到下一块，不会因为块边界浮点舍入丢失或重复分配。连续块只取新的
+/// note-on；块不连续时把窗口覆盖本块的音符按块首补分配，保证中途进入播放
+/// 位置（seek、直接调用）仍能发声。
+fn next_note_on(
+    notes: &[NotePlan],
+    start_time: f64,
+    block_end: f64,
+    tail_seconds: f64,
+    continuous: bool,
+    after: Option<(f64, usize)>,
+) -> Option<(usize, f64)> {
+    let mut best: Option<(f64, usize)> = None;
+    for (index, note) in notes.iter().enumerate() {
+        if note.velocity <= 0.0 {
+            continue;
+        }
+        let candidate = if continuous {
+            note.start < block_end
+        } else {
+            note.start < block_end && start_time <= note.start + note.duration + tail_seconds
+        };
+        if !candidate
+            || after.is_some_and(|(time, slot)| !note_key_less(time, slot, note.start, index))
+        {
+            continue;
+        }
+        if best.is_none_or(|(time, slot)| note_key_less(note.start, index, time, slot)) {
+            best = Some((note.start, index));
+        }
+    }
+    best.map(|(time, index)| (index, time))
+}
+
+/// note-on 游标比较：时刻用全序比较，时刻相同时按下标。
+fn note_key_less(time_a: f64, index_a: usize, time_b: f64, index_b: usize) -> bool {
+    time_a
+        .total_cmp(&time_b)
+        .then(index_a.cmp(&index_b))
+        .is_lt()
 }
 
 /// 首个满足 `time >= boundary` 的帧。
@@ -5069,6 +5578,11 @@ impl Playback {
         // NOTE: 计划可能来自已用过的克隆；新计划也必须在首个 block 前
         // 回到确定状态，不能继承调用方手里的历史。
         self.request_state_reset();
+    }
+
+    /// 当前计划的只读快照；控制线程和诊断用，音频线程不能持有它。
+    pub fn plan(&self) -> Arc<PlaybackPlan> {
+        self.plan.load_full()
     }
 
     pub fn play(&self) {
@@ -7135,6 +7649,270 @@ mod tests {
                 "offset {offset}: block {actual} expected {expected}；gate 翻转让状态跳变"
             );
         }
+    }
+
+    fn damper_piano_with(damping: f64, polyphony: usize) -> PianoPlan {
+        let mut piano = damper_piano();
+        if let Some(voice) = piano.voice.as_mut() {
+            voice.nodes[3].op = VoiceOp::Constant(damping);
+        }
+        piano.set_polyphony(polyphony);
+        piano.set_states(
+            (0..piano.state_count())
+                .map(|_| VoiceState::new(8))
+                .collect(),
+        );
+        piano
+    }
+
+    fn allocated_notes(piano: &PianoPlan) -> Vec<usize> {
+        let mut notes: Vec<usize> = piano
+            .allocator
+            .get()
+            .slots
+            .iter()
+            .filter(|slot| slot.is_active())
+            .map(|slot| slot.note_index)
+            .collect();
+        notes.sort_unstable();
+        notes
+    }
+
+    fn render_blocks(piano: &PianoPlan, notes: &[NotePlan], seconds: f64) -> Vec<f32> {
+        let sample_rate = 48_000.0;
+        let blocks = (seconds * sample_rate / DEFAULT_BLOCK_SIZE as f64).ceil() as usize;
+        let mut rendered = Vec::with_capacity(blocks * DEFAULT_BLOCK_SIZE);
+        for index in 0..blocks {
+            let start_time = (index * DEFAULT_BLOCK_SIZE) as f64 / sample_rate;
+            let mut block = [0.0_f32; DEFAULT_BLOCK_SIZE];
+            piano.sample_block(notes, start_time, sample_rate, &mut block);
+            rendered.extend_from_slice(&block);
+        }
+        rendered
+    }
+
+    /// 300 个顺序音符必须全部经过 block 分配，不能只处理前 128 个。
+    #[test]
+    fn piano_block_processes_more_notes_than_voice_state_slots() {
+        let piano = damper_piano_with(0.0001, 128);
+        let notes: Vec<NotePlan> = (0..300)
+            .map(|index| NotePlan {
+                start: index as f64 * 0.001,
+                duration: 0.05,
+                frequency: 220.0 + index as f64,
+                velocity: 0.8,
+            })
+            .collect();
+        let fallbacks = block_stats().piano_block_fallbacks;
+        let rendered = render_blocks(&piano, &notes, 0.6);
+        let stats = piano.voice_stats();
+        println!("300 notes stats={stats:?}");
+        assert_eq!(
+            block_stats().piano_block_fallbacks,
+            fallbacks,
+            "超过声部槽数量的音符不应让整块回退"
+        );
+        assert_eq!(stats.voice_starts, 300, "每个音符都必须进入 block 分配");
+        assert_eq!(stats.voice_drops, 0, "顺序音符不应被静默丢弃");
+        assert!(
+            rendered.iter().any(|value| value.abs() > 1e-4),
+            "300 个音符必须真的发声"
+        );
+    }
+
+    /// 64 个同时音符的 block 渲染必须与逐采样路径一致。
+    #[test]
+    fn piano_block_matches_scalar_for_sixty_four_simultaneous_notes() {
+        let sample_rate = 48_000.0;
+        let notes: Vec<NotePlan> = (0..DEFAULT_POLYPHONY)
+            .map(|index| NotePlan {
+                start: 0.0,
+                duration: 0.05,
+                frequency: 110.0 * (index as f64 + 1.0),
+                velocity: 0.8,
+            })
+            .collect();
+        let block_piano = damper_piano();
+        let reference = damper_piano();
+        let rendered = render_blocks(&block_piano, &notes, 0.3);
+        let stats = block_piano.voice_stats();
+        println!("64 voices stats={stats:?}");
+        assert_eq!(stats.voice_starts, DEFAULT_POLYPHONY as u64);
+        assert_eq!(stats.voice_steals, 0, "64 音符正好等于默认复音上限");
+        for (frame, actual) in rendered.iter().enumerate() {
+            let time = frame as f64 / sample_rate;
+            let expected = reference.sample(&notes, time);
+            assert!(
+                (f64::from(*actual) - expected).abs() < 1e-4,
+                "frame {frame}: block {actual} expected {expected}"
+            );
+        }
+    }
+
+    /// 抢占顺序固定：空闲 → 已释放最旧 → 最轻 → 最旧。
+    #[test]
+    fn voice_allocator_steals_released_voice_before_lighter_held_voice() {
+        let piano = damper_piano_with(0.0001, 2);
+        let notes = [
+            NotePlan {
+                start: 0.0,
+                duration: 0.001,
+                frequency: 220.0,
+                velocity: 0.99,
+            },
+            NotePlan {
+                start: 0.0,
+                duration: 1.0,
+                frequency: 330.0,
+                velocity: 0.1,
+            },
+            NotePlan {
+                start: 0.05,
+                duration: 1.0,
+                frequency: 440.0,
+                velocity: 0.5,
+            },
+        ];
+        render_blocks(&piano, &notes, 0.06);
+        assert_eq!(piano.voice_stats().voice_steals, 1, "必须发生一次抢占");
+        assert_eq!(
+            allocated_notes(&piano),
+            vec![1, 2],
+            "已释放的旧声部必须先于更轻的按住声部被抢占"
+        );
+    }
+
+    #[test]
+    fn voice_allocator_falls_back_to_lightest_then_oldest() {
+        let piano = damper_piano_with(0.0001, 2);
+        let notes: Vec<NotePlan> = [0.9, 0.2, 0.7]
+            .into_iter()
+            .enumerate()
+            .map(|(index, velocity)| NotePlan {
+                start: index as f64 * 0.01,
+                duration: 1.0,
+                frequency: 220.0 + index as f64,
+                velocity,
+            })
+            .collect();
+        render_blocks(&piano, &notes, 0.03);
+        assert_eq!(
+            allocated_notes(&piano),
+            vec![0, 2],
+            "没有已释放声部时必须抢占最轻的声部"
+        );
+
+        let piano = damper_piano_with(0.0001, 2);
+        let ties: Vec<NotePlan> = (0..3)
+            .map(|index| NotePlan {
+                start: index as f64 * 0.01,
+                duration: 1.0,
+                frequency: 220.0,
+                velocity: 0.8,
+            })
+            .collect();
+        render_blocks(&piano, &ties, 0.03);
+        assert_eq!(
+            allocated_notes(&piano),
+            vec![1, 2],
+            "力度相同时必须抢占最旧的声部"
+        );
+    }
+
+    /// 同帧 overflow 的抢占是可观测的：没有静默丢音，只有显式计数。
+    #[test]
+    fn voice_allocator_counts_same_frame_overflow() {
+        let piano = damper_piano_with(0.0001, 4);
+        let notes: Vec<NotePlan> = (0..5)
+            .map(|index| NotePlan {
+                start: 0.0,
+                duration: 1.0,
+                frequency: 220.0 + index as f64,
+                velocity: 0.8,
+            })
+            .collect();
+        let mut block = [0.0_f32; DEFAULT_BLOCK_SIZE];
+        piano.sample_block(&notes, 0.0, 48_000.0, &mut block);
+        let stats = piano.voice_stats();
+        assert_eq!(stats.voice_starts, 5);
+        assert_eq!(stats.voice_steals, 1);
+        assert_eq!(
+            stats.voice_drops, 1,
+            "同帧被抢占且尚未渲染的音符必须显式计数，不能静默消失"
+        );
+        assert_eq!(stats.active_voices, 4);
+    }
+
+    /// 尾音结束后槽位必须回到空闲池并可直接复用，而不是继续抢占。
+    #[test]
+    fn voice_slot_is_reused_after_tail_release() {
+        let piano = damper_piano_with(0.2, 2);
+        let notes = [
+            NotePlan {
+                start: 0.0,
+                duration: 0.001,
+                frequency: 220.0,
+                velocity: 0.8,
+            },
+            NotePlan {
+                start: 0.002,
+                duration: 0.001,
+                frequency: 330.0,
+                velocity: 0.8,
+            },
+        ];
+        let mut block = [0.0_f32; DEFAULT_BLOCK_SIZE];
+        piano.sample_block(&notes, 0.0, 48_000.0, &mut block);
+        assert_eq!(
+            allocated_notes(&piano),
+            Vec::<usize>::new(),
+            "首块后尾音应结束"
+        );
+        piano.sample_block(&notes, 64.0 / 48_000.0, 48_000.0, &mut block);
+        let stats = piano.voice_stats();
+        println!("slot reuse stats={stats:?}");
+        assert_eq!(stats.voice_starts, 2);
+        assert_eq!(stats.voice_steals, 0, "释放后的槽位必须直接复用");
+        assert_eq!(stats.voice_drops, 0);
+        assert_eq!(allocated_notes(&piano), vec![1]);
+    }
+
+    #[test]
+    fn piano_polyphony_is_explicit_and_bounded() {
+        let mut piano = PianoPlan::new(4, 1.0, 0.5, 0.2);
+        assert_eq!(piano.polyphony(), DEFAULT_POLYPHONY);
+        assert_eq!(piano.state_count(), DEFAULT_POLYPHONY);
+        piano.set_polyphony(0);
+        assert_eq!(piano.polyphony(), 1);
+        assert_eq!(piano.state_count(), 1);
+        piano.set_polyphony(MAX_POLYPHONY + 1);
+        assert_eq!(piano.polyphony(), MAX_POLYPHONY);
+        assert_eq!(piano.state_count(), MAX_POLYPHONY);
+    }
+
+    /// 只跳过能证明已经精确归零的制音器尾音，未证明的声部保留 0.5 秒。
+    #[test]
+    fn render_tail_truncates_only_provable_damper_silence() {
+        let piano = damper_piano();
+        let tail = piano.render_tail_seconds(48_000.0);
+        assert!(
+            (tail - 1.0 / 0.0001 / 48_000.0).abs() < 1.0e-12,
+            "可证明的制音器尾音应立即截断，实际 {tail}"
+        );
+        assert!(tail < DEFAULT_NOTE_TAIL_SECONDS);
+
+        let mut unknown = damper_piano();
+        unknown.voice = Some(VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Constant(1.0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Output, vec![0]),
+            ],
+            1,
+        ));
+        assert!(
+            (unknown.render_tail_seconds(48_000.0) - DEFAULT_NOTE_TAIL_SECONDS).abs() < 1.0e-12,
+            "无法证明的声部必须保留保守尾窗"
+        );
     }
 
     #[test]
