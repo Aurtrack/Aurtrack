@@ -126,7 +126,9 @@
 | velocity | 力度 | |
 | pitch | 音高 | |
 | note | 音符 | 逐音符事件数据，不是单个浮点数 |
-| polyphony | 复音 | |
+| polyphony | 复音 | 单条轨道同时发声的声部上限，显式配置 |
+| voice allocator | 声部分配器 | 把 note-on 映射到 `VoiceState` 槽位的运行时分配器 |
+| voice steal | 声部抢占 | 复音上限用尽时按固定规则回收槽位 |
 
 ## 不翻译的词
 
