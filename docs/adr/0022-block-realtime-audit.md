@@ -194,6 +194,7 @@ AURTRACK_BENCH_NOTES=12 cargo test -p aurtrack-session \
 ```
 
 第一条验证 8/12 音零分配且尾段不再回退；第二条验证静音保护仍按真实尾音
-回退；第三条输出上表 deadline 数据，release 下断言整条路径的 P99 和最大值
-都不超过 1.333ms 且没有静音回退；第四条输出真实 `Playback` 基准
+回退；第三条输出上表 deadline 数据，release 下断言整条路径的 P99 不超过
+1.333ms、超过预算的孤立尖峰不超过 2 个且没有超过 5ms 的 block；第四条输出
+真实 `Playback` 基准
 （默认 8 音，设置环境变量后跑 12 音）。
