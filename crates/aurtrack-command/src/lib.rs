@@ -219,6 +219,21 @@ fn track_create_schema() -> Value {
     )
 }
 
+fn track_polyphony_schema() -> Value {
+    object_schema(
+        json!({
+            "track_id": { "type": "string", "description": "轨道 ID" },
+            "polyphony": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 256,
+                "description": "显式复音上限；省略时只查询当前值"
+            }
+        }),
+        &["track_id"],
+    )
+}
+
 fn group_voice_schema() -> Value {
     object_schema(
         json!({
@@ -995,7 +1010,7 @@ fn transport_metronome_schema() -> Value {
     )
 }
 
-static COMMANDS: [CommandSpec; 76] = [
+static COMMANDS: [CommandSpec; 77] = [
     CommandSpec {
         id: "project.create",
         summary: "创建或替换当前工程",
@@ -1061,6 +1076,12 @@ static COMMANDS: [CommandSpec; 76] = [
         summary: "删除一条轨道",
         undo: UndoKind::Snapshot,
         input_schema: track_remove_schema,
+    },
+    CommandSpec {
+        id: "track.polyphony",
+        summary: "设置或查询轨道的复音上限",
+        undo: UndoKind::Snapshot,
+        input_schema: track_polyphony_schema,
     },
     CommandSpec {
         id: "clip.create",

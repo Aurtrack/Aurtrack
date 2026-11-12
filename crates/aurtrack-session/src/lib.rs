@@ -710,6 +710,18 @@ fn output_path_nodes(graph: &AudioGraph) -> BTreeSet<NodeId> {
     path
 }
 
+/// 乐器节点上显式记录的复音上限；未设置时使用引擎默认值。
+///
+/// 该参数只影响 `PianoPlan` 的槽位池大小，不参与节点图端口求值，因此不会
+/// 改变任何声部语义。
+fn instrument_polyphony(node: &aurtrack_graph::AudioNode) -> Option<usize> {
+    let value = node.param("polyphony")?;
+    if !value.is_finite() || value < 1.0 {
+        return None;
+    }
+    Some((value.round() as usize).min(aurtrack_engine::MAX_POLYPHONY))
+}
+
 impl Track {
     /// 输出路径上第一个活乐器；`source` 字段只保留给旧工程读取。
     pub fn active_instrument(&self) -> Option<&AudioNode> {
@@ -829,6 +841,9 @@ impl Track {
                     .ok_or_else(|| GraphError::GroupMissing(group_id.to_string()))?;
                 group.validate_with_groups(groups)?;
                 let mut piano = aurtrack_engine::PianoPlan::new(10, 1.2, 0.5, 0.2);
+                if let Some(polyphony) = instrument_polyphony(node) {
+                    piano.set_polyphony(polyphony);
+                }
                 let voice = compile_voice(&group.graph, &group.interface, groups, buffers)?;
                 let scratch_values =
                     VoiceSsa::compile(&voice).map_or(0, |ssa| ssa.instruction_count());
@@ -2037,6 +2052,7 @@ impl Session {
             "project.master_plugin_off" => self.cmd_master_plugin_off(),
             "track.create" => self.cmd_track_create(&request.args),
             "track.remove" => self.cmd_track_remove(&request.args),
+            "track.polyphony" => self.cmd_track_polyphony(&request.args),
             "node.types" => Ok(CommandResponse::ok(json!({
                 "types": voice_types_json(),
                 "audio_types": audio_types_json(),
@@ -3577,6 +3593,60 @@ impl Session {
             .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
         project.tracks.retain(|track| track.id != track_id);
         Ok(CommandResponse::ok(json!({ "track_id": track_id })).with_undo(token))
+    }
+
+    fn cmd_track_polyphony(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
+        let args: TrackPolyphonyArgs = parse_args(args)?;
+        let project = self
+            .project
+            .as_ref()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let track = project
+            .tracks
+            .iter()
+            .find(|track| track.id == args.track_id)
+            .ok_or_else(|| CommandError::not_found(format!("找不到轨道：{}", args.track_id)))?;
+        let instrument = track.active_instrument().ok_or_else(|| {
+            CommandError::not_found(format!("轨道 {} 没有可用的乐器节点", args.track_id))
+        })?;
+        let instrument_id = instrument.id().clone();
+        let current =
+            instrument_polyphony(instrument).unwrap_or(aurtrack_engine::DEFAULT_POLYPHONY);
+        let Some(polyphony) = args.polyphony else {
+            return Ok(CommandResponse::ok(json!({
+                "track_id": args.track_id,
+                "node_id": instrument_id.to_string(),
+                "polyphony": current,
+            })));
+        };
+        let polyphony = usize::try_from(polyphony)
+            .ok()
+            .filter(|value| (1..=aurtrack_engine::MAX_POLYPHONY).contains(value))
+            .ok_or_else(|| {
+                CommandError::invalid_args(format!(
+                    "复音上限必须在 1 到 {} 之间",
+                    aurtrack_engine::MAX_POLYPHONY
+                ))
+            })?;
+        let token = self.snapshot("track.polyphony");
+        let project = self
+            .project
+            .as_mut()
+            .ok_or_else(|| CommandError::not_found("还没有工程，先执行 project.create"))?;
+        let node = project
+            .tracks
+            .iter_mut()
+            .find(|track| track.id == args.track_id)
+            .and_then(|track| track.graph.nodes.get_mut(&instrument_id))
+            .ok_or_else(|| CommandError::not_found(format!("找不到乐器：{instrument_id}")))?;
+        node.params
+            .insert("polyphony".to_string(), polyphony as f64);
+        Ok(CommandResponse::ok(json!({
+            "track_id": args.track_id,
+            "node_id": instrument_id.to_string(),
+            "polyphony": polyphony,
+        }))
+        .with_undo(token))
     }
 
     fn cmd_audio_group_create(&mut self, args: &Value) -> Result<CommandResponse, CommandError> {
@@ -6694,6 +6764,14 @@ struct TrackRemoveArgs {
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+struct TrackPolyphonyArgs {
+    track_id: String,
+    #[serde(default)]
+    polyphony: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct DeviceRemoveArgs {
     path: String,
 }
@@ -7159,13 +7237,22 @@ mod buffer_tests {
             .ok()
             .and_then(|value| value.parse::<usize>().ok())
             .unwrap_or(8);
+        let polyphony = note_count.max(aurtrack_engine::DEFAULT_POLYPHONY);
+        session
+            .execute(&CommandRequest {
+                cmd: "track.polyphony".to_string(),
+                args: json!({ "track_id": "track-1", "polyphony": polyphony }),
+            })
+            .unwrap();
         for index in 0..note_count {
             session
                 .execute(&CommandRequest {
                     cmd: "note.add".to_string(),
                     args: json!({
                         "path": "/tracks/track-1/clips/clip-1",
-                        "pitch": 60 + index,
+                        // NOTE: 同时音符的 pitch 不能随 index 无限增长；循环
+                        // 十二平均律才能压到 128 音以上而不越界。
+                        "pitch": 60 + index % 12,
                         "start": 0,
                         "duration": 1,
                         "velocity": 0.8,
@@ -7227,8 +7314,14 @@ mod buffer_tests {
             .iter()
             .fold(0.0_f32, |peak, value| peak.max(value.abs()));
         let stats = aurtrack_engine::block_stats();
+        let voices = playback.plan().tracks[0]
+            .graph
+            .as_ref()
+            .and_then(|graph| graph.pianos.first())
+            .map(aurtrack_engine::PianoPlan::voice_stats)
+            .unwrap_or_default();
         println!(
-            "notes={note_count} elapsed={elapsed:?} peak={peak} track_blocks={} fallbacks={} silent_fallbacks={} piano_fallbacks={} accumulations={}",
+            "notes={note_count} polyphony={polyphony} elapsed={elapsed:?} peak={peak} track_blocks={} fallbacks={} silent_fallbacks={} piano_fallbacks={} accumulations={} voices={voices:?}",
             stats.track_blocks,
             stats.playback_block_fallbacks,
             stats.silent_block_fallbacks,
@@ -7249,6 +7342,12 @@ mod buffer_tests {
             stats.piano_block_fallbacks, 0,
             "PianoPlan block 内核不应回退"
         );
+        assert_eq!(
+            voices.voice_starts, note_count as u64,
+            "每个音符都必须经过声部分配"
+        );
+        assert_eq!(voices.voice_drops, 0, "复音上限足够时不允许丢音");
+        assert_eq!(voices.voice_steals, 0, "复音上限足够时不允许抢占");
         assert!(
             stats.repeat_accumulations > 0,
             "Repeat 原生累加器必须命中，不能退回逐迭代 body"
@@ -7610,6 +7709,64 @@ mod buffer_tests {
             worst_pair.0,
             worst_pair.1
         );
+    }
+
+    #[test]
+    fn track_polyphony_command_drives_piano_plan() {
+        let mut session = Session::default();
+        for request in [
+            json!({ "cmd": "project.create", "args": { "name": "polyphony" } }),
+            json!({ "cmd": "track.create", "args": { "name": "piano", "source": "physical" } }),
+        ] {
+            let request: CommandRequest = serde_json::from_value(request).unwrap();
+            session.execute(&request).unwrap();
+        }
+        let query = |session: &mut Session| -> u64 {
+            session
+                .execute(&CommandRequest {
+                    cmd: "track.polyphony".to_string(),
+                    args: json!({ "track_id": "track-1" }),
+                })
+                .unwrap()
+                .data
+                .get("polyphony")
+                .and_then(serde_json::Value::as_u64)
+                .unwrap()
+        };
+        assert_eq!(query(&mut session), 64, "缺省复音上限必须显式可见");
+        let response = session
+            .execute(&CommandRequest {
+                cmd: "track.polyphony".to_string(),
+                args: json!({ "track_id": "track-1", "polyphony": 4 }),
+            })
+            .unwrap();
+        assert_eq!(response.data.get("polyphony"), Some(&json!(4)));
+        assert_eq!(query(&mut session), 4);
+        let project = session.project().unwrap().clone();
+        let track = &project.tracks[0];
+        let (_, _, graph) = track
+            .playback_graph_with_buffers(
+                &project.node_groups,
+                &project.audio_groups,
+                &project.buffers,
+            )
+            .unwrap();
+        assert_eq!(graph.pianos[0].polyphony(), 4, "计划必须拿到显式复音上限");
+        assert_eq!(graph.pianos[0].state_count(), 4);
+
+        let error = session.execute(&CommandRequest {
+            cmd: "track.polyphony".to_string(),
+            args: json!({ "track_id": "track-1", "polyphony": 0 }),
+        });
+        assert!(error.is_err(), "复音上限必须拒绝 0");
+
+        session
+            .execute(&CommandRequest {
+                cmd: "undo".to_string(),
+                args: json!({}),
+            })
+            .unwrap();
+        assert_eq!(query(&mut session), 64, "复音上限变更必须可撤销");
     }
 
     #[test]
