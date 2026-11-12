@@ -4381,18 +4381,20 @@ impl GraphState {
 }
 
 /// GraphPlan 持有的 block 状态；音频线程是唯一写入者。
-pub struct GraphStateCell(std::cell::UnsafeCell<GraphState>);
+pub struct GraphStateCell(Box<std::cell::UnsafeCell<GraphState>>);
 
 // SAFETY: 计划只允许一个音频渲染线程写入 GraphState；控制线程只替换整个计划。
 unsafe impl Sync for GraphStateCell {}
 
 impl GraphStateCell {
     pub fn new() -> Self {
-        Self(std::cell::UnsafeCell::new(GraphState::new()))
+        Self(Box::new(std::cell::UnsafeCell::new(GraphState::new())))
     }
 
     pub fn from_nodes(nodes: &[GraphNodePlan]) -> Self {
-        Self(std::cell::UnsafeCell::new(GraphState::from_nodes(nodes)))
+        Self(Box::new(std::cell::UnsafeCell::new(
+            GraphState::from_nodes(nodes),
+        )))
     }
 }
 
@@ -8229,5 +8231,13 @@ mod tests {
         let mut buffer = [0.0_f32; 480];
         playback.render(&mut buffer);
         assert!(buffer.iter().all(|sample| *sample == 0.0));
+    }
+
+    #[test]
+    fn graph_plan_keeps_large_state_on_heap() {
+        assert!(
+            std::mem::size_of::<GraphPlan>() < 4096,
+            "GraphPlan 不应内联 GraphState，否则控制线程小栈会溢出"
+        );
     }
 }
