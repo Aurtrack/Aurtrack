@@ -560,6 +560,10 @@ fn resolve_output(plan: &VoicePlan) -> Option<usize> {
 }
 
 /// 逐值处理整块，和 `SsaOp` 的 block 内核一致，避免每帧重新分派。
+// PERF: 循环前先把目标和操作数裁成 `frames` 长的切片，逐帧边界检查与帧内
+// 的算子分派都随之消失，帧循环变成紧凑的标量代码；这是 128 复音离线渲染
+// 的主要收益。LLVM 没有把这些循环向量化：切分用的下标是运行期值，无法
+// 证明共享操作数与可变目标不重叠。
 #[inline]
 #[allow(clippy::too_many_arguments)]
 fn evaluate_frames(
@@ -572,91 +576,64 @@ fn evaluate_frames(
     iteration: f64,
     inputs: &VoiceBlockInputs<'_>,
 ) {
+    let target = &mut target[..frames];
     let arguments = value.args.len();
+    macro_rules! binary {
+        ($operation:expr) => {{
+            if arguments < 2 {
+                target.fill(0.0);
+                return;
+            }
+            let left = &done[value.args[0]][..frames];
+            let right = &done[value.args[1]][..frames];
+            for ((slot, &a), &b) in target.iter_mut().zip(left).zip(right) {
+                *slot = $operation(a, b);
+            }
+        }};
+    }
+    macro_rules! unary {
+        ($operation:expr) => {{
+            if arguments < 1 {
+                target.fill(0.0);
+                return;
+            }
+            let source = &done[value.args[0]][..frames];
+            for (slot, &input) in target.iter_mut().zip(source) {
+                *slot = $operation(input);
+            }
+        }};
+    }
     match value.op {
-        SsaOp::Constant => target[..frames].fill(value.constant),
+        SsaOp::Constant => target.fill(value.constant),
         SsaOp::External => {
-            for (frame, slot) in target[..frames].iter_mut().enumerate() {
+            for (frame, slot) in target.iter_mut().enumerate() {
                 *slot = inputs.frame(value.external, frame);
             }
         },
-        SsaOp::ContextPitch => target[..frames].fill(context.pitch),
-        SsaOp::ContextVelocity => target[..frames].fill(context.velocity),
+        SsaOp::ContextPitch => target.fill(context.pitch),
+        SsaOp::ContextVelocity => target.fill(context.velocity),
         SsaOp::ContextTime => {
-            for (frame, slot) in target[..frames].iter_mut().enumerate() {
+            for (frame, slot) in target.iter_mut().enumerate() {
                 *slot = context.local_time + frame as f64 / sample_rate;
             }
         },
-        SsaOp::ContextGate => target[..frames].fill(f64::from(u8::from(context.gate))),
-        SsaOp::ContextIteration => target[..frames].fill(iteration),
-        SsaOp::Add
-        | SsaOp::Subtract
-        | SsaOp::Multiply
-        | SsaOp::Divide
-        | SsaOp::Power
-        | SsaOp::Modulo
-        | SsaOp::GreaterThan
-        | SsaOp::LessThan => {
-            if arguments < 2 {
-                target[..frames].fill(0.0);
-                return;
-            }
-            let left = &done[value.args[0]];
-            let right = &done[value.args[1]];
-            for frame in 0..frames {
-                let a = left[frame];
-                let b = right[frame];
-                target[frame] = match value.op {
-                    SsaOp::Add => a + b,
-                    SsaOp::Subtract => a - b,
-                    SsaOp::Multiply => a * b,
-                    SsaOp::Divide => {
-                        if b == 0.0 {
-                            0.0
-                        } else {
-                            a / b
-                        }
-                    },
-                    SsaOp::Power => a.powf(b),
-                    SsaOp::Modulo => {
-                        if b == 0.0 {
-                            0.0
-                        } else {
-                            a % b
-                        }
-                    },
-                    SsaOp::GreaterThan => f64::from(u8::from(a > b)),
-                    SsaOp::LessThan => f64::from(u8::from(a < b)),
-                    _ => 0.0,
-                };
-            }
-        },
-        SsaOp::Floor
-        | SsaOp::Ceil
-        | SsaOp::Round
-        | SsaOp::Exp
-        | SsaOp::Sqrt
-        | SsaOp::Sin
-        | SsaOp::Abs => {
-            if arguments < 1 {
-                target[..frames].fill(0.0);
-                return;
-            }
-            let source = &done[value.args[0]];
-            for frame in 0..frames {
-                let input = source[frame];
-                target[frame] = match value.op {
-                    SsaOp::Floor => input.floor(),
-                    SsaOp::Ceil => input.ceil(),
-                    SsaOp::Round => input.round(),
-                    SsaOp::Exp => fastmath::exp(input),
-                    SsaOp::Sqrt => input.max(0.0).sqrt(),
-                    SsaOp::Sin => fastmath::sin(input),
-                    SsaOp::Abs => input.abs(),
-                    _ => 0.0,
-                };
-            }
-        },
+        SsaOp::ContextGate => target.fill(f64::from(u8::from(context.gate))),
+        SsaOp::ContextIteration => target.fill(iteration),
+        SsaOp::Add => binary!(|a, b| a + b),
+        SsaOp::Subtract => binary!(|a, b| a - b),
+        SsaOp::Multiply => binary!(|a, b| a * b),
+        SsaOp::Divide => binary!(|a, b| if b == 0.0 { 0.0 } else { a / b }),
+        SsaOp::Power => binary!(|a: f64, b: f64| a.powf(b)),
+        SsaOp::Modulo => binary!(|a, b| if b == 0.0 { 0.0 } else { a % b }),
+        SsaOp::GreaterThan => binary!(|a, b| f64::from(u8::from(a > b))),
+        SsaOp::LessThan => binary!(|a, b| f64::from(u8::from(a < b))),
+        SsaOp::Floor => unary!(|input: f64| input.floor()),
+        SsaOp::Ceil => unary!(|input: f64| input.ceil()),
+        SsaOp::Round => unary!(|input: f64| input.round()),
+        SsaOp::Exp => unary!(fastmath::exp),
+        SsaOp::Sqrt => unary!(|input: f64| input.max(0.0).sqrt()),
+        SsaOp::Sin => unary!(fastmath::sin),
+        SsaOp::Abs => unary!(|input: f64| input.abs()),
         SsaOp::Clamp | SsaOp::MapRange => {
             let count = if matches!(value.op, SsaOp::Clamp) {
                 3
@@ -664,41 +641,49 @@ fn evaluate_frames(
                 5
             };
             if arguments < count {
-                target[..frames].fill(0.0);
+                target.fill(0.0);
                 return;
             }
             let clamp = matches!(value.op, SsaOp::Clamp);
-            for (frame, slot) in target[..frames].iter_mut().enumerate() {
-                *slot = if clamp {
-                    done[value.args[0]][frame]
-                        .clamp(done[value.args[1]][frame], done[value.args[2]][frame])
-                } else {
-                    let input = done[value.args[0]][frame];
-                    let in_min = done[value.args[1]][frame];
-                    let in_max = done[value.args[2]][frame];
-                    let out_min = done[value.args[3]][frame];
-                    let out_max = done[value.args[4]][frame];
-                    let span = in_max - in_min;
-                    if span.abs() < 1e-12 {
-                        out_min
+            let input = &done[value.args[0]][..frames];
+            let in_min = &done[value.args[1]][..frames];
+            let in_max = &done[value.args[2]][..frames];
+            if clamp {
+                for ((slot, &value), (&min, &max)) in
+                    target.iter_mut().zip(input).zip(in_min.iter().zip(in_max))
+                {
+                    *slot = value.clamp(min, max);
+                }
+            } else {
+                let out_min = &done[value.args[3]][..frames];
+                let out_max = &done[value.args[4]][..frames];
+                for (((slot, &value), (&from_min, &from_max)), (&to_min, &to_max)) in target
+                    .iter_mut()
+                    .zip(input)
+                    .zip(in_min.iter().zip(in_max))
+                    .zip(out_min.iter().zip(out_max))
+                {
+                    let span = from_max - from_min;
+                    *slot = if span.abs() < 1e-12 {
+                        to_min
                     } else {
-                        out_min + (input - in_min) / span * (out_max - out_min)
-                    }
-                };
+                        to_min + (value - from_min) / span * (to_max - to_min)
+                    };
+                }
             }
         },
         SsaOp::Sine => {
             if arguments < 3 {
-                target[..frames].fill(0.0);
+                target.fill(0.0);
                 return;
             }
-            let frequency = &done[value.args[0]];
-            let time = &done[value.args[1]];
-            let phase = &done[value.args[2]];
-            for frame in 0..frames {
-                target[frame] = fastmath::sin(
-                    std::f64::consts::TAU * frequency[frame] * time[frame] + phase[frame],
-                );
+            let frequency = &done[value.args[0]][..frames];
+            let time = &done[value.args[1]][..frames];
+            let phase = &done[value.args[2]][..frames];
+            for (((slot, &frequency), &time), &phase) in
+                target.iter_mut().zip(frequency).zip(time).zip(phase)
+            {
+                *slot = fastmath::sin(std::f64::consts::TAU * frequency * time + phase);
             }
         },
     }
