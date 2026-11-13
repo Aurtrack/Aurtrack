@@ -154,7 +154,8 @@ impl RepeatAccumulator {
             return false;
         }
         let sample_rate = inputs.sample_rate();
-        // SAFETY: 调用方保证音频线程独占；scratch 每块从头写满，不读取旧值。
+        // SAFETY: 调用方保证音频线程独占；逐帧数组每块在写入前不读取旧值，
+        // 标量值只走 `scalars`，不会读这里的数组。
         let values = unsafe { &mut *self.scratch.get() };
         if values.len() != self.values.len() {
             return false;
@@ -170,6 +171,14 @@ impl RepeatAccumulator {
                 const_mask |= 1_u32 << slot;
             }
         }
+        // PERF: 标量掩码每块只算一次；标量值不再落 64 元素数组，帧循环直接
+        // 从 `scalars` 取操作数。数组只保留真正逐帧的值，工作集从 38 KB
+        // 降到约 10 KB。
+        let mut scalar_mask = [false; MAX_LOOP_VALUES];
+        for (index, value) in self.values.iter().enumerate() {
+            scalar_mask[index] = !value.depends_on_time && value.external_mask & !const_mask == 0;
+        }
+        let mut scalars = [0.0_f64; MAX_LOOP_VALUES];
         let mut sum = [0.0_f64; 64];
         for (frame, slot) in sum[..frames].iter_mut().enumerate() {
             *slot = carried.get(frame).copied().unwrap_or(0.0);
@@ -180,25 +189,17 @@ impl RepeatAccumulator {
                 if !value.depends_on_iteration && iteration > 0 {
                     continue;
                 }
-                let frame_constant =
-                    !value.depends_on_time && value.external_mask & !const_mask == 0;
-                if frame_constant {
-                    let scalar = evaluate(
-                        value,
-                        values,
-                        0,
-                        context,
-                        sample_rate,
-                        iteration_value,
-                        inputs,
-                    );
-                    values[index][..frames].fill(scalar);
+                if scalar_mask[index] {
+                    let scalar = evaluate_scalar(value, &scalars, context, iteration_value, inputs);
+                    scalars[index] = scalar;
                 } else {
                     let (done, rest) = values.split_at_mut(index);
                     evaluate_frames(
                         value,
                         done,
                         &mut rest[0],
+                        &scalars,
+                        &scalar_mask,
                         frames,
                         context,
                         sample_rate,
@@ -207,8 +208,15 @@ impl RepeatAccumulator {
                     );
                 }
             }
-            for (frame, slot) in sum[..frames].iter_mut().enumerate() {
-                *slot += values[self.output][frame];
+            if scalar_mask[self.output] {
+                let scalar = scalars[self.output];
+                for slot in &mut sum[..frames] {
+                    *slot += scalar;
+                }
+            } else {
+                for (frame, slot) in sum[..frames].iter_mut().enumerate() {
+                    *slot += values[self.output][frame];
+                }
             }
         }
         for (frame, slot) in output[..frames].iter_mut().enumerate() {
@@ -560,16 +568,18 @@ fn resolve_output(plan: &VoicePlan) -> Option<usize> {
 }
 
 /// 逐值处理整块，和 `SsaOp` 的 block 内核一致，避免每帧重新分派。
-// PERF: 循环前先把目标和操作数裁成 `frames` 长的切片，逐帧边界检查与帧内
-// 的算子分派都随之消失，帧循环变成紧凑的标量代码；这是 128 复音离线渲染
-// 的主要收益。LLVM 没有把这些循环向量化：切分用的下标是运行期值，无法
-// 证明共享操作数与可变目标不重叠。
+// PERF: 帧不变值不再落成 64 元素数组，而是留在 `scalars` 里；帧循环按操作数
+// 的标量/数组组合各生成一份，循环体里没有逐帧分支。`fill` 曾是 128 复音
+// 离线渲染最大的单项开销，广播后连写带读一起消失，工作集也从 38 KB 降到
+// 约 10 KB（L1 常驻）。
 #[inline]
 #[allow(clippy::too_many_arguments)]
 fn evaluate_frames(
     value: &LoopValue,
     done: &[[f64; 64]],
     target: &mut [f64; 64],
+    scalars: &[f64; MAX_LOOP_VALUES],
+    scalar_mask: &[bool; MAX_LOOP_VALUES],
     frames: usize,
     context: VoiceContext,
     sample_rate: f64,
@@ -577,31 +587,62 @@ fn evaluate_frames(
     inputs: &VoiceBlockInputs<'_>,
 ) {
     let target = &mut target[..frames];
-    let arguments = value.args.len();
     macro_rules! binary {
         ($operation:expr) => {{
-            if arguments < 2 {
+            let [left, right] = value.args.as_slice() else {
                 target.fill(0.0);
                 return;
-            }
-            let left = &done[value.args[0]][..frames];
-            let right = &done[value.args[1]][..frames];
-            for ((slot, &a), &b) in target.iter_mut().zip(left).zip(right) {
-                *slot = $operation(a, b);
+            };
+            let (left, right) = (*left, *right);
+            if scalar_mask[left] {
+                let a = scalars[left];
+                if scalar_mask[right] {
+                    target.fill($operation(a, scalars[right]));
+                } else {
+                    for (slot, &b) in target.iter_mut().zip(&done[right][..frames]) {
+                        *slot = $operation(a, b);
+                    }
+                }
+            } else if scalar_mask[right] {
+                let b = scalars[right];
+                for (slot, &a) in target.iter_mut().zip(&done[left][..frames]) {
+                    *slot = $operation(a, b);
+                }
+            } else {
+                for ((slot, &a), &b) in target
+                    .iter_mut()
+                    .zip(&done[left][..frames])
+                    .zip(&done[right][..frames])
+                {
+                    *slot = $operation(a, b);
+                }
             }
         }};
     }
     macro_rules! unary {
         ($operation:expr) => {{
-            if arguments < 1 {
+            let [input] = value.args.as_slice() else {
                 target.fill(0.0);
                 return;
-            }
-            let source = &done[value.args[0]][..frames];
-            for (slot, &input) in target.iter_mut().zip(source) {
-                *slot = $operation(input);
+            };
+            let input = *input;
+            if scalar_mask[input] {
+                target.fill($operation(scalars[input]));
+            } else {
+                for (slot, &source) in target.iter_mut().zip(&done[input][..frames]) {
+                    *slot = $operation(source);
+                }
             }
         }};
+    }
+    macro_rules! at {
+        ($index:expr, $frame:expr) => {
+            if scalar_mask[$index] {
+                scalars[$index]
+            } else {
+                done[$index][$frame]
+            }
+        };
     }
     match value.op {
         SsaOp::Constant => target.fill(value.constant),
@@ -635,126 +676,175 @@ fn evaluate_frames(
         SsaOp::Sin => unary!(fastmath::sin),
         SsaOp::Abs => unary!(|input: f64| input.abs()),
         SsaOp::Clamp | SsaOp::MapRange => {
-            let count = if matches!(value.op, SsaOp::Clamp) {
-                3
-            } else {
-                5
-            };
-            if arguments < count {
+            let clamp = matches!(value.op, SsaOp::Clamp);
+            let count = if clamp { 3 } else { 5 };
+            if value.args.len() < count {
                 target.fill(0.0);
                 return;
             }
-            let clamp = matches!(value.op, SsaOp::Clamp);
-            let input = &done[value.args[0]][..frames];
-            let in_min = &done[value.args[1]][..frames];
-            let in_max = &done[value.args[2]][..frames];
-            if clamp {
-                for ((slot, &value), (&min, &max)) in
-                    target.iter_mut().zip(input).zip(in_min.iter().zip(in_max))
-                {
-                    *slot = value.clamp(min, max);
-                }
-            } else {
-                let out_min = &done[value.args[3]][..frames];
-                let out_max = &done[value.args[4]][..frames];
-                for (((slot, &value), (&from_min, &from_max)), (&to_min, &to_max)) in target
-                    .iter_mut()
-                    .zip(input)
-                    .zip(in_min.iter().zip(in_max))
-                    .zip(out_min.iter().zip(out_max))
-                {
+            let input = value.args[0];
+            let in_min = value.args[1];
+            let in_max = value.args[2];
+            for (frame, slot) in target.iter_mut().enumerate() {
+                let input_value = at!(input, frame);
+                let from_min = at!(in_min, frame);
+                let from_max = at!(in_max, frame);
+                *slot = if clamp {
+                    input_value.clamp(from_min, from_max)
+                } else {
+                    let to_min = at!(value.args[3], frame);
+                    let to_max = at!(value.args[4], frame);
                     let span = from_max - from_min;
-                    *slot = if span.abs() < 1e-12 {
+                    if span.abs() < 1e-12 {
                         to_min
                     } else {
-                        to_min + (value - from_min) / span * (to_max - to_min)
-                    };
-                }
+                        to_min + (input_value - from_min) / span * (to_max - to_min)
+                    }
+                };
             }
         },
         SsaOp::Sine => {
-            if arguments < 3 {
+            let [frequency, time, phase] = value.args.as_slice() else {
                 target.fill(0.0);
                 return;
+            };
+            let (frequency, time, phase) = (*frequency, *time, *phase);
+            if scalar_mask[time] {
+                if scalar_mask[frequency] && scalar_mask[phase] {
+                    target.fill(fastmath::sin(
+                        std::f64::consts::TAU * scalars[frequency] * scalars[time] + scalars[phase],
+                    ));
+                } else {
+                    // NOTE: 时间是常量、频率或相位逐帧的组合很少见，逐帧取操作数
+                    // 即可；常用的“时间逐帧”走下面的专用循环。
+                    let time = scalars[time];
+                    for (frame, slot) in target.iter_mut().enumerate() {
+                        *slot = fastmath::sin(
+                            std::f64::consts::TAU * at!(frequency, frame) * time
+                                + at!(phase, frame),
+                        );
+                    }
+                }
+                return;
             }
-            let frequency = &done[value.args[0]][..frames];
-            let time = &done[value.args[1]][..frames];
-            let phase = &done[value.args[2]][..frames];
-            for (((slot, &frequency), &time), &phase) in
-                target.iter_mut().zip(frequency).zip(time).zip(phase)
-            {
-                *slot = fastmath::sin(std::f64::consts::TAU * frequency * time + phase);
+            let time = &done[time][..frames];
+            match (scalar_mask[frequency], scalar_mask[phase]) {
+                (true, true) => {
+                    let frequency = std::f64::consts::TAU * scalars[frequency];
+                    let phase = scalars[phase];
+                    for (slot, &time) in target.iter_mut().zip(time) {
+                        *slot = fastmath::sin(frequency * time + phase);
+                    }
+                },
+                (true, false) => {
+                    let frequency = std::f64::consts::TAU * scalars[frequency];
+                    for ((slot, &time), &phase) in
+                        target.iter_mut().zip(time).zip(&done[phase][..frames])
+                    {
+                        *slot = fastmath::sin(frequency * time + phase);
+                    }
+                },
+                (false, true) => {
+                    let phase = scalars[phase];
+                    for ((slot, &time), &frequency) in
+                        target.iter_mut().zip(time).zip(&done[frequency][..frames])
+                    {
+                        *slot = fastmath::sin(std::f64::consts::TAU * frequency * time + phase);
+                    }
+                },
+                (false, false) => {
+                    for (((slot, &time), &frequency), &phase) in target
+                        .iter_mut()
+                        .zip(time)
+                        .zip(&done[frequency][..frames])
+                        .zip(&done[phase][..frames])
+                    {
+                        *slot = fastmath::sin(std::f64::consts::TAU * frequency * time + phase);
+                    }
+                },
             }
         },
     }
 }
 
+/// 逐值标量求值：只读 `scalars`，不落 64 元素数组。
+///
+/// 标量值只依赖常量、块内常量输入与上下文；依赖逐帧数组的值一定不会被
+/// 归为标量，因此这里不需要读 `done`。
 #[inline]
-#[allow(clippy::too_many_arguments)]
-fn evaluate(
+fn evaluate_scalar(
     value: &LoopValue,
-    values: &[[f64; 64]],
-    frame: usize,
+    scalars: &[f64; MAX_LOOP_VALUES],
     context: VoiceContext,
-    sample_rate: f64,
     iteration: f64,
     inputs: &VoiceBlockInputs<'_>,
 ) -> f64 {
-    let at = |slot: usize| values[value.args[slot]][frame];
+    let arguments = value.args.as_slice();
+    macro_rules! unary {
+        ($operation:expr) => {
+            match arguments {
+                [input] => $operation(scalars[*input]),
+                _ => 0.0,
+            }
+        };
+    }
+    macro_rules! binary {
+        ($operation:expr) => {
+            match arguments {
+                [left, right] => $operation(scalars[*left], scalars[*right]),
+                _ => 0.0,
+            }
+        };
+    }
     match value.op {
         SsaOp::Constant => value.constant,
-        SsaOp::External => inputs.frame(value.external, frame),
+        SsaOp::External => inputs.frame(value.external, 0),
         SsaOp::ContextPitch => context.pitch,
         SsaOp::ContextVelocity => context.velocity,
-        SsaOp::ContextTime => context.local_time + frame as f64 / sample_rate,
+        // NOTE: `ContextTime` 含时间依赖，不会进入标量分支；保留帧 0 兜底。
+        SsaOp::ContextTime => context.local_time,
         SsaOp::ContextGate => f64::from(u8::from(context.gate)),
         SsaOp::ContextIteration => iteration,
-        SsaOp::Add => at(0) + at(1),
-        SsaOp::Subtract => at(0) - at(1),
-        SsaOp::Multiply => at(0) * at(1),
-        SsaOp::Divide => {
-            if at(1) == 0.0 {
-                0.0
-            } else {
-                at(0) / at(1)
-            }
+        SsaOp::Add => binary!(|a, b| a + b),
+        SsaOp::Subtract => binary!(|a, b| a - b),
+        SsaOp::Multiply => binary!(|a, b| a * b),
+        SsaOp::Divide => binary!(|a, b| if b == 0.0 { 0.0 } else { a / b }),
+        SsaOp::Power => binary!(|a: f64, b: f64| a.powf(b)),
+        SsaOp::Modulo => binary!(|a, b| if b == 0.0 { 0.0 } else { a % b }),
+        SsaOp::Floor => unary!(|input: f64| input.floor()),
+        SsaOp::Ceil => unary!(|input: f64| input.ceil()),
+        SsaOp::Round => unary!(|input: f64| input.round()),
+        SsaOp::Exp => unary!(fastmath::exp),
+        SsaOp::Sqrt => unary!(|input: f64| input.max(0.0).sqrt()),
+        SsaOp::Sin => unary!(fastmath::sin),
+        SsaOp::Abs => unary!(|input: f64| input.abs()),
+        SsaOp::GreaterThan => binary!(|a, b| f64::from(u8::from(a > b))),
+        SsaOp::LessThan => binary!(|a, b| f64::from(u8::from(a < b))),
+        SsaOp::MapRange => match arguments {
+            [input, in_min, in_max, out_min, out_max] => {
+                let input = scalars[*input];
+                let in_min = scalars[*in_min];
+                let in_max = scalars[*in_max];
+                let out_min = scalars[*out_min];
+                let out_max = scalars[*out_max];
+                let span = in_max - in_min;
+                if span.abs() < 1e-12 {
+                    out_min
+                } else {
+                    out_min + (input - in_min) / span * (out_max - out_min)
+                }
+            },
+            _ => 0.0,
         },
-        SsaOp::Power => at(0).powf(at(1)),
-        SsaOp::Modulo => {
-            if at(1) == 0.0 {
-                0.0
-            } else {
-                at(0) % at(1)
-            }
+        SsaOp::Clamp => match arguments {
+            [input, min, max] => scalars[*input].clamp(scalars[*min], scalars[*max]),
+            _ => 0.0,
         },
-        SsaOp::Floor => at(0).floor(),
-        SsaOp::Ceil => at(0).ceil(),
-        SsaOp::Round => at(0).round(),
-        SsaOp::Exp => fastmath::exp(at(0)),
-        SsaOp::Sqrt => at(0).max(0.0).sqrt(),
-        SsaOp::Sin => fastmath::sin(at(0)),
-        SsaOp::Abs => at(0).abs(),
-        SsaOp::GreaterThan => f64::from(u8::from(at(0) > at(1))),
-        SsaOp::LessThan => f64::from(u8::from(at(0) < at(1))),
-        SsaOp::MapRange => {
-            let input = at(0);
-            let in_min = at(1);
-            let in_max = at(2);
-            let out_min = at(3);
-            let out_max = at(4);
-            let span = in_max - in_min;
-            if span.abs() < 1e-12 {
-                out_min
-            } else {
-                out_min + (input - in_min) / span * (out_max - out_min)
-            }
-        },
-        SsaOp::Clamp => at(0).clamp(at(1), at(2)),
-        SsaOp::Sine => {
-            let frequency = at(0);
-            let time = at(1);
-            let phase = at(2);
-            fastmath::sin(std::f64::consts::TAU * frequency * time + phase)
+        SsaOp::Sine => match arguments {
+            [frequency, time, phase] => fastmath::sin(
+                std::f64::consts::TAU * scalars[*frequency] * scalars[*time] + scalars[*phase],
+            ),
+            _ => 0.0,
         },
     }
 }
@@ -802,6 +892,76 @@ mod tests {
         assert!(accumulator.accumulate(context(), &inputs, 64, 3, &carried, &mut block));
         // 0.25 + (2+0) + (2+1) + (2+2) = 9.25
         assert!(block.iter().all(|value| (*value - 9.25).abs() < 1e-6));
+    }
+
+    /// `carried + Σ (sin(440 · time) · 0.5 + iteration)`；`time` 与频率都可能
+    /// 逐帧变化，标量广播和数组路径必须逐位一致。
+    fn sine_body() -> VoicePlan {
+        VoicePlan::new(
+            vec![
+                VoiceNodePlan::new(VoiceOp::Input(0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Input(2), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Input(1), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Constant(0.0), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Sine, vec![1, 3, 2]),
+                VoiceNodePlan::new(VoiceOp::Constant(0.5), Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Multiply, vec![4, 5]),
+                VoiceNodePlan::new(VoiceOp::Iteration, Vec::new()),
+                VoiceNodePlan::new(VoiceOp::Add, vec![6, 7]),
+                VoiceNodePlan::new(VoiceOp::Add, vec![0, 8]),
+                VoiceNodePlan::new(VoiceOp::Output, vec![9]),
+            ],
+            10,
+        )
+    }
+
+    // NOTE: 这里要求逐位相等：两条操作数路径只差在“操作数从哪来”，
+    // 浮点运算序列完全相同。
+    #[allow(clippy::float_cmp)]
+    #[test]
+    fn broadcasts_scalar_operands_into_frame_loops() {
+        let plan = sine_body();
+        let accumulator = RepeatAccumulator::compile(&plan).unwrap();
+        let carried = [0.25_f64; 64];
+        let mut block = [0.0_f32; 64];
+        // 0：全常量；1：时间逐帧；2：频率逐帧、时间常量；3：两者都逐帧。
+        for block_kind in 0..4 {
+            let time = |frame: usize| {
+                if matches!(block_kind, 0 | 2) {
+                    0.25
+                } else {
+                    context().local_time + frame as f64 / 48_000.0
+                }
+            };
+            let frequency = |frame: usize| {
+                if block_kind < 2 {
+                    440.0
+                } else {
+                    220.0 + frame as f64
+                }
+            };
+            let mut inputs = [[0.0_f64; 64]; 8];
+            for frame in 0..64 {
+                inputs[1][frame] = time(frame);
+                inputs[2][frame] = frequency(frame);
+            }
+            let inputs = VoiceBlockInputs::new(&inputs, 64, 48_000.0);
+            assert!(accumulator.accumulate(context(), &inputs, 64, 3, &carried, &mut block));
+            for (frame, sample) in block.iter().enumerate() {
+                let mut expected = carried[frame];
+                for iteration in 0..3 {
+                    expected +=
+                        fastmath::sin(std::f64::consts::TAU * frequency(frame) * time(frame)) * 0.5
+                            + iteration as f64;
+                }
+                // 输出是 `f32`；与参考值都按 `f32` 舍入后必须逐位相等。
+                let expected = expected as f32;
+                assert!(
+                    *sample == expected,
+                    "block_kind={block_kind} frame={frame} sample={sample} expected={expected}"
+                );
+            }
+        }
     }
 
     #[test]
