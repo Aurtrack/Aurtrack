@@ -6478,7 +6478,7 @@ fn render_project(
     let frames = (duration_seconds * sample_rate_f64).round() as usize;
     let mut mix = vec![0.0_f32; frames];
     for track in &project.tracks {
-        let (_, _adsr_settings, graph) = track
+        let (_, _adsr_settings, mut graph) = track
             .playback_graph_with_buffers(
                 &project.node_groups,
                 &project.audio_groups,
@@ -6502,12 +6502,16 @@ fn render_project(
                 })
                 .collect()
         };
+        for piano in &mut graph.pianos {
+            piano.prepare_notes(&piano_notes);
+        }
+        let pianos = &graph.pianos;
         for (index, slot) in mix.iter_mut().enumerate() {
             let time = start_seconds + index as f64 / sample_rate_f64;
             let mut voices = [0.0_f64; aurtrack_engine::MAX_VOICES];
             for (voice_index, piano) in pianos.iter().enumerate().take(aurtrack_engine::MAX_VOICES)
             {
-                voices[voice_index] = piano.sample(&piano_notes, time);
+                voices[voice_index] = piano.sample_at(&piano_notes, time, sample_rate_f64);
             }
             if let Some(frequency) = graph.fallback_sine {
                 voices[0] += (std::f64::consts::TAU * frequency * time).sin() * 0.25;
