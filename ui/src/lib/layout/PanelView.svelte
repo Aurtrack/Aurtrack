@@ -128,6 +128,8 @@
     onRemoveDevice={(path: string) => void session.deleteDevice(path)}
     onGainChange={(trackId, deviceId, value) =>
       void session.changeDeviceGain(trackId, deviceId, value)}
+    onPolyphonyChange={(trackId, value) =>
+      void session.changePolyphony(trackId, value)}
     onParamChange={(trackId, deviceId, name, value) =>
       void session.changeDeviceParam(trackId, deviceId, name, value)}
   />

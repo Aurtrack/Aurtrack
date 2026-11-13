@@ -150,6 +150,8 @@ export const en: Record<MessageKey, Message> = {
   "inspector.moveUp": "Move node up",
   "inspector.moveDown": "Move node down",
   "inspector.removeDeviceTitle": "Remove device",
+  "inspector.polyphony": "POLYPHONY",
+  "inspector.polyphonyHint": "Voices above the limit are stolen; higher values cost CPU.",
   "inspector.source.sine": (params) =>
     `SINE DRONE ${params.frequency} HZ`,
   "inspector.source.silence": "NOTE TRACK",

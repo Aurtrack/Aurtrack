@@ -1261,6 +1261,19 @@ export class SessionStore {
     }
   }
 
+  async changePolyphony(trackId: string, value: number) {
+    try {
+      await this.run("track.polyphony", {
+        track_id: trackId,
+        polyphony: Math.round(value),
+      });
+      await this.reloadIfPlaying();
+      await this.refreshProject();
+    } catch (error) {
+      this.fail("status.deviceParamFailed", error);
+    }
+  }
+
   async moveDevice(
     trackId: string,
     nodeId: string,

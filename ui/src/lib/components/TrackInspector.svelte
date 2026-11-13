@@ -16,6 +16,7 @@
     ) => void;
     onRemoveDevice: (path: string) => void;
     onGainChange: (trackId: string, deviceId: string, value: number) => void;
+    onPolyphonyChange: (trackId: string, value: number) => void;
     onParamChange: (
       trackId: string,
       deviceId: string,
@@ -33,6 +34,7 @@
     onMoveDevice,
     onRemoveDevice,
     onGainChange,
+    onPolyphonyChange,
     onParamChange,
   }: Props = $props();
 
@@ -64,6 +66,11 @@
     }
     return result;
   });
+
+  let polyphony = $derived(
+    track?.devices.find((device) => device.kind.startsWith("instrument."))
+      ?.params.polyphony ?? 64,
+  );
 
   function moveTarget(deviceId: string, offset: number): GraphNode | null {
     const index = chain.findIndex((node) => node.id === deviceId);
@@ -111,6 +118,21 @@
     <div class="inspector-head">
       <span class="track-name">{current.name}</span>
       <span class="track-meta">{sourceLabel(current)}</span>
+    </div>
+    <div class="polyphony-row">
+      <label class="field narrow">
+        <span>{t("inspector.polyphony")}</span>
+        <NumberField
+          value={polyphony}
+          min={1}
+          max={256}
+          step={1}
+          precision={0}
+          disabled={busy}
+          onchange={(value) => onPolyphonyChange(current.id, value)}
+        />
+      </label>
+      <span class="polyphony-hint">{t("inspector.polyphonyHint")}</span>
     </div>
     {#if chain.length > 0}
       <div class="node-chain" title={t("inspector.chain")}>

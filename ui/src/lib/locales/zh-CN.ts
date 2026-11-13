@@ -145,6 +145,8 @@ export const zhCN = {
   "inspector.moveUp": "向上移动节点",
   "inspector.moveDown": "向下移动节点",
   "inspector.removeDeviceTitle": "删除设备",
+  "inspector.polyphony": "复音上限",
+  "inspector.polyphonyHint": "超过上限会按规则抢占；提高会增加 CPU。",
   "inspector.source.sine": (params) =>
     `正弦持续音 ${params.frequency} Hz`,
   "inspector.source.silence": "音符轨",
