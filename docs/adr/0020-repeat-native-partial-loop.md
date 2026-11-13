@@ -100,6 +100,7 @@ output = sum
   逐迭代求值；
 - `rest` 含状态节点、`Partial`/`PianoPartial`、`OscPartials` 等未支持操作时
   不编译累加器；
-- 帧循环仍是 f64 标量数学，sin/exp 是主要成本；没有 SIMD 或近似三角函数；
+- 帧循环仍是 f64 标量数学，sin/exp 是主要成本；没有 SIMD 或近似三角函数
+  （ADR 0025 已补上多项式 `sin`/`exp` 并去掉帧循环的逐帧边界检查）；
 - `voice.piano_partial` 节点和 `VoiceOp::PianoPartial` 曾保留给旧的内联钢琴图；
   ADR 0021 已删除它们，默认钢琴图改为显式组调用。
