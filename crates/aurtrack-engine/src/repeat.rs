@@ -9,7 +9,7 @@
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
 
-use crate::fastmath;
+use crate::fastmath::{self, MathBackend};
 use crate::ssa::SsaOp;
 use crate::{VoiceBlockInputs, VoiceContext, VoiceNodePlan, VoiceOp, VoicePlan};
 
@@ -45,6 +45,7 @@ pub(crate) struct RepeatAccumulator {
     values: Vec<LoopValue>,
     output: usize,
     external_mask: u32,
+    math: MathBackend,
     scratch: UnsafeCell<Vec<[f64; 64]>>,
 }
 
@@ -58,6 +59,7 @@ impl Clone for RepeatAccumulator {
             values: self.values.clone(),
             output: self.output,
             external_mask: self.external_mask,
+            math: self.math,
             // NOTE: 克隆发生在控制线程；scratch 不能跨计划共享。
             scratch: UnsafeCell::new(vec![[0.0_f64; 64]; self.values.len()]),
         }
@@ -66,7 +68,13 @@ impl Clone for RepeatAccumulator {
 
 impl RepeatAccumulator {
     /// 从 Repeat body 构建累加器；结构不匹配或含状态节点时返回 `None`。
+    ///
+    /// 后端在这里检测一次并随计划缓存；音频线程只读 `math`。
     pub(crate) fn compile(plan: &VoicePlan) -> Option<Self> {
+        Self::compile_with_backend(plan, MathBackend::detect())
+    }
+
+    fn compile_with_backend(plan: &VoicePlan, math: MathBackend) -> Option<Self> {
         let root = resolve_output(plan)?;
         let node = plan.nodes.get(root)?;
         let VoiceOp::Add = node.op else {
@@ -133,6 +141,7 @@ impl RepeatAccumulator {
             values: builder.values,
             output,
             external_mask: externals,
+            math,
         })
     }
 
@@ -154,6 +163,7 @@ impl RepeatAccumulator {
             return false;
         }
         let sample_rate = inputs.sample_rate();
+        let math = self.math;
         // SAFETY: 调用方保证音频线程独占；逐帧数组每块在写入前不读取旧值，
         // 标量值只走 `scalars`，不会读这里的数组。
         let values = unsafe { &mut *self.scratch.get() };
@@ -200,6 +210,7 @@ impl RepeatAccumulator {
                         &mut rest[0],
                         &scalars,
                         &scalar_mask,
+                        math,
                         frames,
                         context,
                         sample_rate,
@@ -213,14 +224,24 @@ impl RepeatAccumulator {
                 for slot in &mut sum[..frames] {
                     *slot += scalar;
                 }
+            } else if math.is_avx2() && frames >= 4 {
+                fastmath::add_assign_slice(
+                    math,
+                    &mut sum[..frames],
+                    &values[self.output][..frames],
+                );
             } else {
                 for (frame, slot) in sum[..frames].iter_mut().enumerate() {
                     *slot += values[self.output][frame];
                 }
             }
         }
-        for (frame, slot) in output[..frames].iter_mut().enumerate() {
-            *slot = sum[frame] as f32;
+        if math.is_avx2() && frames >= 4 {
+            fastmath::narrow_slice(math, &sum[..frames], &mut output[..frames]);
+        } else {
+            for (frame, slot) in output[..frames].iter_mut().enumerate() {
+                *slot = sum[frame] as f32;
+            }
         }
         true
     }
@@ -572,7 +593,10 @@ fn resolve_output(plan: &VoicePlan) -> Option<usize> {
 // 的标量/数组组合各生成一份，循环体里没有逐帧分支。`fill` 曾是 128 复音
 // 离线渲染最大的单项开销，广播后连写带读一起消失，工作集也从 38 KB 降到
 // 约 10 KB（L1 常驻）。
-#[inline]
+// PERF: 这两个函数在 `accumulate` 的内层循环里；体积大，默认内联阈值不会
+// 内联，强制内联可省掉每次值求值的调用与参数搬运。
+#[allow(clippy::inline_always)]
+#[inline(always)]
 #[allow(clippy::too_many_arguments)]
 fn evaluate_frames(
     value: &LoopValue,
@@ -580,6 +604,7 @@ fn evaluate_frames(
     target: &mut [f64; 64],
     scalars: &[f64; MAX_LOOP_VALUES],
     scalar_mask: &[bool; MAX_LOOP_VALUES],
+    math: MathBackend,
     frames: usize,
     context: VoiceContext,
     sample_rate: f64,
@@ -644,6 +669,39 @@ fn evaluate_frames(
             }
         };
     }
+    // PERF: 加/减/乘/除可以逐位向量化；只处理至少有一个逐帧数组的情况，
+    // 标量×标量仍走下面的 `fill`，避免为广播结果绕一次函数调用。
+    if math.is_avx2()
+        && frames >= 4
+        && matches!(
+            value.op,
+            SsaOp::Add | SsaOp::Subtract | SsaOp::Multiply | SsaOp::Divide
+        )
+        && let [left, right] = value.args.as_slice()
+    {
+        let left = *left;
+        let right = *right;
+        if !scalar_mask[left] || !scalar_mask[right] {
+            let operation = match value.op {
+                SsaOp::Add => fastmath::BinaryOp::Add,
+                SsaOp::Subtract => fastmath::BinaryOp::Subtract,
+                SsaOp::Multiply => fastmath::BinaryOp::Multiply,
+                _ => fastmath::BinaryOp::Divide,
+            };
+            let left = if scalar_mask[left] {
+                fastmath::Operand::Scalar(scalars[left])
+            } else {
+                fastmath::Operand::Array(&done[left][..frames])
+            };
+            let right = if scalar_mask[right] {
+                fastmath::Operand::Scalar(scalars[right])
+            } else {
+                fastmath::Operand::Array(&done[right][..frames])
+            };
+            fastmath::binary_slice(math, operation, left, right, target);
+            return;
+        }
+    }
     match value.op {
         SsaOp::Constant => target.fill(value.constant),
         SsaOp::External => {
@@ -671,10 +729,55 @@ fn evaluate_frames(
         SsaOp::Floor => unary!(|input: f64| input.floor()),
         SsaOp::Ceil => unary!(|input: f64| input.ceil()),
         SsaOp::Round => unary!(|input: f64| input.round()),
-        SsaOp::Exp => unary!(fastmath::exp),
+        SsaOp::Exp => {
+            let [input] = value.args.as_slice() else {
+                target.fill(0.0);
+                return;
+            };
+            let input = *input;
+            if scalar_mask[input] {
+                target.fill(fastmath::exp(scalars[input]));
+            } else if math.is_avx2() && frames >= 4 {
+                fastmath::exp_slice(math, &done[input][..frames], target);
+            } else {
+                for (slot, &source) in target.iter_mut().zip(&done[input][..frames]) {
+                    *slot = fastmath::exp(source);
+                }
+            }
+        },
         SsaOp::Sqrt => unary!(|input: f64| input.max(0.0).sqrt()),
-        SsaOp::Sin => unary!(fastmath::sin),
-        SsaOp::Abs => unary!(|input: f64| input.abs()),
+        SsaOp::Sin => {
+            let [input] = value.args.as_slice() else {
+                target.fill(0.0);
+                return;
+            };
+            let input = *input;
+            if scalar_mask[input] {
+                target.fill(fastmath::sin(scalars[input]));
+            } else if math.is_avx2() && frames >= 4 {
+                fastmath::sin_slice(math, &done[input][..frames], target);
+            } else {
+                for (slot, &source) in target.iter_mut().zip(&done[input][..frames]) {
+                    *slot = fastmath::sin(source);
+                }
+            }
+        },
+        SsaOp::Abs => {
+            let [input] = value.args.as_slice() else {
+                target.fill(0.0);
+                return;
+            };
+            let input = *input;
+            if scalar_mask[input] {
+                target.fill(scalars[input].abs());
+            } else if math.is_avx2() && frames >= 4 {
+                fastmath::abs_slice(math, &done[input][..frames], target);
+            } else {
+                for (slot, &source) in target.iter_mut().zip(&done[input][..frames]) {
+                    *slot = source.abs();
+                }
+            }
+        },
         SsaOp::Clamp | SsaOp::MapRange => {
             let clamp = matches!(value.op, SsaOp::Clamp);
             let count = if clamp { 3 } else { 5 };
@@ -685,6 +788,22 @@ fn evaluate_frames(
             let input = value.args[0];
             let in_min = value.args[1];
             let in_max = value.args[2];
+            if clamp
+                && math.is_avx2()
+                && frames >= 4
+                && !scalar_mask[input]
+                && scalar_mask[in_min]
+                && scalar_mask[in_max]
+            {
+                let min = scalars[in_min];
+                let max = scalars[in_max];
+                // NOTE: `f64::clamp` 对 NaN 或倒置边界会 panic；只为合法边界
+                // 走 SIMD，保持标量路径的 panic 语义不变。
+                if min <= max {
+                    fastmath::clamp_scalar_slice(math, &done[input][..frames], min, max, target);
+                    return;
+                }
+            }
             for (frame, slot) in target.iter_mut().enumerate() {
                 let input_value = at!(input, frame);
                 let from_min = at!(in_min, frame);
@@ -732,16 +851,30 @@ fn evaluate_frames(
                 (true, true) => {
                     let frequency = std::f64::consts::TAU * scalars[frequency];
                     let phase = scalars[phase];
-                    for (slot, &time) in target.iter_mut().zip(time) {
-                        *slot = fastmath::sin(frequency * time + phase);
+                    if math.is_avx2() && frames >= 4 {
+                        fastmath::sine_scalar_slice(math, time, frequency, phase, target);
+                    } else {
+                        for (slot, &time) in target.iter_mut().zip(time) {
+                            *slot = fastmath::sin(frequency * time + phase);
+                        }
                     }
                 },
                 (true, false) => {
                     let frequency = std::f64::consts::TAU * scalars[frequency];
-                    for ((slot, &time), &phase) in
-                        target.iter_mut().zip(time).zip(&done[phase][..frames])
-                    {
-                        *slot = fastmath::sin(frequency * time + phase);
+                    if math.is_avx2() && frames >= 4 {
+                        fastmath::sine_scalar_phase_slice(
+                            math,
+                            time,
+                            frequency,
+                            &done[phase][..frames],
+                            target,
+                        );
+                    } else {
+                        for ((slot, &time), &phase) in
+                            target.iter_mut().zip(time).zip(&done[phase][..frames])
+                        {
+                            *slot = fastmath::sin(frequency * time + phase);
+                        }
                     }
                 },
                 (false, true) => {
@@ -771,7 +904,8 @@ fn evaluate_frames(
 ///
 /// 标量值只依赖常量、块内常量输入与上下文；依赖逐帧数组的值一定不会被
 /// 归为标量，因此这里不需要读 `done`。
-#[inline]
+#[allow(clippy::inline_always)]
+#[inline(always)]
 fn evaluate_scalar(
     value: &LoopValue,
     scalars: &[f64; MAX_LOOP_VALUES],
@@ -921,7 +1055,10 @@ mod tests {
     #[test]
     fn broadcasts_scalar_operands_into_frame_loops() {
         let plan = sine_body();
-        let accumulator = RepeatAccumulator::compile(&plan).unwrap();
+        // NOTE: 这条测试要求逐位相等，必须锁定标量后端；SIMD 与标量的
+        // 等价性由 `simd_accumulator_matches_scalar_reference` 覆盖。
+        let accumulator =
+            RepeatAccumulator::compile_with_backend(&plan, MathBackend::Scalar).unwrap();
         let carried = [0.25_f64; 64];
         let mut block = [0.0_f32; 64];
         // 0：全常量；1：时间逐帧；2：频率逐帧、时间常量；3：两者都逐帧。
@@ -959,6 +1096,41 @@ mod tests {
                 assert!(
                     *sample == expected,
                     "block_kind={block_kind} frame={frame} sample={sample} expected={expected}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn simd_accumulator_matches_scalar_reference() {
+        #[cfg(target_arch = "x86_64")]
+        {
+            if !std::arch::is_x86_feature_detected!("avx2")
+                || !std::arch::is_x86_feature_detected!("fma")
+            {
+                return;
+            }
+            let plan = sine_body();
+            let scalar =
+                RepeatAccumulator::compile_with_backend(&plan, MathBackend::Scalar).unwrap();
+            let simd =
+                RepeatAccumulator::compile_with_backend(&plan, MathBackend::Avx2Fma).unwrap();
+            let carried = [0.25_f64; 64];
+            let mut inputs = [[0.0_f64; 64]; 8];
+            for frame in 0..64 {
+                inputs[1][frame] = context().local_time + frame as f64 / 48_000.0;
+                inputs[2][frame] = 440.0;
+            }
+            let inputs = VoiceBlockInputs::new(&inputs, 64, 48_000.0);
+            let mut scalar_block = [0.0_f32; 64];
+            let mut simd_block = [0.0_f32; 64];
+            assert!(scalar.accumulate(context(), &inputs, 64, 3, &carried, &mut scalar_block));
+            assert!(simd.accumulate(context(), &inputs, 64, 3, &carried, &mut simd_block));
+            for (frame, (scalar, simd)) in scalar_block.iter().zip(&simd_block).enumerate() {
+                let difference = (f64::from(*scalar) - f64::from(*simd)).abs();
+                assert!(
+                    difference <= 1.0e-6,
+                    "frame={frame} scalar={scalar} simd={simd} difference={difference}"
                 );
             }
         }
