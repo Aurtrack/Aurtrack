@@ -9,6 +9,7 @@
 use std::cell::UnsafeCell;
 use std::collections::HashMap;
 
+use crate::fastmath;
 use crate::ssa::SsaOp;
 use crate::{VoiceBlockInputs, VoiceContext, VoiceNodePlan, VoiceOp, VoicePlan};
 
@@ -648,9 +649,9 @@ fn evaluate_frames(
                     SsaOp::Floor => input.floor(),
                     SsaOp::Ceil => input.ceil(),
                     SsaOp::Round => input.round(),
-                    SsaOp::Exp => input.exp(),
+                    SsaOp::Exp => fastmath::exp(input),
                     SsaOp::Sqrt => input.max(0.0).sqrt(),
-                    SsaOp::Sin => input.sin(),
+                    SsaOp::Sin => fastmath::sin(input),
                     SsaOp::Abs => input.abs(),
                     _ => 0.0,
                 };
@@ -695,8 +696,9 @@ fn evaluate_frames(
             let time = &done[value.args[1]];
             let phase = &done[value.args[2]];
             for frame in 0..frames {
-                target[frame] =
-                    (std::f64::consts::TAU * frequency[frame] * time[frame] + phase[frame]).sin();
+                target[frame] = fastmath::sin(
+                    std::f64::consts::TAU * frequency[frame] * time[frame] + phase[frame],
+                );
             }
         },
     }
@@ -743,9 +745,9 @@ fn evaluate(
         SsaOp::Floor => at(0).floor(),
         SsaOp::Ceil => at(0).ceil(),
         SsaOp::Round => at(0).round(),
-        SsaOp::Exp => at(0).exp(),
+        SsaOp::Exp => fastmath::exp(at(0)),
         SsaOp::Sqrt => at(0).max(0.0).sqrt(),
-        SsaOp::Sin => at(0).sin(),
+        SsaOp::Sin => fastmath::sin(at(0)),
         SsaOp::Abs => at(0).abs(),
         SsaOp::GreaterThan => f64::from(u8::from(at(0) > at(1))),
         SsaOp::LessThan => f64::from(u8::from(at(0) < at(1))),
@@ -767,7 +769,7 @@ fn evaluate(
             let frequency = at(0);
             let time = at(1);
             let phase = at(2);
-            (std::f64::consts::TAU * frequency * time + phase).sin()
+            fastmath::sin(std::f64::consts::TAU * frequency * time + phase)
         },
     }
 }

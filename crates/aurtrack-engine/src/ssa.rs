@@ -8,6 +8,7 @@
 
 use std::collections::HashMap;
 
+use crate::fastmath;
 use crate::{VoiceContext, VoiceOp, VoicePlan};
 
 /// SSA 指令操作符。
@@ -199,9 +200,9 @@ impl VoiceSsa {
                     SsaOp::Floor => values[value.args[0]][frame].floor(),
                     SsaOp::Ceil => values[value.args[0]][frame].ceil(),
                     SsaOp::Round => values[value.args[0]][frame].round(),
-                    SsaOp::Exp => values[value.args[0]][frame].exp(),
+                    SsaOp::Exp => fastmath::exp(values[value.args[0]][frame]),
                     SsaOp::Sqrt => values[value.args[0]][frame].max(0.0).sqrt(),
-                    SsaOp::Sin => values[value.args[0]][frame].sin(),
+                    SsaOp::Sin => fastmath::sin(values[value.args[0]][frame]),
                     SsaOp::Abs => values[value.args[0]][frame].abs(),
                     SsaOp::GreaterThan => f64::from(u8::from(
                         values[value.args[0]][frame] > values[value.args[1]][frame],
@@ -228,7 +229,7 @@ impl VoiceSsa {
                         let frequency = values[value.args[0]][frame];
                         let time = values[value.args[1]][frame];
                         let phase = values[value.args[2]][frame];
-                        (std::f64::consts::TAU * frequency * time + phase).sin()
+                        fastmath::sin(std::f64::consts::TAU * frequency * time + phase)
                     },
                 };
             }
@@ -274,9 +275,9 @@ impl VoiceSsa {
                 SsaOp::Floor => values[value.args[0]].floor(),
                 SsaOp::Ceil => values[value.args[0]].ceil(),
                 SsaOp::Round => values[value.args[0]].round(),
-                SsaOp::Exp => values[value.args[0]].exp(),
+                SsaOp::Exp => fastmath::exp(values[value.args[0]]),
                 SsaOp::Sqrt => values[value.args[0]].max(0.0).sqrt(),
-                SsaOp::Sin => values[value.args[0]].sin(),
+                SsaOp::Sin => fastmath::sin(values[value.args[0]]),
                 SsaOp::Abs => values[value.args[0]].abs(),
                 SsaOp::GreaterThan => {
                     f64::from(u8::from(values[value.args[0]] > values[value.args[1]]))
@@ -304,7 +305,7 @@ impl VoiceSsa {
                     let frequency = values[value.args[0]];
                     let time = values[value.args[1]];
                     let phase = values[value.args[2]];
-                    (std::f64::consts::TAU * frequency * time + phase).sin()
+                    fastmath::sin(std::f64::consts::TAU * frequency * time + phase)
                 },
             };
         }

@@ -19,6 +19,7 @@
 )]
 
 mod block;
+mod fastmath;
 mod repeat;
 mod ssa;
 
@@ -198,7 +199,7 @@ impl TrackPlan {
         if let Some(frequency) = graph.fallback_sine {
             for frame in 0..frames {
                 let time = start_time + frame as f64 / sample_rate;
-                voices[0][frame] += (std::f64::consts::TAU * frequency * time).sin() * 0.25;
+                voices[0][frame] += fastmath::sin(std::f64::consts::TAU * frequency * time) * 0.25;
             }
         }
         graph.process_block_voices(&voices, plan.sample_rate, start_time, output);
@@ -747,9 +748,9 @@ impl VoiceExpr {
             Self::Floor(a) => a.eval(context, source).floor(),
             Self::Ceil(a) => a.eval(context, source).ceil(),
             Self::Round(a) => a.eval(context, source).round(),
-            Self::Exp(a) => a.eval(context, source).exp(),
+            Self::Exp(a) => fastmath::exp(a.eval(context, source)),
             Self::Sqrt(a) => a.eval(context, source).max(0.0).sqrt(),
-            Self::Sin(a) => a.eval(context, source).sin(),
+            Self::Sin(a) => fastmath::sin(a.eval(context, source)),
             Self::Abs(a) => a.eval(context, source).abs(),
             Self::GreaterThan(a, b) => {
                 f64::from(u8::from(a.eval(context, source) > b.eval(context, source)))
@@ -777,11 +778,12 @@ impl VoiceExpr {
                 frequency,
                 phase,
                 time,
-            } => (std::f64::consts::TAU
-                * frequency.eval(context, source)
-                * time.eval(context, source)
-                + phase.eval(context, source))
-            .sin(),
+            } => fastmath::sin(
+                std::f64::consts::TAU
+                    * frequency.eval(context, source)
+                    * time.eval(context, source)
+                    + phase.eval(context, source),
+            ),
         }
     }
 }
@@ -967,9 +969,9 @@ impl CompiledVoice {
                 CompiledOp::Floor => values[operands[0]].floor(),
                 CompiledOp::Ceil => values[operands[0]].ceil(),
                 CompiledOp::Round => values[operands[0]].round(),
-                CompiledOp::Exp => values[operands[0]].exp(),
+                CompiledOp::Exp => fastmath::exp(values[operands[0]]),
                 CompiledOp::Sqrt => values[operands[0]].max(0.0).sqrt(),
-                CompiledOp::Sin => values[operands[0]].sin(),
+                CompiledOp::Sin => fastmath::sin(values[operands[0]]),
                 CompiledOp::Abs => values[operands[0]].abs(),
                 CompiledOp::GreaterThan => {
                     f64::from(u8::from(values[operands[0]] > values[operands[1]]))
@@ -993,11 +995,10 @@ impl CompiledVoice {
                 CompiledOp::Clamp => {
                     values[operands[0]].clamp(values[operands[1]], values[operands[2]])
                 },
-                CompiledOp::Sine => {
-                    (std::f64::consts::TAU * values[operands[0]] * values[operands[1]]
-                        + values[operands[2]])
-                        .sin()
-                },
+                CompiledOp::Sine => fastmath::sin(
+                    std::f64::consts::TAU * values[operands[0]] * values[operands[1]]
+                        + values[operands[2]],
+                ),
             };
         }
         values[self.root]
@@ -1125,12 +1126,12 @@ fn compile_expr(
 
 #[unsafe(no_mangle)]
 extern "C" fn aurtrack_jit_sin(value: f64) -> f64 {
-    value.sin()
+    fastmath::sin(value)
 }
 
 #[unsafe(no_mangle)]
 extern "C" fn aurtrack_jit_exp(value: f64) -> f64 {
-    value.exp()
+    fastmath::exp(value)
 }
 
 #[unsafe(no_mangle)]
@@ -1725,11 +1726,12 @@ impl VoicePlan {
                     }
                 }
                 for (frame, slot) in output.iter_mut().enumerate() {
-                    *slot = (std::f64::consts::TAU
-                        * f64::from(args[0][frame])
-                        * f64::from(args[2][frame])
-                        + f64::from(args[1][frame]))
-                    .sin() as f32;
+                    *slot = fastmath::sin(
+                        std::f64::consts::TAU
+                            * f64::from(args[0][frame])
+                            * f64::from(args[2][frame])
+                            + f64::from(args[1][frame]),
+                    ) as f32;
                 }
                 true
             },
@@ -2044,13 +2046,13 @@ impl VoicePlan {
                     .clamp(0.0, 1.0);
                     let time = (context.local_time + frame as f64 / inputs.sample_rate()).max(0.0);
                     let contact = 0.0012 + (1.0 - velocity) * 0.0025;
-                    let envelope = (-time / contact).exp();
+                    let envelope = fastmath::exp(-time / contact);
                     let noise = (hash64(context.seed ^ time.to_bits().rotate_left(17) ^ 0x51ed_2701)
                         as f64
                         / u64::MAX as f64)
                         * 2.0
                         - 1.0;
-                    let thump = (std::f64::consts::TAU * 92.0 * time).sin();
+                    let thump = fastmath::sin(std::f64::consts::TAU * 92.0 * time);
                     *slot = ((noise * (0.65 + hardness * 0.35) + thump * 0.2)
                         * envelope
                         * velocity
@@ -2176,8 +2178,8 @@ impl VoicePlan {
                     *value = match node.op {
                         VoiceOp::Sqrt => value64.max(0.0).sqrt(),
                         VoiceOp::Abs => value64.abs(),
-                        VoiceOp::Sin => value64.sin(),
-                        VoiceOp::Exp => value64.exp(),
+                        VoiceOp::Sin => fastmath::sin(value64),
+                        VoiceOp::Exp => fastmath::exp(value64),
                         VoiceOp::Floor => value64.floor(),
                         VoiceOp::Ceil => value64.ceil(),
                         VoiceOp::Round => value64.round(),
@@ -2455,7 +2457,7 @@ impl VoicePlan {
                     if !frequency.is_finite() || !phase.is_finite() || !time.is_finite() {
                         0.0
                     } else {
-                        (std::f64::consts::TAU * frequency * time + phase).sin()
+                        fastmath::sin(std::f64::consts::TAU * frequency * time + phase)
                     }
                 },
                 VoiceOp::OscPartials {
@@ -2550,13 +2552,13 @@ impl VoicePlan {
                         .clamp(0.0, 1.0);
                     let time = context.local_time.max(0.0);
                     let contact = 0.0012 + (1.0 - velocity) * 0.0025;
-                    let envelope = (-time / contact).exp();
+                    let envelope = fastmath::exp(-time / contact);
                     let noise = (hash64(context.seed ^ time.to_bits().rotate_left(17) ^ 0x51ed_2701)
                         as f64
                         / u64::MAX as f64)
                         * 2.0
                         - 1.0;
-                    let thump = (std::f64::consts::TAU * 92.0 * time).sin();
+                    let thump = fastmath::sin(std::f64::consts::TAU * 92.0 * time);
                     (noise * (0.65 + hardness * 0.35) + thump * 0.2) * envelope * velocity * 0.55
                 },
                 VoiceOp::Waveguide => {
@@ -2879,7 +2881,7 @@ impl VoicePlan {
                         .inputs
                         .get(1)
                         .map_or(1.2, |input| scratch_value(*input));
-                    (-time / decay.max(0.01)).exp()
+                    fastmath::exp(-time / decay.max(0.01))
                 },
                 VoiceOp::Envelope { attack, decay } => {
                     let time = node
@@ -2895,7 +2897,7 @@ impl VoicePlan {
                         .get(2)
                         .map_or(decay, |input| scratch_value(*input));
                     let attack_gain = (time / attack.max(0.0001)).min(1.0);
-                    attack_gain * (-time / decay.max(0.01)).exp()
+                    attack_gain * fastmath::exp(-time / decay.max(0.01))
                 },
                 VoiceOp::Noise => {
                     let time = node
@@ -3049,8 +3051,8 @@ impl VoicePlan {
                     let value = node
                         .inputs
                         .first()
-                        .map_or(0.0, |input| scratch_value(*input))
-                        .exp();
+                        .map_or(0.0, |input| scratch_value(*input));
+                    let value = fastmath::exp(value);
                     if value.is_finite() { value } else { 0.0 }
                 },
                 VoiceOp::Sin => {
@@ -3058,7 +3060,7 @@ impl VoicePlan {
                         .inputs
                         .first()
                         .map_or(0.0, |input| scratch_value(*input));
-                    value.sin()
+                    fastmath::sin(value)
                 },
                 VoiceOp::Abs => {
                     let value = node
@@ -3414,9 +3416,10 @@ fn partial_sample(
     if frequency >= 20_000.0 {
         return 0.0;
     }
-    let envelope = (-time * (0.8 + partial as f64 * 0.35) / decay.max(0.05)).exp();
+    let envelope = fastmath::exp(-time * (0.8 + partial as f64 * 0.35) / decay.max(0.05));
     let velocity = velocity.clamp(0.0, 1.0).powf(brightness + 0.5);
-    (std::f64::consts::TAU * frequency * time).sin() * envelope * velocity * 0.18 / partial as f64
+    fastmath::sin(std::f64::consts::TAU * frequency * time) * envelope * velocity * 0.18
+        / partial as f64
 }
 
 fn osc_partials(
@@ -3436,9 +3439,9 @@ fn osc_partials(
         if frequency >= 20_000.0 {
             break;
         }
-        let envelope = (-time * (0.8 + partial as f64 * 0.35) / decay.max(0.05)).exp();
-        output +=
-            (std::f64::consts::TAU * frequency * time).sin() * envelope * velocity / partial as f64;
+        let envelope = fastmath::exp(-time * (0.8 + partial as f64 * 0.35) / decay.max(0.05));
+        output += fastmath::sin(std::f64::consts::TAU * frequency * time) * envelope * velocity
+            / partial as f64;
     }
     output * 0.18
 }
@@ -4701,9 +4704,9 @@ impl PianoPlan {
                     break;
                 }
                 let envelope =
-                    (-local * (0.8 + partial as f64 * 0.35) / self.decay.max(0.05)).exp();
+                    fastmath::exp(-local * (0.8 + partial as f64 * 0.35) / self.decay.max(0.05));
                 let amplitude = brightness / partial as f64;
-                output += (std::f64::consts::TAU * frequency * local).sin()
+                output += fastmath::sin(std::f64::consts::TAU * frequency * local)
                     * envelope
                     * amplitude
                     * attack;
@@ -4715,7 +4718,7 @@ impl PianoPlan {
                     / 16_777_216.0)
                     * 2.0
                     - 1.0;
-                output += noise * (-local * 180.0).exp() * self.hammer * note.velocity;
+                output += noise * fastmath::exp(-local * 180.0) * self.hammer * note.velocity;
             }
         }
         output * 0.18
@@ -5342,7 +5345,7 @@ impl LfoPlan {
     }
 
     pub fn at(&self, time: f64) -> f64 {
-        self.offset + (std::f64::consts::TAU * self.rate * time).sin() * self.depth
+        self.offset + fastmath::sin(std::f64::consts::TAU * self.rate * time) * self.depth
     }
 }
 
@@ -5557,7 +5560,7 @@ impl GraphPlan {
                 GraphOp::Sine => {
                     let frequency = control_value(node, 0, &values, 440.0).clamp(20.0, 20_000.0);
                     let phase = control_value(node, 1, &values, 0.0);
-                    (std::f64::consts::TAU * frequency * time + phase).sin() * 0.25
+                    fastmath::sin(std::f64::consts::TAU * frequency * time + phase) * 0.25
                 },
                 GraphOp::Constant(value) => *value,
                 GraphOp::Lfo(lfo) => lfo.at(time),
@@ -5718,7 +5721,7 @@ impl GraphPlan {
                         let frequency =
                             block_control(node, 0, frame, values, 440.0).clamp(20.0, 20_000.0);
                         let phase = block_control(node, 1, frame, &*values, 0.0);
-                        (std::f64::consts::TAU * frequency * time + phase).sin() * 0.25
+                        fastmath::sin(std::f64::consts::TAU * frequency * time + phase) * 0.25
                     },
                     GraphOp::Constant(value) => *value,
                     GraphOp::Lfo(lfo) => lfo.at(time),
@@ -5993,7 +5996,7 @@ fn eval_constant(op: &VoiceOp, args: &[f64]) -> Option<f64> {
         VoiceOp::Floor => Some(at(0)?.floor()),
         VoiceOp::Ceil => Some(at(0)?.ceil()),
         VoiceOp::Round => Some(at(0)?.round()),
-        VoiceOp::Exp => Some(at(0)?.exp()),
+        VoiceOp::Exp => Some(fastmath::exp(at(0)?)),
         VoiceOp::Sqrt => Some(at(0)?.max(0.0).sqrt()),
         VoiceOp::IntToFloat => Some(at(0)?.round()),
         VoiceOp::GreaterThan => Some(f64::from(u8::from(at(0)? > at(1)?))),
@@ -6012,7 +6015,7 @@ fn eval_constant(op: &VoiceOp, args: &[f64]) -> Option<f64> {
             }
         },
         VoiceOp::Clamp => Some(at(0)?.clamp(at(1)?, at(2)?)),
-        VoiceOp::Sin => Some(at(0)?.sin()),
+        VoiceOp::Sin => Some(fastmath::sin(at(0)?)),
         VoiceOp::Abs => Some(at(0)?.abs()),
         _ => None,
     }
@@ -6737,7 +6740,7 @@ impl Playback {
         if let Some(graph) = &track.graph
             && let Some(frequency) = graph.fallback_sine
         {
-            let sine = (std::f64::consts::TAU * frequency * time).sin() * 0.25;
+            let sine = fastmath::sin(std::f64::consts::TAU * frequency * time) * 0.25;
             voices[0] += sine;
             voice += sine;
             has_voices = true;
@@ -6749,7 +6752,7 @@ impl Playback {
         }
         if !has_voices {
             if let Some(frequency) = track.frequency {
-                voice += (std::f64::consts::TAU * frequency * time).sin() * 0.25;
+                voice += fastmath::sin(std::f64::consts::TAU * frequency * time) * 0.25;
             }
             let release = track
                 .adsr
@@ -6761,7 +6764,7 @@ impl Playback {
                         || note_envelope(local, note.duration),
                         |adsr| adsr_envelope(local, note.duration, adsr),
                     );
-                    voice += (std::f64::consts::TAU * note.frequency * local).sin()
+                    voice += fastmath::sin(std::f64::consts::TAU * note.frequency * local)
                         * note.velocity
                         * envelope
                         * 0.25;
